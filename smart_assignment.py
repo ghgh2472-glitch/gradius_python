@@ -307,6 +307,124 @@ class SmartAssignment:
         return candidates
     
     @staticmethod
+    def ai_recommend(staff_df: pd.DataFrame, dispatch_df: pd.DataFrame,
+                     job_type: str = None, location: str = None,
+                     gender: str = None, age_range: Tuple[int, int] = None,
+                     start_date: str = None, end_date: str = None,
+                     top_n: int = 5) -> pd.DataFrame:
+        """🤖 AI 인력 추천 - 현장 조건 기반 최적 인력 추천
+        
+        Args:
+            staff_df: 인력 데이터프레임
+            dispatch_df: 배정 기록 (가용성 체크용)
+            job_type: 필요 직무 (예: "안전", "주차", "스탭")
+            location: 현장 위치 (예: "서울", "경기")
+            gender: 성별 필터 (None이면 전체)
+            age_range: (min_age, max_age) 튜플
+            start_date: 배정 시작일 (YYYY-MM-DD)
+            end_date: 배정 종료일
+            top_n: 추천 인원 수
+        
+        Returns:
+            추천 인력 DataFrame (AI점수 포함)
+        """
+        if staff_df.empty:
+            return pd.DataFrame()
+        
+        candidates = staff_df.copy()
+        
+        # 1. 기본 필터링 (성별, 나이)
+        if gender and gender != '전체':
+            if '성별' in candidates.columns:
+                candidates = candidates[candidates['성별'].astype(str).str.strip() == gender]
+        
+        if age_range:
+            min_age, max_age = age_range
+            if '나이' in candidates.columns:
+                ages = pd.to_numeric(candidates['나이'], errors='coerce')
+                if min_age:
+                    candidates = candidates[ages >= min_age]
+                if max_age:
+                    candidates = candidates[ages <= max_age]
+        
+        # 2. 가용성 체크 (배정기록과 충돌하는 인력 제외)
+        if start_date and dispatch_df is not None and not dispatch_df.empty:
+            candidates = StaffFilter.filter_by_availability(
+                candidates, dispatch_df, start_date, 
+                end_date or start_date, job_type
+            )
+        
+        if candidates.empty:
+            return pd.DataFrame()
+        
+        # 3. AI 점수 계산 (100점 만점)
+        candidates = candidates.copy()
+        candidates['AI점수'] = 0.0
+        
+        for idx in candidates.index:
+            score = 0.0
+            row = candidates.loc[idx]
+            
+            # (1) 직무 매칭 (최대 35점)
+            if job_type and '가능직무' in candidates.columns:
+                staff_jobs = str(row.get('가능직무', '')).lower()
+                if job_type.lower() in staff_jobs:
+                    score += 35
+                # 부분 매칭
+                elif any(j in staff_jobs for j in ['스탭', '안전', '주차', '경호', '진행'] if j in job_type.lower()):
+                    score += 20
+            
+            # (2) 지역 매칭 (최대 25점)
+            if location and '이동가능지역' in candidates.columns:
+                staff_regions = str(row.get('이동가능지역', '')).lower()
+                if location.lower() in staff_regions:
+                    score += 25
+                elif '전국' in staff_regions:
+                    score += 20
+                # 부분 매칭 (예: "서울" in "서울,인천")
+                elif any(loc in staff_regions for loc in [location.lower()[:2]]):
+                    score += 15
+            
+            # (3) 추천도 가중치 (최대 15점)
+            if '추천도' in candidates.columns:
+                recommend = str(row.get('추천도', '')).strip()
+                if recommend == '우선투입':
+                    score += 15
+                elif recommend == '추천':
+                    score += 10
+                elif recommend == '보통':
+                    score += 5
+                elif recommend == '보류':
+                    score -= 10
+            
+            # (4) 총점/평가 점수 (최대 15점)
+            if '총점' in candidates.columns:
+                try:
+                    total_score = float(row.get('총점', 0))
+                    # 5점 만점 기준으로 환산
+                    score += min(total_score * 3, 15)
+                except (ValueError, TypeError):
+                    pass
+            
+            # (5) 근태 보너스 (최대 10점)
+            if '근태' in candidates.columns:
+                try:
+                    attendance = float(row.get('근태', 0))
+                    score += min(attendance * 2, 10)
+                except (ValueError, TypeError):
+                    pass
+            
+            candidates.at[idx, 'AI점수'] = round(score, 1)
+        
+        # 4. AI점수로 정렬 후 Top N 반환
+        candidates = candidates.sort_values('AI점수', ascending=False)
+        result = candidates.head(top_n)
+        
+        logger.info(f"🤖 AI추천 완료: {len(result)}명 (직무={job_type}, 지역={location})")
+        
+        return result
+    
+    @staticmethod
     def recommend_best_candidate(candidates: pd.DataFrame, 
                                 dispatch_df: pd.DataFrame = None) -> Optional[Dict]:
         """최적 후보자 추천"""

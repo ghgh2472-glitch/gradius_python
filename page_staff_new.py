@@ -378,29 +378,75 @@ def tab_assignment(data):
         with col_f9:
             min_recommend = st.slider("최소추천도", 0.0, 5.0, 0.0, key="recommend_filter")
         
+        # 검색/AI추천 버튼 영역
+        col_btn1, col_btn2 = st.columns(2)
+        
+        # 🤖 AI 추천 버튼
+        with col_btn1:
+            if st.button("🤖 AI 추천", use_container_width=True, key="ai_recommend_btn", type="primary"):
+                with st.spinner("🤖 AI가 최적의 인력을 분석 중입니다..."):
+                    from smart_assignment import SmartAssignment
+                    
+                    # 선택된 계약 정보에서 추천 조건 추출
+                    job_type = selected_contract.get('서비스종류', '')
+                    location = selected_contract.get('장소', '')
+                    start_date = str(selected_contract.get('행사시작일', ''))
+                    end_date = str(selected_contract.get('행사종료일', ''))
+                    
+                    # 배정기록 로드 (가용성 체크용)
+                    dispatch_data = db.load_dispatch_data()
+                    df_dispatch = dispatch_data.get('dispatch', pd.DataFrame())
+                    
+                    # AI 추천 실행
+                    ai_result = SmartAssignment.ai_recommend(
+                        staff_df=df_staff,
+                        dispatch_df=df_dispatch,
+                        job_type=job_type,
+                        location=location.split()[0] if location else None,  # 첫 번째 지역명만
+                        gender=gender if gender != "전체" else None,
+                        age_range=age_range if age_range != (18, 70) else None,
+                        start_date=start_date[:10] if len(start_date) >= 10 else None,
+                        end_date=end_date[:10] if len(end_date) >= 10 else None,
+                        top_n=10
+                    )
+                    
+                    if not ai_result.empty:
+                        st.session_state.search_results = ai_result
+                        st.session_state.search_performed = True
+                        st.success(f"🤖 AI가 {len(ai_result)}명의 최적 인력을 추천했습니다!")
+                        
+                        # AI 추천 요약
+                        st.markdown("##### 🎯 AI 추천 기준")
+                        st.info(f"📍 지역: **{location}** | 🛠️ 직무: **{job_type}** | 📅 기간: **{start_date[:10] if start_date else 'N/A'}**")
+                    else:
+                        st.warning("⚠️ 조건에 맞는 인력을 찾지 못했습니다. 필터를 조정해주세요.")
+                        st.session_state.search_results = pd.DataFrame()
+                        st.session_state.search_performed = True
+        
         # 검색 버튼
-        if st.button("🔍 검색", use_container_width=True, key="search_btn"):
-            with st.spinner("조건에 맞는 인력을 검색 중입니다..."):
-                # 필터 조건 구성
-                requirements = {
-                    '이름': search_name if search_name else None,
-                    '성별': gender if gender != "전체" else None,
-                    '나이': age_range,
-                    '지역': location if location else None,
-                    '직무': job if job else None,
-                    '최소평점': min_score * 20,  # 0~5점 → 0~100점
-                    '최소추천도': min_recommend,
-                    '영어': english_ok,
-                    '운전': driving_ok
-                }
-                
-                # DEBUG: 필터 조건 확인
-                with st.expander("🔧 DEBUG - 검색 조건"):
-                    st.json(requirements)
-                
-                # 스마트 매칭
-                matcher = SmartStaffMatcher(df_staff)
-                recommended = matcher.recommend_staff(requirements, top_k=10)
+        with col_btn2:
+            if st.button("🔍 검색", use_container_width=True, key="search_btn"):
+                with st.spinner("조건에 맞는 인력을 검색 중입니다..."):
+                    # 필터 조건 구성
+                    requirements = {
+                        '이름': search_name if search_name else None,
+                        '성별': gender if gender != "전체" else None,
+                        '나이': age_range,
+                        '지역': location if location else None,
+                        '직무': job if job else None,
+                        '최소평점': min_score * 20,  # 0~5점 → 0~100점
+                        '최소추천도': min_recommend,
+                        '영어': english_ok,
+                        '운전': driving_ok
+                    }
+                    
+                    # DEBUG: 필터 조건 확인
+                    with st.expander("🔧 DEBUG - 검색 조건"):
+                        st.json(requirements)
+                    
+                    # 스마트 매칭
+                    matcher = SmartStaffMatcher(df_staff)
+                    recommended = matcher.recommend_staff(requirements, top_k=10)
                 
                 # DEBUG: 매칭 결과 확인
                 with st.expander("🔧 DEBUG - 매칭 단계별 결과"):
