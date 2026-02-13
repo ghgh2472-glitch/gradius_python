@@ -214,43 +214,63 @@ def get_pending_list(df_inq):
 def get_calendar_events(df_inq):
     if df_inq.empty: return []
     
-    col_date = find_col(df_inq, ["행사일시", "일시", "투입일"])
+    # 시작일/종료일 별도 컬럼 우선 탐색
+    col_start = find_col(df_inq, ["행사시작일", "시작일", "행사일시", "일시", "투입일"])
+    col_end = find_col(df_inq, ["행사종료일", "종료일"])
     col_client = find_col(df_inq, ["업체명"]) or "업체명"
     col_event = find_col(df_inq, ["행사명"]) or "행사명"
-    col_status = find_col(df_inq, ["체결", "상태"])
+    col_status = find_col(df_inq, ["상태", "체결"])
     
-    if not col_date or not col_status: return []
-    if col_date not in df_inq.columns: return [] # 안전장치
+    if not col_start: return []
+    if col_start not in df_inq.columns: return []
 
     events = []
     try:
         for _, row in df_inq.iterrows():
-            raw_val = row[col_date]
-            if pd.isna(raw_val) or str(raw_val).strip() == "": continue
-                
-            raw_str = str(raw_val).strip()
-            start_dt = ""; end_dt = ""
+            raw_start = row.get(col_start, '')
+            if pd.isna(raw_start) or str(raw_start).strip() == "": continue
             
-            if "~" in raw_str:
-                splits = raw_str.split("~")
-                start_dt = splits[0].strip()
-                end_dt = splits[1].strip()
+            start_str = str(raw_start).strip()
+            
+            # 종료일 컬럼이 있으면 사용, 없으면 시작일과 동일
+            if col_end and col_end in df_inq.columns:
+                raw_end = row.get(col_end, '')
+                end_str = str(raw_end).strip() if raw_end and not pd.isna(raw_end) else start_str
             else:
-                start_dt = raw_str[:10]
-                end_dt = raw_str[:10]
+                # 단일 컬럼에 "~"로 구분된 경우
+                if "~" in start_str:
+                    splits = start_str.split("~")
+                    start_str = splits[0].strip()
+                    end_str = splits[1].strip()
+                else:
+                    end_str = start_str
             
-            status = str(row.get(col_status, ''))
-            color = "#3B82F6"
-            if "체결" in status or "완료" in status: color = "#059669"
-            elif "미정" in status or "접수" in status: color = "#D97706"
-            elif "취소" in status: color = "#DC2626"
+            # 날짜 형식 정규화 (YYYY-MM-DD만 추출)
+            start_dt = start_str[:10] if len(start_str) >= 10 else start_str
+            end_dt = end_str[:10] if len(end_str) >= 10 else end_str
+            
+            # 유효한 날짜인지 간단 체크
+            if not start_dt or len(start_dt) < 8: continue
+            
+            status = str(row.get(col_status, '')) if col_status else ''
+            color = "#3B82F6"  # 기본: 파랑
+            if "체결" in status or "완료" in status: color = "#059669"  # 녹색
+            elif "미정" in status or "접수" in status: color = "#D97706"  # 주황
+            elif "취소" in status: color = "#DC2626"  # 빨강
+            
+            client_name = row.get(col_client, '') if col_client in df_inq.columns else ''
+            event_name = row.get(col_event, '') if col_event in df_inq.columns else ''
             
             events.append({
-                "title": f"{row.get(col_client,'')} ({row.get(col_event,'')})",
-                "start": start_dt, "end": end_dt,
-                "backgroundColor": color, "borderColor": color, "allDay": True
+                "title": f"{client_name} ({event_name})" if client_name else event_name,
+                "start": start_dt, 
+                "end": end_dt,
+                "backgroundColor": color, 
+                "borderColor": color, 
+                "allDay": True
             })
-    except:
+    except Exception as e:
+        print(f"[Calendar] Error: {e}")
         pass
             
     return events
@@ -303,7 +323,7 @@ def generate_smart_briefing(df_inq, df_dispatch, df_settlement):
 
 def get_upcoming_events(df_inq, days=7):
     if df_inq.empty: return pd.DataFrame()
-    col_date = find_col(df_inq, ["행사일시", "일시"])
+    col_date = find_col(df_inq, ["행사시작일", "시작일", "행사일시", "일시"])
     col_client = find_col(df_inq, ["업체명"])
     col_event = find_col(df_inq, ["행사명"])
     
@@ -328,7 +348,7 @@ def get_upcoming_events(df_inq, days=7):
         # 존재하는 컬럼만 선택
         final_cols = [c for c in cols if c and c in df.columns]
         res = df[final_cols].copy()
-        res.columns = ['업체명', '행사명', '일시', 'D-Day']
+        res.columns = ['업체명', '행사명', '일시', 'D-Day'][:len(final_cols)]
         return res
     except:
         return pd.DataFrame()
