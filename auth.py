@@ -38,11 +38,24 @@ def get_gspread_client(secrets_path="secrets.json", st_secrets=None, scopes=None
         creds = load_credentials_from_file(secrets_path, scopes)
         return gspread.authorize(creds)
 
-    # 2) Try streamlit-provided dict
-    if st_secrets and isinstance(st_secrets, dict):
-        svc = st_secrets.get("gcp_service_account") or st_secrets.get("service_account")
-        if svc:
-            creds = load_credentials_from_dict(svc, scopes)
-            return gspread.authorize(creds)
+    # 2) Try streamlit-provided secrets (AttrDict or dict-like)
+    if st_secrets is not None:
+        try:
+            # st.secrets is AttrDict, not a plain dict - use hasattr or direct access
+            svc = None
+            if hasattr(st_secrets, "gcp_service_account"):
+                svc = dict(st_secrets.gcp_service_account)
+            elif hasattr(st_secrets, "service_account"):
+                svc = dict(st_secrets.service_account)
+            elif hasattr(st_secrets, "get"):
+                svc = st_secrets.get("gcp_service_account") or st_secrets.get("service_account")
+                if svc:
+                    svc = dict(svc)
+            
+            if svc:
+                creds = load_credentials_from_dict(svc, scopes)
+                return gspread.authorize(creds)
+        except Exception:
+            pass
 
     return None
