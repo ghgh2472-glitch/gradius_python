@@ -443,6 +443,27 @@ def show(data):
                 location = row['장소'] if pd.notna(row['장소']) and str(row['장소']).strip() else "장소정보없음"
                 staff_count = int(row['배정인원'])
                 
+                # 배정 인력 상세
+                staff_detail = ud.get_dispatch_detail_for_event(df_dispatch, row['행사명'])
+                staff_names = ", ".join(staff_detail['인력명'].tolist()) if not staff_detail.empty else "배정전"
+                
+                # 문의상 필요인력 확인
+                _need_col = ud.find_col(df_inq, ["필요인력", "인원"])
+                _evt_col_inq = ud.find_col(df_inq, ["행사명"])
+                need_count = 0
+                if _need_col and _evt_col_inq:
+                    _matched_inq = df_inq[df_inq[_evt_col_inq].astype(str).str.strip() == str(row['행사명']).strip()]
+                    if not _matched_inq.empty:
+                        need_count = ud.safe_int(_matched_inq.iloc[0].get(_need_col, 0))
+                
+                if need_count > 0:
+                    assign_pct = min(100, int(staff_count / need_count * 100))
+                    assign_text = f"{staff_count}/{need_count}명 ({assign_pct}%)"
+                    assign_badge_color = "#10B981" if assign_pct >= 100 else "#F59E0B" if assign_pct >= 50 else "#EF4444"
+                else:
+                    assign_text = f"{staff_count}명"
+                    assign_badge_color = "#6B7280"
+                
                 st.markdown(f"""
                 <div style="background: white; border: 1px solid #E5E7EB; border-left: 4px solid {badge_color};
                             border-radius: 8px; padding: 14px; margin-bottom: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.08);">
@@ -463,8 +484,12 @@ def show(data):
                     <div style="color: #6B7280; font-size: 13px; margin-bottom: 6px;">
                         📅 <b>일정</b>: {row['일정']}
                     </div>
-                    <div style="color: #6B7280; font-size: 13px;">
-                        👥 <b>배정인원</b>: {staff_count}명
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="color: #6B7280; font-size: 13px;">
+                            👥 <b>배정인력</b>: {staff_names}
+                        </span>
+                        <span style="background: {assign_badge_color}; color: white; padding: 3px 10px; border-radius: 12px;
+                                    font-size: 11px; font-weight: bold;">{assign_text}</span>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
@@ -520,7 +545,56 @@ def show(data):
     
     # [Tab 3] 인력 현황
     with tab3:
-        st.markdown('<div class="section-title">👥 가장 많이 파견된 인원 (Top 10)</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-title">👥 배정 인력 현황</div>', unsafe_allow_html=True)
+        
+        # 현재 현장별 배정 현황
+        if not df_dispatch.empty:
+            col_dispatch_event = ud.find_col(df_dispatch, ["행사명"])
+            if col_dispatch_event:
+                events_list = df_dispatch[col_dispatch_event].unique().tolist()
+                
+                st.markdown(f"**현재 배정된 전체 인원: {len(df_dispatch)}명 / {len(events_list)}개 현장**")
+                st.markdown("---")
+                
+                for evt_name in events_list:
+                    detail_df = ud.get_dispatch_detail_for_event(df_dispatch, evt_name)
+                    staff_count = len(detail_df)
+                    staff_names = ", ".join(detail_df['인력명'].tolist()) if not detail_df.empty else "미배정"
+                    
+                    # 문의상 필요인력 확인
+                    need_col = ud.find_col(df_inq, ["필요인력", "인원"])
+                    evt_col = ud.find_col(df_inq, ["행사명"])
+                    need_count = 0
+                    if need_col and evt_col:
+                        matched_inq = df_inq[df_inq[evt_col].astype(str).str.strip() == str(evt_name).strip()]
+                        if not matched_inq.empty:
+                            need_count = ud.safe_int(matched_inq.iloc[0].get(need_col, 0))
+                    
+                    if need_count > 0:
+                        fill_pct = min(100, int(staff_count / need_count * 100))
+                        fill_color = "#10B981" if fill_pct >= 100 else "#F59E0B" if fill_pct >= 50 else "#EF4444"
+                        fill_text = f"{staff_count}/{need_count}명 ({fill_pct}%)"
+                    else:
+                        fill_pct = 100
+                        fill_color = "#6B7280"
+                        fill_text = f"{staff_count}명 배정"
+                    
+                    with st.container(border=True):
+                        st.markdown(f"""
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                            <b style="font-size:14px;">🎪 {evt_name}</b>
+                            <span style="background:{fill_color}; color:white; padding:3px 10px; border-radius:12px; font-size:12px; font-weight:bold;">{fill_text}</span>
+                        </div>
+                        <div style="background:#E5E7EB; border-radius:4px; height:8px; margin-bottom:8px;">
+                            <div style="background:{fill_color}; width:{fill_pct}%; height:100%; border-radius:4px;"></div>
+                        </div>
+                        <div style="font-size:12px; color:#6B7280;">👤 {staff_names}</div>
+                        """, unsafe_allow_html=True)
+        else:
+            st.info("👥 배정 데이터가 없습니다.")
+        
+        st.markdown("---")
+        st.markdown('<div class="section-title">🏆 가장 많이 파견된 인원 (Top 10)</div>', unsafe_allow_html=True)
         
         top_staff = ud.get_most_dispatched_staff(df_dispatch, top_n=10)
         if not top_staff.empty:
@@ -601,10 +675,11 @@ def show(data):
         with col_info1:
             st.metric("📋 총 계약건수", len(df_settlement) if not df_settlement.empty else 0)
         with col_info2:
-            paid_count = len(df_settlement[df_settlement.iloc[:, 0].astype(str).str.contains('완료', na=False)]) if not df_settlement.empty else 0
+            _col_progress = ud.find_col(df_settlement, ["진행상황", "상태", "입금상태"]) if not df_settlement.empty else None
+            paid_count = len(df_settlement[df_settlement[_col_progress].astype(str).str.contains('완료', na=False)]) if _col_progress else 0
             st.metric("✅ 입금완료", paid_count)
         with col_info3:
-            partial_count = len(df_settlement[df_settlement.iloc[:, 0].astype(str).str.contains('부분', na=False)]) if not df_settlement.empty else 0
+            partial_count = len(df_settlement[df_settlement[_col_progress].astype(str).str.contains('부분', na=False)]) if _col_progress else 0
             st.metric("🔄 부분입금", partial_count)
         
         st.markdown("---")
@@ -638,25 +713,83 @@ def show(data):
             "locale": "ko"
         }
         
-        # 일정이 있든 없든 캘린더는 항상 표시
         calendar(events=events if events else [], options=cal_options)
         
-        # 일정이 없을 때 안내 메시지
         if not events:
-            st.info("📅 현재 등록된 행사 일정이 없습니다. 문의 시스템에 행사 일정을 추가하면 자동으로 나타납니다.")
+            st.info("📅 현재 등록된 행사 일정이 없습니다.")
+        
+        st.markdown("---")
+        st.markdown('<div class="section-title">📋 전체 현장 목록 (배정현황 포함)</div>', unsafe_allow_html=True)
+        
+        all_events = ud.get_all_events_with_status(df_inq, df_dispatch)
+        if not all_events.empty:
+            for _, ev_row in all_events.iterrows():
+                d_day = int(ev_row.get('D-Day', 0))
+                evt_name = ev_row.get('행사명', '')
+                evt_status = str(ev_row.get('상태', ''))
+                assigned = int(ev_row.get('배정인원', 0))
+                needed = int(ev_row.get('필요인원', 0))
+                location = ev_row.get('장소', '')
+                if not location or str(location).strip() == '' or pd.isna(location):
+                    location = '장소미입력'
+                
+                # D-Day 색상
+                if d_day < 0:
+                    badge = "⏰ 종료"
+                    badge_color = "#9CA3AF"
+                elif d_day == 0:
+                    badge = "🔴 당일"
+                    badge_color = "#DC2626"
+                elif d_day <= 3:
+                    badge = f"🟠 D-{d_day}"
+                    badge_color = "#F97316"
+                elif d_day <= 7:
+                    badge = f"🟡 D-{d_day}"
+                    badge_color = "#EAB308"
+                else:
+                    badge = f"🟢 D-{d_day}"
+                    badge_color = "#10B981"
+                
+                # 배정 현황
+                if needed > 0:
+                    fill_pct = min(100, int(assigned / needed * 100))
+                    assign_text = f"{assigned}/{needed}명"
+                else:
+                    fill_pct = 100 if assigned > 0 else 0
+                    assign_text = f"{assigned}명" if assigned > 0 else "미배정"
+                
+                assign_color = "#10B981" if fill_pct >= 100 else "#F59E0B" if fill_pct >= 50 else "#EF4444"
+                
+                # 배정 인력 이름
+                staff_detail = ud.get_dispatch_detail_for_event(df_dispatch, evt_name)
+                staff_names = ", ".join(staff_detail['인력명'].tolist()) if not staff_detail.empty else "배정전"
+                
+                start_dt = str(ev_row.get('시작일', ''))
+                end_dt = str(ev_row.get('종료일', '')) if '종료일' in ev_row.index else ''
+                date_str = f"{start_dt}" + (f" ~ {end_dt}" if end_dt and end_dt != start_dt else "")
+                
+                st.markdown(f"""
+                <div style="background: white; border: 1px solid #E5E7EB; border-left: 4px solid {badge_color};
+                            border-radius: 8px; padding: 14px; margin-bottom: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.06);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <div>
+                            <span style="background: {badge_color}; color: white; padding: 3px 8px; border-radius: 4px;
+                                        font-weight: bold; font-size: 11px; margin-right: 6px;">{badge}</span>
+                            <b style="font-size: 14px; color: #111827;">{ev_row.get('업체', '')} - {evt_name}</b>
+                        </div>
+                        <span style="background: {assign_color}; color: white; padding: 3px 10px; border-radius: 12px;
+                                    font-size: 11px; font-weight: bold;">👥 {assign_text}</span>
+                    </div>
+                    <div style="color: #6B7280; font-size: 12px; margin-bottom: 4px;">
+                        📍 {location}  |  📅 {date_str}
+                    </div>
+                    <div style="color: #6B7280; font-size: 12px;">
+                        👤 <b>배정인력</b>: {staff_names}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
         else:
-            # 일정이 있을 때 요약 정보 표시
-            st.markdown("---")
-            st.markdown('<div class="section-title">📋 등록된 일정 목록</div>', unsafe_allow_html=True)
-            
-            # 일정을 표로 표시
-            upcoming_events = ud.get_upcoming_events(df_inq, days=90)
-            if not upcoming_events.empty:
-                st.dataframe(
-                    upcoming_events[[col for col in upcoming_events.columns if col != 'D-Day']],
-                    use_container_width=True,
-                    hide_index=True
-                )
+            st.info("📅 등록된 행사가 없습니다.")
 
     
     # [Tab 7] 자동화 리포트

@@ -359,8 +359,9 @@ def get_upcoming_events(df_inq, days=7):
 def get_most_dispatched_staff(df_dispatch, top_n=5):
     """가장 많이 파견된 인원 순위"""
     if df_dispatch.empty: return pd.DataFrame()
-    col_staff = find_col(df_dispatch, ["직원명", "인원"])
-    col_position = find_col(df_dispatch, ["직급", "직책"])
+    col_staff = find_col(df_dispatch, ["인력명", "직원명", "인원", "이름"])
+    col_role = find_col(df_dispatch, ["직무", "직급", "직책", "구분"])
+    col_event = find_col(df_dispatch, ["행사명"])
     
     if not col_staff: return pd.DataFrame()
     
@@ -372,13 +373,111 @@ def get_most_dispatched_staff(df_dispatch, top_n=5):
         ranking = ranking.head(top_n).reset_index(drop=True)
         ranking['순위'] = ranking.index + 1
         
-        # 직급 정보 추가 (있으면)
-        if col_position and col_position in df.columns:
-            position_dict = dict(zip(df[col_staff], df[col_position]))
-            ranking['직급'] = ranking['직원명'].map(position_dict).fillna('-')
+        # 직무 정보 추가 (있으면)
+        if col_role and col_role in df.columns:
+            role_dict = dict(zip(df[col_staff], df[col_role]))
+            ranking['직무'] = ranking['직원명'].map(role_dict).fillna('-')
+            return ranking[['순위', '직원명', '직무', '파견횟수']]
         
         return ranking[['순위', '직원명', '파견횟수']]
     except:
+        return pd.DataFrame()
+
+
+def get_dispatch_detail_for_event(df_dispatch, event_name):
+    """특정 행사의 배정 인력 상세 정보"""
+    if df_dispatch.empty: return pd.DataFrame()
+    col_event = find_col(df_dispatch, ["행사명"])
+    col_staff = find_col(df_dispatch, ["인력명", "직원명", "인원"])
+    col_role = find_col(df_dispatch, ["직무"])
+    col_type = find_col(df_dispatch, ["구분"])
+    col_status = find_col(df_dispatch, ["지급상태"])
+    
+    if not col_event or not col_staff: return pd.DataFrame()
+    
+    try:
+        matched = df_dispatch[df_dispatch[col_event].astype(str).str.strip() == str(event_name).strip()]
+        if matched.empty: return pd.DataFrame()
+        
+        cols = [col_staff]
+        col_names = ['인력명']
+        if col_type and col_type in matched.columns:
+            cols.append(col_type); col_names.append('구분')
+        if col_role and col_role in matched.columns:
+            cols.append(col_role); col_names.append('직무')
+        if col_status and col_status in matched.columns:
+            cols.append(col_status); col_names.append('상태')
+        
+        result = matched[cols].copy()
+        result.columns = col_names
+        return result
+    except:
+        return pd.DataFrame()
+
+
+def get_all_events_with_status(df_inq, df_dispatch):
+    """전체 행사 목록을 D-Day + 배정현황과 함께 반환"""
+    if df_inq.empty: return pd.DataFrame()
+    
+    col_date = find_col(df_inq, ["행사시작일", "시작일", "행사일시", "일시"])
+    col_end = find_col(df_inq, ["행사종료일", "종료일"])
+    col_client = find_col(df_inq, ["업체명"])
+    col_event = find_col(df_inq, ["행사명"])
+    col_location = find_col(df_inq, ["장소", "현장"])
+    col_status = find_col(df_inq, ["상태", "체결"])
+    col_need = find_col(df_inq, ["필요인력", "인원"])
+    
+    if not col_date: return pd.DataFrame()
+    
+    try:
+        df = df_inq.copy()
+        today = datetime.now()
+        
+        def parse_dt(d):
+            try: return datetime.strptime(str(d).split('~')[0].strip()[:10], "%Y-%m-%d")
+            except: return None
+        
+        df['evt_dt'] = df[col_date].apply(parse_dt)
+        df = df.dropna(subset=['evt_dt'])
+        if df.empty: return pd.DataFrame()
+        
+        df['D-Day'] = df['evt_dt'].apply(lambda x: (x - today).days)
+        df = df.sort_values('D-Day')
+        
+        # 배정인원 집계
+        if not df_dispatch.empty and col_event:
+            col_dispatch_event = find_col(df_dispatch, ["행사명"])
+            if col_dispatch_event and col_dispatch_event in df_dispatch.columns:
+                dispatch_count = df_dispatch[col_dispatch_event].value_counts().to_dict()
+                df['배정인원'] = df[col_event].map(dispatch_count).fillna(0).astype(int)
+            else:
+                df['배정인원'] = 0
+        else:
+            df['배정인원'] = 0
+        
+        # 필요인력
+        if col_need:
+            df['필요인원'] = df[col_need].apply(lambda x: safe_int(x) if x else 0)
+        else:
+            df['필요인원'] = 0
+        
+        result_cols = {
+            '업체': col_client,
+            '행사명': col_event,
+            '장소': col_location,
+            '시작일': col_date,
+        }
+        if col_end: result_cols['종료일'] = col_end
+        if col_status: result_cols['상태'] = col_status
+        
+        valid_cols = {k: v for k, v in result_cols.items() if v and v in df.columns}
+        res = df[list(valid_cols.values()) + ['배정인원', '필요인원', 'D-Day']].copy()
+        rename_map = {v: k for k, v in valid_cols.items()}
+        res = res.rename(columns=rename_map)
+        
+        return res
+    except Exception as e:
+        print(f"get_all_events_with_status error: {e}")
         return pd.DataFrame()
 
 def get_top_customers(df_inq, top_n=5):
