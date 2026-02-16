@@ -269,6 +269,9 @@ def show(data):
                 f_ref = c_1.text_input("참조", value=st.session_state.get('w_manager',''), key="final_manager")
                 f_tel = c_2.text_input("연락처", value=st.session_state.get('w_contact',''), key="final_contact")
                 f_addr = st.text_input("주소(현장)", value=st.session_state['w_loc'], key="final_loc")
+                c_b1, c_b2 = st.columns(2)
+                f_biz_no = c_b1.text_input("사업자번호", value=st.session_state.get('w_biz_no',''), key="final_biz_no")
+                f_ceo = c_b2.text_input("대표자", value=st.session_state.get('w_ceo',''), key="final_ceo")
             
             st.caption("📋 리스트 수정")
             edited_df = st.data_editor(
@@ -317,8 +320,8 @@ def show(data):
                                 "현장명": st.session_state.get('w_event', ''),
                                 "책임자": f_ref or target_row.get('담당자', ''),
                                 "현장주소": f_addr or target_row.get('장소', target_row.get('행사장소', '')),
-                                "사업자번호": st.session_state.get('w_biz_no', ''),
-                                "대표자": st.session_state.get('w_ceo', ''),
+                                "사업자번호": f_biz_no or st.session_state.get('w_biz_no', ''),
+                                "대표자": f_ceo or st.session_state.get('w_ceo', ''),
                                 "담당자": f_ref or target_row.get('담당자', ''),
                                 "연락처": f_tel or target_row.get('연락처', target_row.get('담당자연락처', ''))
                             }

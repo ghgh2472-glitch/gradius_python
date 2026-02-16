@@ -625,6 +625,15 @@ def _lookup_staff_info(staff_name):
                 info['연락처'] = str(staff_row[col]).strip() if staff_row[col] else ''
             elif '소속' in col_clean or '부서' in col_clean:
                 info['소속'] = str(staff_row[col]).strip() if staff_row[col] else ''
+            elif col_clean == '주민등록번호':
+                val = staff_row[col]
+                info['주민등록번호'] = str(val).strip() if val and str(val).strip() else ''
+            elif col_clean == '은행명':
+                val = staff_row[col]
+                info['은행명'] = str(val).strip() if val and str(val).strip() else ''
+            elif col_clean == '계좌번호':
+                val = staff_row[col]
+                info['계좌번호'] = str(val).strip() if val and str(val).strip() else ''
             elif '단가' in col_clean and '기본' in col_clean:
                 try:
                     info['기본단가'] = safe_int(staff_row[col])
@@ -675,6 +684,12 @@ def save_assignment_record(assignment):
         if staff_info:
             if not merged_assignment.get('연락처'):
                 merged_assignment['연락처'] = staff_info.get('연락처', '')
+            if not merged_assignment.get('주민등록번호'):
+                merged_assignment['주민등록번호'] = staff_info.get('주민등록번호', '')
+            if not merged_assignment.get('은행명'):
+                merged_assignment['은행명'] = staff_info.get('은행명', '')
+            if not merged_assignment.get('계좌번호'):
+                merged_assignment['계좌번호'] = staff_info.get('계좌번호', '')
             if not merged_assignment.get('소속'):
                 merged_assignment['소속'] = staff_info.get('소속', '')
             # 단가가 없으면 기본단가 사용
@@ -721,9 +736,9 @@ def save_assignment_record(assignment):
             merged_assignment.get('구분', '외부'),  # Col 5: 구분 (본사/외부)
             merged_assignment.get('직무', ''),  # Col 6: 직무
             merged_assignment.get('연락처', ''),  # Col 7: 연락처
-            '',  # Col 8: 주민등록번호
-            '',  # Col 9: 은행명
-            '',  # Col 10: 계좌번호
+            merged_assignment.get('주민등록번호', ''),  # Col 8: 주민등록번호
+            merged_assignment.get('은행명', ''),  # Col 9: 은행명
+            merged_assignment.get('계좌번호', ''),  # Col 10: 계좌번호
             merged_assignment.get('지급단가', ''),  # Col 11: 지급단가
             merged_assignment.get('근무일수', ''),  # Col 12: 근무일수
             merged_assignment.get('총지급액', ''),  # Col 13: 총지급액

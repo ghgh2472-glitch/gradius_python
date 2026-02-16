@@ -323,11 +323,18 @@ def show_settlement_detail(data):
         if not matches.empty:
             est_row = matches.iloc[0]
 
+    def _safe_int(v):
+        try:
+            n = pd.to_numeric(v, errors='coerce')
+            return 0 if pd.isna(n) else int(n)
+        except:
+            return 0
+
     if est_row is not None:
         summary = {
-            '매출': int(pd.to_numeric(est_row.get('공급가액', 0), errors='coerce') or 0),
-            '매입': int(pd.to_numeric(est_row.get('매입원가', 0), errors='coerce') or 0),
-            '수익': int(pd.to_numeric(est_row.get('예상수익', 0), errors='coerce') or 0),
+            '매출': _safe_int(est_row.get('공급가액', 0)),
+            '매입': _safe_int(est_row.get('매입원가', 0)),
+            '수익': _safe_int(est_row.get('예상수익', 0)),
             '수익률': 0.0,
         }
         if summary['수익'] == 0:

@@ -154,7 +154,7 @@ def get_top_clients(df_inq, top_n=5):
 # ---------------------------------------------------------
 def get_unpaid_list(df_inq):
     if df_inq.empty: return pd.DataFrame()
-    col_date = find_col(df_inq, ["일시", "행사일시", "날짜"])
+    col_date = find_col(df_inq, ["행사시작일", "시작일", "일시", "행사일시", "날짜"])
     col_client = find_col(df_inq, ["업체명"])
     col_status = find_col(df_inq, ["체결", "상태"])
     col_note = find_col(df_inq, ["특이사항"])
@@ -323,7 +323,7 @@ def generate_smart_briefing(df_inq, df_dispatch, df_settlement):
 
 def get_upcoming_events(df_inq, days=7):
     if df_inq.empty: return pd.DataFrame()
-    col_date = find_col(df_inq, ["행사시작일", "시작일", "행사일시", "일시"])
+    col_date = find_col(df_inq, ["행사시작일", "시작일", "행사일시", "일시", "투입일"])
     col_client = find_col(df_inq, ["업체명"])
     col_event = find_col(df_inq, ["행사명"])
     
@@ -484,7 +484,7 @@ def get_upcoming_dispatch_info(df_dispatch, df_inq, days=7):
     """곧 나갈 현장 정보 (인원/장소/일정 포함)"""
     if df_inq.empty: return pd.DataFrame()
     
-    col_date = find_col(df_inq, ["행사일시", "일시"])
+    col_date = find_col(df_inq, ["행사시작일", "시작일", "행사일시", "일시"])
     col_client = find_col(df_inq, ["업체명"])
     col_event = find_col(df_inq, ["행사명"])
     col_location = find_col(df_inq, ["장소", "현장"])
