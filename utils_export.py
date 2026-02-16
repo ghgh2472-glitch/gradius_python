@@ -68,12 +68,14 @@ def export_to_excel(
                         cell.number_format = "#,##0"
 
         # 컬럼 너비 자동 조정
+        from openpyxl.utils import get_column_letter
+
         for col_idx, col_name in enumerate(df.columns, 1):
             max_len = max(
                 len(str(col_name)),
                 df[col_name].astype(str).str.len().max() if not df.empty else 0,
             )
-            ws.column_dimensions[chr(64 + min(col_idx, 26))].width = min(max_len + 4, 40)
+            ws.column_dimensions[get_column_letter(col_idx)].width = min(max_len + 4, 40)
 
         # 합계 행
         if include_summary and number_columns:
