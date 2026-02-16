@@ -673,37 +673,39 @@ def save_assignment_record(assignment):
             except Exception as e:
                 print(f"Failed to add rows before write: {e}")
 
-        # 배정기록 시트의 실제 컬럼 구조 (Google Sheets에 있는 그대로)
+        # 배정기록 시트 15컬럼 구조 (구분 컬럼 포함)
         # Col 1: 배정ID
         # Col 2: 문의ID
         # Col 3: 행사명
         # Col 4: 인력명
-        # Col 5: 직무
-        # Col 6: 연락처
-        # Col 7: 주민등록번호
-        # Col 8: 은행명
-        # Col 9: 계좌번호
-        # Col 10: 지급단가
-        # Col 11: 근무일수
-        # Col 12: 총지급액
-        # Col 13: 지급상태
-        # Col 14: 배정일시
+        # Col 5: 구분 (본사/외부)
+        # Col 6: 직무
+        # Col 7: 연락처
+        # Col 8: 주민등록번호
+        # Col 9: 은행명
+        # Col 10: 계좌번호
+        # Col 11: 지급단가
+        # Col 12: 근무일수
+        # Col 13: 총지급액
+        # Col 14: 지급상태
+        # Col 15: 배정일시
         
         row_values = [
             assign_id,  # Col 1: 배정ID
             merged_assignment.get('문의ID', ''),  # Col 2: 문의ID
             merged_assignment.get('행사명', ''),  # Col 3: 행사명
             merged_assignment.get('인력명', ''),  # Col 4: 인력명
-            merged_assignment.get('직무', ''),  # Col 5: 직무
-            merged_assignment.get('연락처', ''),  # Col 6: 연락처
-            '',  # Col 7: 주민등록번호
-            '',  # Col 8: 은행명
-            '',  # Col 9: 계좌번호
-            merged_assignment.get('지급단가', ''),  # Col 10: 지급단가
-            merged_assignment.get('근무일수', ''),  # Col 11: 근무일수
-            merged_assignment.get('총지급액', ''),  # Col 12: 총지급액
-            merged_assignment.get('지급상태', '배정중'),  # Col 13: 지급상태
-            merged_assignment.get('배정일시', datetime.now().strftime('%Y-%m-%d %H:%M:%S')),  # Col 14: 배정일시
+            merged_assignment.get('구분', '외부'),  # Col 5: 구분 (본사/외부)
+            merged_assignment.get('직무', ''),  # Col 6: 직무
+            merged_assignment.get('연락처', ''),  # Col 7: 연락처
+            '',  # Col 8: 주민등록번호
+            '',  # Col 9: 은행명
+            '',  # Col 10: 계좌번호
+            merged_assignment.get('지급단가', ''),  # Col 11: 지급단가
+            merged_assignment.get('근무일수', ''),  # Col 12: 근무일수
+            merged_assignment.get('총지급액', ''),  # Col 13: 총지급액
+            merged_assignment.get('지급상태', '배정중'),  # Col 14: 지급상태
+            merged_assignment.get('배정일시', datetime.now().strftime('%Y-%m-%d %H:%M:%S')),  # Col 15: 배정일시
         ]
 
         # A{next_row} 위치에 한 줄로 업데이트
@@ -1146,3 +1148,210 @@ def save_attendance_record(attendance_dict):
         import traceback
         traceback.print_exc()
         return False
+
+
+# ---------------------------------------------------------
+# 견적품목 관리
+# ---------------------------------------------------------
+
+def save_estimate_items(inquiry_id: str, items_df):
+    """견적품목 시트에 직군별 품목 저장 (기존 항목 삭제 후 재작성)"""
+    client = get_connection()
+    if not client:
+        return False
+    try:
+        sh = client.open_by_key(SHEET_ID)
+        wks = sh.worksheet("견적품목")
+        
+        # 기존 해당 문의의 품목 삭제 (전체 재작성)
+        all_vals = wks.get_all_values()
+        rows_to_keep = [all_vals[0]]  # 헤더
+        for row in all_vals[1:]:
+            if len(row) >= 2 and str(row[1]).strip() != str(inquiry_id).strip():
+                rows_to_keep.append(row)
+        
+        # 시트 클리어 후 재작성
+        wks.clear()
+        if rows_to_keep:
+            wks.update('A1', rows_to_keep, value_input_option='RAW')
+        
+        # 새 품목 추가
+        next_row = len(rows_to_keep) + 1
+        for idx, item in items_df.iterrows():
+            item_id = f"I-{datetime.now().strftime('%y%m%d')}-{str(uuid4())[:4]}"
+            role_name = str(item.get('품목', '')).replace('[팀장]', '').strip()
+            row = [
+                item_id,
+                str(inquiry_id),
+                role_name,
+                int(item.get('수량', 0)),
+                int(item.get('일수', 0)),
+                int(item.get('매출단가', 0)),
+                int(item.get('매입단가', 0)),
+                str(item.get('규격', '')),
+                str(item.get('비고', '')),
+                '팀장' if '[팀장]' in str(item.get('품목', '')) else '',
+            ]
+            wks.update(f'A{next_row}', [row], value_input_option='RAW')
+            next_row += 1
+        
+        print(f"✅ 견적품목 저장: {inquiry_id} - {len(items_df)}개 품목")
+        return True
+    except Exception as e:
+        print(f"❌ save_estimate_items 오류: {e}")
+        return False
+
+
+@st.cache_data(ttl=120)
+def load_estimate_items(inquiry_id: str):
+    """특정 문의ID의 견적품목 조회"""
+    client = get_connection()
+    if not client:
+        return pd.DataFrame()
+    try:
+        sh = client.open_by_key(SHEET_ID)
+        wks = sh.worksheet("견적품목")
+        records = wks.get_all_records()
+        if not records:
+            return pd.DataFrame()
+        df = pd.DataFrame(records)
+        if '문의ID' in df.columns:
+            df = df[df['문의ID'].astype(str).str.strip() == str(inquiry_id).strip()]
+        return df.reset_index(drop=True)
+    except Exception as e:
+        print(f"load_estimate_items error: {e}")
+        return pd.DataFrame()
+
+
+# ---------------------------------------------------------
+# 평가표 저장
+# ---------------------------------------------------------
+
+def save_evaluation(eval_dict: dict):
+    """평가표 시트에 평가 기록 저장"""
+    client = get_connection()
+    if not client:
+        return False
+    try:
+        sh = client.open_by_key(SHEET_ID)
+        wks = sh.worksheet("평가표")
+        
+        eval_id = f"E-{datetime.now().strftime('%y%m%d')}-{str(uuid4())[:6]}"
+        
+        # 기존 평가 중복 체크 (배정ID 기준)
+        all_vals = wks.get_all_values()
+        headers = all_vals[0] if all_vals else []
+        bid_col = headers.index('배정ID') + 1 if '배정ID' in headers else 2
+        
+        target_bid = str(eval_dict.get('배정ID', '')).strip()
+        target_row = None
+        for i, row in enumerate(all_vals[1:], 2):
+            if len(row) >= bid_col and str(row[bid_col - 1]).strip() == target_bid:
+                target_row = i
+                break
+        
+        if target_row is None:
+            target_row = len(all_vals) + 1
+            if target_row > wks.row_count:
+                wks.add_rows(100)
+        
+        # 평가표 17컬럼 구조
+        row_values = [
+            eval_id if target_row == len(all_vals) + 1 else all_vals[target_row - 1][0] if len(all_vals) >= target_row else eval_id,
+            eval_dict.get('배정ID', ''),
+            eval_dict.get('인력명', ''),
+            eval_dict.get('현장명', ''),
+            eval_dict.get('근태', 3),
+            eval_dict.get('수행력', 3),
+            eval_dict.get('태도', 3),
+            eval_dict.get('의사소통', 3),
+            eval_dict.get('현장적응', 3),
+            eval_dict.get('총점', 0),
+            eval_dict.get('평가등급', 'C'),
+            eval_dict.get('평가자', ''),
+            eval_dict.get('평가일시', datetime.now().strftime('%Y-%m-%d %H:%M:%S')),
+            eval_dict.get('강점', ''),
+            eval_dict.get('개선점', ''),
+            eval_dict.get('재추천', 'No'),
+            eval_dict.get('비고', ''),
+        ]
+        
+        wks.update(f'A{target_row}', [row_values], value_input_option='RAW')
+        print(f"✅ 평가 저장: {eval_dict.get('인력명', '')} at row {target_row}")
+        return True
+    except Exception as e:
+        print(f"❌ save_evaluation 오류: {e}")
+        return False
+
+
+# ---------------------------------------------------------
+# 지급내역 저장
+# ---------------------------------------------------------
+
+def save_payment_record(payment_dict: dict):
+    """지급내역 시트에 급여 기록 저장"""
+    client = get_connection()
+    if not client:
+        return False
+    try:
+        sh = client.open_by_key(SHEET_ID)
+        wks = sh.worksheet("지급내역")
+        
+        pay_id = f"P-{datetime.now().strftime('%y%m%d')}-{str(uuid4())[:6]}"
+        
+        # 기존 지급 중복 체크 (배정ID 기준)
+        all_vals = wks.get_all_values()
+        headers = all_vals[0] if all_vals else []
+        bid_col = headers.index('배정ID') + 1 if '배정ID' in headers else 2
+        
+        target_bid = str(payment_dict.get('배정ID', '')).strip()
+        target_row = None
+        for i, row in enumerate(all_vals[1:], 2):
+            if len(row) >= bid_col and str(row[bid_col - 1]).strip() == target_bid:
+                target_row = i
+                break
+        
+        if target_row is None:
+            target_row = len(all_vals) + 1
+            if target_row > wks.row_count:
+                wks.add_rows(100)
+        
+        # 지급내역 18컬럼 구조
+        row_values = [
+            pay_id if target_row == len(all_vals) + 1 else all_vals[target_row - 1][0] if len(all_vals) >= target_row else pay_id,
+            payment_dict.get('배정ID', ''),
+            payment_dict.get('인력명', ''),
+            payment_dict.get('현장명', ''),
+            payment_dict.get('파견기간', ''),
+            payment_dict.get('파견일수', 0),
+            payment_dict.get('기본급', 0),
+            payment_dict.get('야근비', 0),
+            payment_dict.get('식사비', 0),
+            payment_dict.get('교통비', 0),
+            payment_dict.get('보너스', 0),
+            payment_dict.get('소계', 0),
+            payment_dict.get('세금공제', 0),
+            payment_dict.get('최종지급액', 0),
+            payment_dict.get('지급상태', '대기'),
+            payment_dict.get('지급일', ''),
+            payment_dict.get('지급담당자', ''),
+            payment_dict.get('비고', ''),
+        ]
+        
+        wks.update(f'A{target_row}', [row_values], value_input_option='RAW')
+        print(f"✅ 지급내역 저장: {payment_dict.get('인력명', '')} at row {target_row}")
+        return True
+    except Exception as e:
+        print(f"❌ save_payment_record 오류: {e}")
+        return False
+
+
+# ---------------------------------------------------------
+# 본사 인원 정보 (코드 내 상수)
+# ---------------------------------------------------------
+
+HQ_STAFF = [
+    {"이름": "최규성", "직무": "현장총괄", "구분": "본사"},
+    {"이름": "송무재", "직무": "현장관리", "구분": "본사"},
+    {"이름": "여지은", "직무": "현장관리", "구분": "본사"},
+]

@@ -332,6 +332,10 @@ def show(data):
                             
                             with st.spinner("🚀 데이터 파이프라인 동기화 중..."):
                                 if db.save_estimate_details(est_package, metadata=metadata):
+                                    # 견적품목도 함께 저장 (직군/인원/단가 내역)
+                                    if not edited_df.empty:
+                                        db.save_estimate_items(target_id, edited_df)
+                                    
                                     db.update_status(target_id, sc.STATUS_FLOW[1])  # '견적'
                                     st.balloons()
                                     st.success(f"✅ {final_save_name} 저장 완료!")
