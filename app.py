@@ -1,5 +1,6 @@
 # app.py
 import streamlit as st
+from datetime import datetime
 
 # 페이지 모듈 임포트
 import page_dashboard  # 대시보드 (메인)
@@ -147,3 +148,38 @@ elif "정산" in menu:
 
 else:
     st.info("🚧 추가 기능은 현재 개발 중입니다. (Coming Soon)")
+
+    # ------------------------------------------------------------------
+    # 감사 로그 조회
+    # ------------------------------------------------------------------
+    st.markdown("---")
+    st.subheader("📋 감사 로그 (변경 이력)")
+    from utils_audit import AuditLogger
+    audit_df = AuditLogger.get_recent(30)
+    if audit_df.empty:
+        st.caption("아직 기록된 변경 이력이 없습니다.")
+    else:
+        st.dataframe(audit_df, use_container_width=True)
+
+    # ------------------------------------------------------------------
+    # Excel 일괄 내보내기
+    # ------------------------------------------------------------------
+    st.markdown("---")
+    st.subheader("📥 데이터 내보내기 (Excel)")
+    from utils_export import export_multiple_sheets, render_download_button
+
+    export_targets = {}
+    for label, key in [("문의", "inq"), ("STAFF", "staff"), ("고객", "client")]:
+        df = data.get(key, pd.DataFrame())
+        if not df.empty:
+            export_targets[label] = df
+
+    if export_targets:
+        excel_bytes = export_multiple_sheets(export_targets)
+        render_download_button(
+            excel_bytes,
+            filename=f"Gradius_ERP_Export_{datetime.now().strftime('%Y%m%d')}.xlsx",
+            label="📥 전체 데이터 Excel 다운로드",
+        )
+    else:
+        st.caption("내보낼 데이터가 없습니다.")

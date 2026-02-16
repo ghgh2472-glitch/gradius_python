@@ -283,12 +283,26 @@ def check_workflow_status(inquiry_id: str, data: Dict) -> Dict:
             if not assigned.empty:
                 result['배정'] = True
         
-        # 출석 확인
-        # (실제로는 출석부 시트에서 조회해야 함)
-        
-        # 지급 확인
-        # (실제로는 인건비 시트에서 조회해야 함)
-        
+        # 출석 확인 – 배정ID 기반으로 출석부 시트 조회
+        df_attendance = data.get('attendance', pd.DataFrame())
+        if not df_attendance.empty and result['배정']:
+            assigned_ids = set(assigned['배정ID'].astype(str).values)
+            att_ids = set(df_attendance['배정ID'].astype(str).values) if '배정ID' in df_attendance.columns else set()
+            if assigned_ids & att_ids:
+                result['출석'] = True
+
+        # 지급 확인 – 인건비 시트에서 지급상태 조회
+        df_payroll = data.get('payroll', pd.DataFrame())
+        if not df_payroll.empty and result['배정']:
+            assigned_ids = set(assigned['배정ID'].astype(str).values)
+            if '배정ID' in df_payroll.columns:
+                paid = df_payroll[
+                    (df_payroll['배정ID'].astype(str).isin(assigned_ids))
+                    & (df_payroll['지급상태'].astype(str).str.strip() == '지급완료')
+                ]
+                if not paid.empty:
+                    result['지급'] = True
+
         # 진행률 계산
         result['진행률'] = sum([result[k] for k in ['문의', '배정', '출석', '지급']]) / 4.0
         
