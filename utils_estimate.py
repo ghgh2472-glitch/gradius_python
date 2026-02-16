@@ -81,18 +81,36 @@ def safe_int(val):
     except: return 0
 
 def smart_parse_date(date_str):
+    """날짜 문자열 파싱. '2026-02-20~2026-02-22' 또는 단일 날짜 지원"""
     txt = str(date_str).strip()
     now = datetime.now().date()
     if not txt: return (now, now, 1)
+    
+    y = datetime.now().year
+    def to_d(s):
+        s = s.strip().replace('.', '-').replace('/', '-')
+        if not s: return None
+        # YYYY-MM-DD 형식
+        if len(s) >= 8 and s.count('-') == 2:
+            return datetime.strptime(s[:10], "%Y-%m-%d").date()
+        # MM-DD 형식 (연도 없음)
+        if s.count('-') == 1:
+            return datetime.strptime(f"{y}-{s}", "%Y-%m-%d").date()
+        return None
+    
     try:
-        dates = re.split(r'[~-]', txt)
-        d1 = dates[0].strip(); d2 = dates[1].strip() if len(dates) > 1 else d1
-        y = datetime.now().year
-        def to_d(s):
-            s = s.replace('.', '-').replace('/', '-')
-            if s.count('-') == 1: return datetime.strptime(f"{y}-{s}", "%Y-%m-%d").date()
-            return datetime.strptime(s, "%Y-%m-%d").date()
-        dt1, dt2 = to_d(d1), to_d(d2)
+        # 1) ~ 구분자 우선 (YYYY-MM-DD~YYYY-MM-DD)
+        if '~' in txt:
+            parts = txt.split('~', 1)
+            dt1 = to_d(parts[0])
+            dt2 = to_d(parts[1]) if len(parts) > 1 else dt1
+        else:
+            # 단일 날짜
+            dt1 = to_d(txt)
+            dt2 = dt1
+        
+        if dt1 is None: return (now, now, 1)
+        if dt2 is None: dt2 = dt1
         return (dt1, dt2, max(1, (dt2-dt1).days+1))
     except: return (now, now, 1)
 

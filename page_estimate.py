@@ -103,21 +103,45 @@ def show(data):
     if sel_p != "(신규작성)" and not pending.empty and st.session_state.get('last_project') != sel_p:
         try:
             target = pending[pending['label'] == sel_p].iloc[0]
-            raw_dates = f"{target.get('행사시작일', target.get('시작일',''))}~{target.get('행사종료일', target.get('종료일',''))}"
-            if len(raw_dates) < 5: raw_dates = str(target.get('일시', ''))
+            
+            # ▶ 날짜 개별 파싱 (행사시작일/행사종료일 각각)
+            start_raw = str(target.get('행사시작일', target.get('시작일', ''))).strip()
+            end_raw = str(target.get('행사종료일', target.get('종료일', ''))).strip()
+            
+            if start_raw and end_raw:
+                raw_dates = f"{start_raw}~{end_raw}"
+            elif start_raw:
+                raw_dates = start_raw
+            else:
+                raw_dates = str(target.get('일시', ''))
+            
             s_d, e_d, _ = ue.smart_parse_date(raw_dates)
             s_t, e_t, _ = ue.smart_parse_time(target.get('행사시간', str(target.get('시간',''))))
             qty = ue.safe_int(str(target.get('필요인력', target.get('요청인원', target.get('인원', '1')))).replace('명',''))
             
+            # ▶ 수신자 정보
+            w_client = target.get('업체명', '')
+            w_manager = target.get('담당자', '')
+            w_contact = target.get('연락처', str(target.get('담당자연락처', '')))
+            w_loc = target.get('장소', '')
+            w_event = target.get('행사명', '')
+            
             st.session_state.update({
-                'w_client': target.get('업체명', ''), 'w_event': target.get('행사명', ''), 
-                'w_loc': target.get('장소', ''), 'w_manager': target.get('담당자', ''), 'w_contact': target.get('연락처', str(target.get('담당자연락처', ''))),
+                'w_client': w_client, 'w_event': w_event, 
+                'w_loc': w_loc, 'w_manager': w_manager, 'w_contact': w_contact,
                 'w_sdate': s_d, 'w_edate': e_d, 'w_time_in': s_t, 'w_time_out': e_t, 'w_qty': qty,
                 'last_project': sel_p,
                 'est_items': pd.DataFrame(columns=['품목','규격','수량','일수','매출단가','매입단가','매출합계','매입합계','비고'])
             })
+            
+            # ▶ 견적서 발행탭 위젯 키도 강제 갱신 (Streamlit key→value 우선 문제 해소)
+            for k in ['final_client', 'final_manager', 'final_contact', 'final_loc', 'final_biz_no', 'final_ceo']:
+                if k in st.session_state:
+                    del st.session_state[k]
+            
             st.rerun()
-        except: pass
+        except Exception as e:
+            st.warning(f"데이터 로드 오류: {e}")
 
     brain = ue.EstimateBrain(df_roles, df_guides, df_factors, df_clients)
     tab1, tab2, tab3 = st.tabs(["🛠️ 견적 산출", "📄 견적서 발행 (Editor)", "📊 상세 수익 리포트"])
@@ -191,7 +215,33 @@ def show(data):
                 </div>
             """, unsafe_allow_html=True)
             
-            st.data_editor(st.session_state['est_items'], width='stretch', hide_index=True, column_config={"매출단가": "청구단가", "매입단가": "지급단가", "매출합계": "청구합계"})
+            st.data_editor(st.session_state['est_items'], width='stretch', hide_index=True, 
+                           num_rows="dynamic", key="est_items_editor",
+                           column_config={"매출단가": "청구단가", "매입단가": "지급단가", "매출합계": "청구합계"})
+            
+            # 편집 결과 반영 + 삭제된 행 적용
+            if 'est_items_editor' in st.session_state:
+                edited_items = st.session_state['est_items_editor']
+                if isinstance(edited_items, dict):
+                    # data_editor의 편집 상태에서 deleted_rows 처리
+                    if 'deleted_rows' in edited_items and edited_items['deleted_rows']:
+                        st.session_state['est_items'] = st.session_state['est_items'].drop(
+                            edited_items['deleted_rows']
+                        ).reset_index(drop=True)
+                        st.rerun()
+            
+            # 개별 삭제 버튼
+            if not st.session_state['est_items'].empty:
+                del_cols = st.columns(len(st.session_state['est_items']) + 1)
+                for idx, (_, row) in enumerate(st.session_state['est_items'].iterrows()):
+                    with del_cols[idx]:
+                        if st.button(f"🗑️ {idx+1}", key=f"del_item_{idx}", help=f"{row['품목']} 삭제"):
+                            st.session_state['est_items'] = st.session_state['est_items'].drop(idx).reset_index(drop=True)
+                            st.rerun()
+                with del_cols[-1]:
+                    if st.button("🗑️ 전체", key="del_all_items", type="secondary"):
+                        st.session_state['est_items'] = pd.DataFrame(columns=['품목','규격','수량','일수','매출단가','매입단가','매출합계','매입합계','비고'])
+                        st.rerun()
             
             # [부대비용 섹션 추가]
             st.markdown("---")
@@ -221,12 +271,19 @@ def show(data):
                     st.session_state['additional_costs'], 
                     width='stretch', 
                     hide_index=True,
+                    num_rows="dynamic",
                     key="additional_costs_editor",
                     column_config={"금액": st.column_config.NumberColumn("금액", format="%d")}
                 )
                 st.session_state['additional_costs'] = edited_costs
                 total_additional = edited_costs['금액'].sum()
-                st.caption(f"💰 부대비용 합계: {total_additional:,}원")
+                cc_del1, cc_del2 = st.columns([3, 1])
+                with cc_del1:
+                    st.caption(f"💰 부대비용 합계: {total_additional:,}원")
+                with cc_del2:
+                    if st.button("🗑️ 부대비용 초기화", key="del_all_costs"):
+                        st.session_state['additional_costs'] = pd.DataFrame(columns=['항목', '금액', '비고'])
+                        st.rerun()
             else:
                 total_additional = 0
             
@@ -263,15 +320,11 @@ def show(data):
             st.markdown("### ✏️ 편집")
             with st.container(border=True):
                 st.caption("📌 수신자 정보")
-                # [강화] 업체명 사수를 위해 세션 상태와 직접 결합
-                f_client = st.text_input("상호", value=st.session_state['w_client'], key="final_client")
+                f_client = st.text_input("상호", value=st.session_state.get('w_client',''), key="final_client")
                 c_1, c_2 = st.columns(2)
-                f_ref = c_1.text_input("참조", value=st.session_state.get('w_manager',''), key="final_manager")
+                f_ref = c_1.text_input("참조 (담당자)", value=st.session_state.get('w_manager',''), key="final_manager")
                 f_tel = c_2.text_input("연락처", value=st.session_state.get('w_contact',''), key="final_contact")
-                f_addr = st.text_input("주소(현장)", value=st.session_state['w_loc'], key="final_loc")
-                c_b1, c_b2 = st.columns(2)
-                f_biz_no = c_b1.text_input("사업자번호", value=st.session_state.get('w_biz_no',''), key="final_biz_no")
-                f_ceo = c_b2.text_input("대표자", value=st.session_state.get('w_ceo',''), key="final_ceo")
+                f_addr = st.text_input("주소 (현장)", value=st.session_state.get('w_loc',''), key="final_loc")
             
             st.caption("📋 리스트 수정")
             edited_df = st.data_editor(
@@ -320,8 +373,8 @@ def show(data):
                                 "현장명": st.session_state.get('w_event', ''),
                                 "책임자": f_ref or target_row.get('담당자', ''),
                                 "현장주소": f_addr or target_row.get('장소', target_row.get('행사장소', '')),
-                                "사업자번호": f_biz_no or st.session_state.get('w_biz_no', ''),
-                                "대표자": f_ceo or st.session_state.get('w_ceo', ''),
+                                "사업자번호": "",
+                                "대표자": "",
                                 "담당자": f_ref or target_row.get('담당자', ''),
                                 "연락처": f_tel or target_row.get('연락처', target_row.get('담당자연락처', ''))
                             }
