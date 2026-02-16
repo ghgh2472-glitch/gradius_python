@@ -561,6 +561,8 @@ def save_settlement_record(settlement_data, site_info=None):
                 value = settlement_data.get('대표자', '')
             elif header == "이메일":
                 value = settlement_data.get('이메일', '')
+            elif header == "법인명":
+                value = settlement_data.get('법인명', '')
             elif header == "상태":
                 value = settlement_data.get('상태', '대기')
             elif "기록" in header or "일시" in header:

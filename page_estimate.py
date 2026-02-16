@@ -170,15 +170,30 @@ def show(data):
             target = all_pending[all_pending['label'] == sel_p].iloc[0]
             target_id = str(target.get('문의ID', '')).strip()
 
-            # ▶ 날짜 개별 파싱
-            start_raw = str(target.get('행사시작일', target.get('시작일', ''))).strip()
-            end_raw = str(target.get('행사종료일', target.get('종료일', ''))).strip()
-            if start_raw and end_raw:
+            # ▶ 날짜 개별 파싱 (행사시작일 > 시작일 > 일시 순으로 시도)
+            start_raw = str(target.get('행사시작일', '')).strip()
+            end_raw = str(target.get('행사종료일', '')).strip()
+            if not start_raw or start_raw in ('nan', 'None', ''):
+                start_raw = str(target.get('시작일', '')).strip()
+            if not end_raw or end_raw in ('nan', 'None', ''):
+                end_raw = str(target.get('종료일', '')).strip()
+            # fallback: 일시 컬럼 (~ 구분자 포함 가능)
+            if (not start_raw or start_raw in ('nan', 'None', '')):
+                raw_ilsi = str(target.get('일시', '')).strip()
+                if raw_ilsi and raw_ilsi not in ('nan', 'None', ''):
+                    if '~' in raw_ilsi:
+                        parts = raw_ilsi.split('~', 1)
+                        start_raw = parts[0].strip()
+                        end_raw = parts[1].strip() if len(parts) > 1 else start_raw
+                    else:
+                        start_raw = raw_ilsi
+                        end_raw = raw_ilsi
+            if start_raw and end_raw and start_raw not in ('nan', 'None', ''):
                 raw_dates = f"{start_raw}~{end_raw}"
-            elif start_raw:
+            elif start_raw and start_raw not in ('nan', 'None', ''):
                 raw_dates = start_raw
             else:
-                raw_dates = str(target.get('일시', ''))
+                raw_dates = ''
 
             s_d, e_d, _ = ue.smart_parse_date(raw_dates)
             s_t, e_t, _ = ue.smart_parse_time(target.get('행사시간', str(target.get('시간', ''))))
@@ -508,12 +523,10 @@ def show(data):
                                     if sel_p.startswith("[접수]"):
                                         db.update_status(target_id, sc.STATUS_FLOW[1])
 
-                                    # ▶ 저장 후 값 보존 (rerun하지 않음!)
+                                    # ▶ 저장 후 값 보존 (위젯 키 직접 수정 금지!)
                                     st.session_state['_est_saved'] = True
-                                    st.session_state['w_client'] = final_save_name
-                                    st.session_state['w_manager'] = f_ref
-                                    st.session_state['w_contact'] = f_tel
-                                    st.session_state['w_loc'] = f_addr
+                                    # w_client 등은 text_input 위젯에 바인딩되어 있으므로
+                                    # 직접 수정하면 오류 발생. 위젯 값은 자동 유지됨.
                                     st.balloons()
                                     st.success(f"✅ {final_save_name} 견적 저장 완료!")
                                     st.cache_data.clear()

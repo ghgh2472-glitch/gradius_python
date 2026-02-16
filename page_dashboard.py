@@ -696,33 +696,63 @@ def show(data):
     # [Tab 6] 캘린더
     with tab6:
         st.markdown('<div class="section-title">📆 전체 행사 일정표</div>', unsafe_allow_html=True)
-        st.caption("📌 행사 일정을 한 눈에 확인하세요. (클릭으로 날짜 선택 가능)")
+        st.caption("📌 체결된 행사만 달력에 표시됩니다.")
         
-        events = ud.get_calendar_events(df_inq)
+        # 체결 이후 건만 필터링하여 캘린더 이벤트 생성
+        confirmed_statuses = sc.CONFIRMED_STATUSES  # ["체결", "배정완료", "진행중", "완료", "정산완료"]
+        if col_status:
+            confirmed_df = df_inq[df_inq[col_status].astype(str).str.strip().isin(confirmed_statuses)]
+        else:
+            confirmed_df = df_inq
+        events = ud.get_calendar_events(confirmed_df)
         
         cal_options = {
             "headerToolbar": {
                 "left": "today prev,next",
                 "center": "title",
-                "right": "dayGridMonth,timeGridWeek"
+                "right": "dayGridMonth,timeGridWeek,listMonth"
             },
             "initialView": "dayGridMonth",
             "navLinks": True,
             "selectable": True,
-            "height": "auto",
-            "locale": "ko"
+            "height": 650,
+            "locale": "ko",
+            "dayMaxEvents": 3,
+            "eventDisplay": "block",
         }
         
         calendar(events=events if events else [], options=cal_options)
         
         if not events:
-            st.info("📅 현재 등록된 행사 일정이 없습니다.")
+            st.info("📅 체결된 행사 일정이 없습니다.")
         
         st.markdown("---")
         st.markdown('<div class="section-title">📋 전체 현장 목록 (배정현황 포함)</div>', unsafe_allow_html=True)
+
+        # 체결/미체결 필터
+        filt_c1, filt_c2, filt_c3 = st.columns([1, 1, 2])
+        with filt_c1:
+            evt_filter = st.selectbox("📌 상태 필터", ["전체", "체결 건만", "미체결 건만"], key="evt_list_filter")
+        with filt_c2:
+            evt_search = st.text_input("🔎 검색", key="evt_list_search", placeholder="업체명/행사명")
         
         all_events = ud.get_all_events_with_status(df_inq, df_dispatch)
         if not all_events.empty:
+            # 상태 필터 적용
+            if evt_filter == "체결 건만" and '상태' in all_events.columns:
+                all_events = all_events[all_events['상태'].astype(str).str.strip().isin(confirmed_statuses)]
+            elif evt_filter == "미체결 건만" and '상태' in all_events.columns:
+                non_confirmed = sc.STATUS_EXIT + [sc.STATUS_FLOW[0], sc.STATUS_FLOW[1]]  # 접수, 견적, 미체결, 보류, 취소
+                all_events = all_events[all_events['상태'].astype(str).str.strip().isin(non_confirmed)]
+            
+            # 검색 필터
+            if evt_search:
+                q = evt_search.lower()
+                mask = all_events.apply(lambda r: any(q in str(v).lower() for v in r.values), axis=1)
+                all_events = all_events[mask]
+
+            st.caption(f"총 {len(all_events)}건")
+
             for _, ev_row in all_events.iterrows():
                 d_day = int(ev_row.get('D-Day', 0))
                 evt_name = ev_row.get('행사명', '')
@@ -768,6 +798,13 @@ def show(data):
                 end_dt = str(ev_row.get('종료일', '')) if '종료일' in ev_row.index else ''
                 date_str = f"{start_dt}" + (f" ~ {end_dt}" if end_dt and end_dt != start_dt else "")
                 
+                # 상태 뱃지
+                evt_status = str(ev_row.get(col_status, ''))
+                evt_st_cfg = sc.STATUS_CONFIG.get(evt_status, {})
+                st_icon = evt_st_cfg.get('icon', '❓')
+                st_bg = evt_st_cfg.get('bg', '#f3f4f6')
+                st_clr = evt_st_cfg.get('color', '#6B7280')
+                
                 st.markdown(f"""
                 <div style="background: white; border: 1px solid #E5E7EB; border-left: 4px solid {badge_color};
                             border-radius: 8px; padding: 14px; margin-bottom: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.06);">
@@ -776,6 +813,8 @@ def show(data):
                             <span style="background: {badge_color}; color: white; padding: 3px 8px; border-radius: 4px;
                                         font-weight: bold; font-size: 11px; margin-right: 6px;">{badge}</span>
                             <b style="font-size: 14px; color: #111827;">{ev_row.get('업체', '')} - {evt_name}</b>
+                            <span style="background: {st_bg}; color: {st_clr}; padding: 2px 7px; border-radius: 4px;
+                                        font-size: 10px; font-weight: bold; margin-left: 6px;">{st_icon} {evt_status}</span>
                         </div>
                         <span style="background: {assign_color}; color: white; padding: 3px 10px; border-radius: 12px;
                                     font-size: 11px; font-weight: bold;">👥 {assign_text}</span>
@@ -790,8 +829,37 @@ def show(data):
                 """, unsafe_allow_html=True)
         else:
             st.info("📅 등록된 행사가 없습니다.")
+        
+        # --- 미체결 처리 ---
+        st.markdown("---")
+        st.subheader("🚫 미체결 / 보류 / 취소 처리")
+        non_confirmed_statuses = [sc.STATUS_FLOW[0], sc.STATUS_FLOW[1]]  # 접수, 견적
+        cancelable_df = df_inq[df_inq[col_status].isin(non_confirmed_statuses)] if col_status in df_inq.columns else pd.DataFrame()
+        
+        if cancelable_df.empty:
+            st.info("미체결 처리 가능한 건이 없습니다. (접수/견적 상태만 가능)")
+        else:
+            col_sel, col_reason, col_btn = st.columns([2, 2, 1])
+            cancel_options = [f"{r.get('업체', '')} - {r.get('행사명', '')} ({r.get(col_status, '')})" for _, r in cancelable_df.iterrows()]
+            with col_sel:
+                sel_cancel = st.selectbox("대상 선택", cancel_options, key="dash_cancel_sel")
+            with col_reason:
+                cancel_action = st.selectbox("처리 유형", ["미체결", "보류", "취소"], key="dash_cancel_action")
+            with col_btn:
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("처리 실행", type="primary", key="dash_cancel_btn"):
+                    sel_idx = cancel_options.index(sel_cancel)
+                    target_row = cancelable_df.iloc[sel_idx]
+                    cid_val = str(target_row.get('관리번호', ''))
+                    if cid_val:
+                        import time as _time
+                        db.update_status(cid_val, cancel_action)
+                        st.success(f"✅ '{sel_cancel}' → {cancel_action} 처리 완료")
+                        _time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.error("관리번호를 찾을 수 없습니다.")
 
-    
     # [Tab 7] 자동화 리포트
     with tab7:
         st.markdown('<div class="section-title">📋 자동화 리포트</div>', unsafe_allow_html=True)
