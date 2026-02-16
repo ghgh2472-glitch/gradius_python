@@ -997,6 +997,10 @@ def load_dispatch_sheet():
                 print(f"[Dispatch] Loaded {len(df)} records via raw + merge")
                 return df
             return pd.DataFrame()
+
+        # get_all_records 성공 시 df 반환 (이전에 누락되어 있던 return)
+        return df if df is not None and not df.empty else pd.DataFrame()
+
     except Exception as e:
         print(f"[Dispatch] Load error: {str(e)[:60]}")
         return pd.DataFrame()
@@ -1278,22 +1282,24 @@ def save_evaluation(eval_dict: dict):
             if target_row > wks.row_count:
                 wks.add_rows(100)
         
-        # 평가표 17컬럼 구조
+        # 평가표 17컬럼 구조 (STAFF DB 일치: 근태/수행/외모/팀워크)
+        eval_id_to_use = eval_id if target_row == len(all_vals) + 1 else (
+            all_vals[target_row - 1][0] if len(all_vals) >= target_row else eval_id)
         row_values = [
-            eval_id if target_row == len(all_vals) + 1 else all_vals[target_row - 1][0] if len(all_vals) >= target_row else eval_id,
+            eval_id_to_use,
             eval_dict.get('배정ID', ''),
             eval_dict.get('인력명', ''),
             eval_dict.get('현장명', ''),
             eval_dict.get('근태', 3),
-            eval_dict.get('수행력', 3),
-            eval_dict.get('태도', 3),
-            eval_dict.get('의사소통', 3),
-            eval_dict.get('현장적응', 3),
+            eval_dict.get('수행', eval_dict.get('수행력', 3)),      # 수행 (구버전 호환: 수행력)
+            eval_dict.get('외모', eval_dict.get('태도', 3)),        # 외모 (구버전 호환: 태도)
+            eval_dict.get('팀워크', eval_dict.get('의사소통', 3)),  # 팀워크 (구버전 호환: 의사소통)
+            '',                                                      # 현장적응 (미사용, 호환용 빈값)
             eval_dict.get('총점', 0),
             eval_dict.get('평가등급', 'C'),
             eval_dict.get('평가자', ''),
             eval_dict.get('평가일시', datetime.now().strftime('%Y-%m-%d %H:%M:%S')),
-            eval_dict.get('강점', ''),
+            eval_dict.get('총평', eval_dict.get('강점', '')),  # 총평 (구버전 호환: 강점)
             eval_dict.get('개선점', ''),
             eval_dict.get('재추천', 'No'),
             eval_dict.get('비고', ''),

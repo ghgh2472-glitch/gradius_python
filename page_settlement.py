@@ -134,7 +134,26 @@ def show_settlement_overview():
         current_paid = 0 if pd.isna(current_paid) else current_paid
         st.metric("현재받음", f"₩{int(current_paid):,}")
     
-    # 입금금액 입력
+    # 50% 계약금 / 잔액 빠른 입력 버튼
+    remaining_for_btns = total_invoice_amt - current_paid
+    qc1, qc2, qc3 = st.columns(3)
+    with qc1:
+        if st.button(f"💰 50% 계약금 (₩{int(total_invoice_amt * 0.5):,})", key="fill_50", use_container_width=True):
+            st.session_state['_payment_fill'] = int(total_invoice_amt * 0.5)
+            st.rerun()
+    with qc2:
+        if st.button(f"💰 잔금 (₩{int(max(0, remaining_for_btns)):,})", key="fill_remain", use_container_width=True):
+            st.session_state['_payment_fill'] = int(max(0, remaining_for_btns))
+            st.rerun()
+    with qc3:
+        if st.button(f"💰 전액 (₩{int(total_invoice_amt):,})", key="fill_full", use_container_width=True):
+            st.session_state['_payment_fill'] = int(total_invoice_amt)
+            st.rerun()
+
+    # 입금금액 입력 (버튼으로 채운 값 적용)
+    if '_payment_fill' in st.session_state:
+        st.session_state['payment_input_amt'] = st.session_state.pop('_payment_fill')
+
     col_amt1, col_amt2, col_amt3 = st.columns([2, 1, 1])
     
     with col_amt1:
@@ -142,7 +161,6 @@ def show_settlement_overview():
             "입금 금액 (이번 입금분)",
             min_value=0,
             step=10000,
-            value=0,
             key="payment_input_amt"
         )
     
@@ -293,14 +311,36 @@ def show_settlement_detail(data):
         row = targets[targets['label'] == sel_p].iloc[0]
 
     # --------------------------------------------------------------------------
-    # 요약 정보
+    # 손익 요약 (견적상세 데이터 우선, fallback으로 특이사항 파싱)
     # --------------------------------------------------------------------------
-    summary = brain.get_financial_summary(row)
-    
+    df_est = data.get('estimate', pd.DataFrame())
+    inq_id = str(row.get('문의ID', '')).strip()
+
+    # 견적상세에서 데이터 조회
+    est_row = None
+    if not df_est.empty and '문의ID' in df_est.columns:
+        matches = df_est[df_est['문의ID'].astype(str).str.strip() == inq_id]
+        if not matches.empty:
+            est_row = matches.iloc[0]
+
+    if est_row is not None:
+        summary = {
+            '매출': int(pd.to_numeric(est_row.get('공급가액', 0), errors='coerce') or 0),
+            '매입': int(pd.to_numeric(est_row.get('매입원가', 0), errors='coerce') or 0),
+            '수익': int(pd.to_numeric(est_row.get('예상수익', 0), errors='coerce') or 0),
+            '수익률': 0.0,
+        }
+        if summary['수익'] == 0:
+            summary['수익'] = summary['매출'] - summary['매입']
+        if summary['매출'] > 0:
+            summary['수익률'] = (summary['수익'] / summary['매출'] * 100)
+    else:
+        summary = brain.get_financial_summary(row)
+
     st.markdown("##### 📊 손익 요약")
     m1, m2, m3, m4 = st.columns(4)
-    with m1: st.markdown(f"""<div class="metric-card"><div class="metric-label">총 매출</div><div class="metric-val">{summary['매출']:,}</div></div>""", unsafe_allow_html=True)
-    with m2: st.markdown(f"""<div class="metric-card"><div class="metric-label">총 인건비</div><div class="metric-val cost-val">{summary['매입']:,}</div></div>""", unsafe_allow_html=True)
+    with m1: st.markdown(f"""<div class="metric-card"><div class="metric-label">총 매출 (공급가액)</div><div class="metric-val">{summary['매출']:,}</div></div>""", unsafe_allow_html=True)
+    with m2: st.markdown(f"""<div class="metric-card"><div class="metric-label">총 인건비 (매입원가)</div><div class="metric-val cost-val">{summary['매입']:,}</div></div>""", unsafe_allow_html=True)
     with m3: st.markdown(f"""<div class="metric-card"><div class="metric-label">순수익</div><div class="metric-val profit-val">+{summary['수익']:,}</div></div>""", unsafe_allow_html=True)
     with m4: st.markdown(f"""<div class="metric-card"><div class="metric-label">수익률</div><div class="metric-val">{summary['수익률']:.1f}%</div></div>""", unsafe_allow_html=True)
 
@@ -315,7 +355,9 @@ def show_settlement_detail(data):
         c1, c2 = st.columns(2)
         with c1:
             st.subheader("거래명세서 발행")
-            html = brain.get_invoice_html(row['업체명'], row['행사명'], row.get('일시','-'), summary['매출'])
+            # 견적상세 데이터로 정확한 거래명세서 생성
+            invoice_supply = summary['매출']
+            html = brain.get_invoice_html(row['업체명'], row['행사명'], row.get('일시','-'), invoice_supply)
             st.components.v1.html(html, height=500, scrolling=True)
         with c2:
             st.subheader("입금 관리")
@@ -486,8 +528,25 @@ def show_tax_invoice_management():
                 
                 with col_right:
                     if st.button("✅ 발행 완료", key=f"tax_done_{idx}"):
-                        st.success(f"{company}의 세금계산서를 발행 완료로 표시했습니다.")
-                        st.rerun()
+                        # 실제 시트에 발행완료 저장
+                        try:
+                            _client = db.get_connection()
+                            if _client:
+                                _sh = _client.open_by_key(db.SHEET_ID)
+                                _wks = _sh.worksheet("계약건은청구금액적기")
+                                _headers = _wks.row_values(1)
+                                _all_records = _wks.get_all_records()
+                                for _r_idx, _record in enumerate(_all_records, 2):
+                                    if _record.get(col_company) == company:
+                                        _tax_col_idx = _headers.index(col_tax_issued) + 1
+                                        _wks.update_cell(_r_idx, _tax_col_idx, "발행완료")
+                                        break
+                                st.cache_data.clear()
+                                st.success(f"{company}의 세금계산서를 발행 완료로 표시했습니다.")
+                                time.sleep(1)
+                                st.rerun()
+                        except Exception as _e:
+                            st.error(f"저장 실패: {_e}")
         else:
             st.success("🎉 모든 업체의 세금계산서가 발행되었습니다!")
     
@@ -507,18 +566,52 @@ def show_tax_invoice_management():
         )
         
         if selected_company != '-- 업체 선택 --':
-            # 4-2. 선택된 업체의 현재 정보 표시
+            # 4-2. 선택된 업체의 현재 정보 표시 (견적상세 데이터 연동)
             selected_row = settlement_df[settlement_df[col_company] == selected_company].iloc[0]
-            
+
+            # 견적상세에서 사업자 정보 가져오기
+            try:
+                _dispatch_data_tax = db.load_dispatch_data()
+            except Exception:
+                _dispatch_data_tax = {}
+            _df_est_tax = _dispatch_data_tax.get('estimate', pd.DataFrame()) if isinstance(_dispatch_data_tax, dict) else pd.DataFrame()
+            # load_all_data에서 estimate 가져오기 시도
+            try:
+                _all_data = db.load_all_data()
+                _df_est_tax = _all_data.get('estimate', pd.DataFrame())
+            except Exception:
+                pass
+
+            _est_biz_info = {}
+            _inq_id_tax = str(selected_row.get('문의ID', '')).strip()
+            if not _df_est_tax.empty and '문의ID' in _df_est_tax.columns and _inq_id_tax:
+                _est_matches = _df_est_tax[_df_est_tax['문의ID'].astype(str).str.strip() == _inq_id_tax]
+                if not _est_matches.empty:
+                    _er = _est_matches.iloc[0]
+                    _est_biz_info = {
+                        '사업자번호': str(_er.get('사업자번호', '')),
+                        '대표자': str(_er.get('대표자', '')),
+                        '담당자': str(_er.get('담당자명', '')),
+                        '연락처': str(_er.get('연락처', '')),
+                    }
+
             with st.expander(f"📌 {selected_company} 현재 정보", expanded=True):
                 col_cur1, col_cur2 = st.columns(2)
                 with col_cur1:
                     st.write(f"**업체명**: {selected_company}")
+                    if _est_biz_info.get('사업자번호'):
+                        st.write(f"**사업자번호**: {_est_biz_info['사업자번호']}")
+                    if _est_biz_info.get('대표자'):
+                        st.write(f"**대표자**: {_est_biz_info['대표자']}")
                     for col in settlement_df.columns:
                         if '현장' in col or '파견' in col:
                             st.write(f"**{col}**: {selected_row.get(col, '-')}")
                 with col_cur2:
                     st.write(f"**세금계산서 발행**: {selected_row.get(col_tax_issued, '미정')}")
+                    if _est_biz_info.get('담당자'):
+                        st.write(f"**담당자**: {_est_biz_info['담당자']}")
+                    if _est_biz_info.get('연락처'):
+                        st.write(f"**연락처**: {_est_biz_info['연락처']}")
                     for col in settlement_df.columns:
                         if '청구' in col or '금액' in col:
                             st.write(f"**{col}**: {selected_row.get(col, '-')}")

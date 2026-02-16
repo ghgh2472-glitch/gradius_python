@@ -5,8 +5,19 @@ import re
 import os
 from typing import Dict, Optional
 from PIL import Image, ImageEnhance, ImageFilter
-import cv2
-import numpy as np
+
+# cv2는 선택적 의존성 (Streamlit Cloud에서 미설치 가능)
+try:
+    import cv2
+    import numpy as np
+    CV2_AVAILABLE = True
+except ImportError:
+    CV2_AVAILABLE = False
+    cv2 = None
+    try:
+        import numpy as np
+    except ImportError:
+        np = None
 
 # Pytesseract 시도
 try:
