@@ -103,15 +103,15 @@ def show(data):
     if sel_p != "(신규작성)" and not pending.empty and st.session_state.get('last_project') != sel_p:
         try:
             target = pending[pending['label'] == sel_p].iloc[0]
-            raw_dates = f"{target.get('행사시작일','')}~{target.get('행사종료일','')}"
+            raw_dates = f"{target.get('행사시작일', target.get('시작일',''))}~{target.get('행사종료일', target.get('종료일',''))}"
             if len(raw_dates) < 5: raw_dates = str(target.get('일시', ''))
             s_d, e_d, _ = ue.smart_parse_date(raw_dates)
             s_t, e_t, _ = ue.smart_parse_time(target.get('행사시간', str(target.get('시간',''))))
-            qty = ue.safe_int(str(target.get('요청인원', target.get('인원', '1'))).replace('명',''))
+            qty = ue.safe_int(str(target.get('필요인력', target.get('요청인원', target.get('인원', '1')))).replace('명',''))
             
             st.session_state.update({
                 'w_client': target.get('업체명', ''), 'w_event': target.get('행사명', ''), 
-                'w_loc': target.get('장소', ''), 'w_manager': target.get('담당자', ''), 'w_contact': target.get('연락처', ''),
+                'w_loc': target.get('장소', ''), 'w_manager': target.get('담당자', ''), 'w_contact': target.get('연락처', str(target.get('담당자연락처', ''))),
                 'w_sdate': s_d, 'w_edate': e_d, 'w_time_in': s_t, 'w_time_out': e_t, 'w_qty': qty,
                 'last_project': sel_p,
                 'est_items': pd.DataFrame(columns=['품목','규격','수량','일수','매출단가','매입단가','매출합계','매입합계','비고'])
@@ -315,8 +315,12 @@ def show(data):
                             # 메타데이터 수집
                             metadata = {
                                 "현장명": st.session_state.get('w_event', ''),
-                                "책임자": target_row.get('담당자', ''),
-                                "현장주소": target_row.get('행사장소', '')
+                                "책임자": f_ref or target_row.get('담당자', ''),
+                                "현장주소": f_addr or target_row.get('장소', target_row.get('행사장소', '')),
+                                "사업자번호": st.session_state.get('w_biz_no', ''),
+                                "대표자": st.session_state.get('w_ceo', ''),
+                                "담당자": f_ref or target_row.get('담당자', ''),
+                                "연락처": f_tel or target_row.get('연락처', target_row.get('담당자연락처', ''))
                             }
                             
                             est_package = {
@@ -370,7 +374,7 @@ def show(data):
                 "ref": f_ref, "tel": f_tel, "addr": f_addr, 
                 "date_range": date_range_txt, "date": datetime.now().strftime("%Y-%m-%d")
             }
-            supplier_dict = {"reg_no": "429-88-01469", "name": "(주)가디어스", "ceo": "최규성", "tel": "1600-2944", "addr": "서울시 종로구 능망산1길 2, 1층"}
+            supplier_dict = {"reg_no": "429-88-01469", "name": "(주)가디어스", "ceo": "최규성", "tel": "1600-2944", "addr": "서울시 종로구 동망산1길 2, 1층"}
             # 부대비용 포함하여 전달
             total_additional = additional_costs_df['금액'].sum() if not additional_costs_df.empty else 0
             html_quote = ue.get_customer_quote_html(edited_df, client_dict, supplier_dict, final_supply, vat_yn, t_top, t_side, banner_b64, additional_costs_df, total_additional)

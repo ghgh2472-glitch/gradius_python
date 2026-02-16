@@ -32,43 +32,20 @@ def show(data):
         selected_project = pending[pending['문의ID'].astype(str).str.strip() == sel_id].iloc[0]
 
     with col_main:
-        # [근본 해결 2] 머리의 리포트를 최상단에 배치하여 즉시 수치 확인
+        # 견적 리포트
         report_html = uc.get_contract_summary_html(selected_project, df_est)
         st.markdown(report_html, unsafe_allow_html=True)
         
-        # 🔍 디버그: 단계별 상태 확인
-        st.info(f"📌 **현재 선택:** {sel_id}")
-        st.info(f"📊 **견적 데이터 행 수:** {len(df_est)} 행")
-        
-        if df_est.empty:
-            st.error("❌ 견적 데이터가 로드되지 않았습니다!")
-            st.write("**견적 데이터 컬럼:**", df_est.columns.tolist())
-        elif '문의ID' not in df_est.columns:
-            st.error("❌ 견적 시트에 '문의ID' 컬럼이 없습니다!")
-            st.write("**있는 컬럼:** ", df_est.columns.tolist())
-        else:
-            # ID 매칭 상태 보기
-            matching_rows = df_est[df_est['문의ID'].astype(str).str.strip() == sel_id]
-            st.info(f"🔎 **ID 매칭 결과:** {len(matching_rows)} 행 발견")
-            
-            if len(matching_rows) == 0:
-                st.warning(f"⚠️ 문의ID '{sel_id}'와 매칭되는 견적 데이터 없음")
-                st.write("**견적에 있는 문의ID 목록:**")
-                st.write(df_est['문의ID'].unique().tolist()[:10])  # 처음 10개만
-                st.write("**견적 첫 3행:**")
-                st.dataframe(df_est.head(3))
-            else:
-                st.success(f"✅ 매칭 성공! 첫 번째 행 데이터:")
-                st.dataframe(matching_rows.iloc[0])
-        
-        # [근본 해결 3] 매칭 로직을 머리와 동일하게 1회 수행하여 데이터 일관성 확보
         # 견적 시트에서 해당 프로젝트의 원본 행을 정확히 찾아냄
         match_est = pd.Series()
         sel_id_clean = str(sel_id).strip()
-        if not df_est.empty:
+        if not df_est.empty and '문의ID' in df_est.columns:
             match_idx = df_est['문의ID'].astype(str).str.strip() == sel_id_clean
             if match_idx.any():
                 match_est = df_est[match_idx].iloc[0]
+        
+        if match_est.empty:
+            st.warning("⚠️ 이 프로젝트의 견적 데이터가 없습니다. 견적서를 먼저 작성해주세요.")
 
         st.markdown("### 🏢 사업자 정보 입력")
         with st.form("contract_form"):

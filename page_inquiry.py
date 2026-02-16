@@ -53,9 +53,11 @@ def save_inquiry():
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     new_id = str(uuid.uuid4())[:8]
 
-    # [매우 중요] 구글 시트 '문의작성' 탭의 16개 헤더 순서와 100% 일치시킴
-    # 1.문의ID | 2.작성일 | 3.업체명 | 4.담당자 | 5.연락처 | 6.행사명 | 7.장소 | 
-    # 8.시작일 | 9.종료일 | 10.시간 | 11.서비스 | 12.인원 | 13.페이 | 14.상태 | 15.특이사항 | 16.비고
+    # [매우 중요] 구글 시트 '문의작성' 탭의 23개 헤더 순서와 100% 일치시킴
+    # 1.문의ID | 2.작성일 | 3.업체명 | 4.담당자 | 5.연락처 | 6.행사명 | 7.장소 |
+    # 8.행사시작일 | 9.행사종료일 | 10.행사시간 | 11.서비스종류 | 12.필요인력 |
+    # 13.페이 | 14.상태 | 15.특이사항 | 16.비고 | 17.만족도 | 18.관계 |
+    # 19.구분 | 20.진행여부 | 21.진행상태 | 22.인력세팅현황 | 23.상담내용및 고객성향
     
     inq_row = [
         new_id,                                      # 1. 문의ID
@@ -65,15 +67,22 @@ def save_inquiry():
         st.session_state.get('form_contact', ''),    # 5. 연락처
         st.session_state.get('form_evt_name', ''),   # 6. 행사명
         st.session_state.get('form_evt_place', ''),  # 7. 장소
-        st.session_state.get('form_date_start', ''), # 8. 시작일
-        st.session_state.get('form_date_end', ''),   # 9. 종료일
-        st.session_state.get('form_evt_time', ''),   # 10. 시간
+        st.session_state.get('form_date_start', ''), # 8. 행사시작일
+        st.session_state.get('form_date_end', ''),   # 9. 행사종료일
+        st.session_state.get('form_evt_time', ''),   # 10. 행사시간
         st.session_state.get('form_service', ''),    # 11. 서비스종류
-        st.session_state.get('form_headcount', ''),  # 12. 요청인원
+        st.session_state.get('form_headcount', ''),  # 12. 필요인력
         st.session_state.get('form_pay', ''),        # 13. 페이
         sc.STATUS_FLOW[0],                              # 14. 상태 ('접수')
         st.session_state.get('form_note', ''),       # 15. 특이사항
-        ""                                           # 16. 비고 (여분)
+        "",                                          # 16. 비고
+        "",                                          # 17. 만족도
+        "",                                          # 18. 관계
+        "",                                          # 19. 구분
+        "",                                          # 20. 진행여부
+        "",                                          # 21. 진행상태
+        "",                                          # 22. 인력세팅현황
+        "",                                          # 23. 상담내용및 고객성향
     ]
 
     # 4. 신규 업체면 고객 DB에 추가

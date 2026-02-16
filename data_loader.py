@@ -52,7 +52,7 @@ def load_all_data():
         "roles": "Roles",
         "factors": "Factors",
         "guides": "Guides",
-        # 배정기록, 견적상세, 계약건은청구금액적기는 필요할 때만 로드
+        "estimate": "견적상세",
     }
     
     if not client:
@@ -349,7 +349,13 @@ def save_estimate_details(est_data, metadata=None):
         
         # 3. 문의ID로 기존 행 찾기 (중복 방지)
         target_id = str(est_data.get('문의ID', '')).strip()
-        id_col_values = wks.col_values(1)  # 첫 번째 컬럼 (문의ID)
+        
+        # 문의ID 컬럼 위치 찾기 (견적ID가 첫 컬럼일 수 있음)
+        inquiry_col_idx = 1  # 기본값
+        if '문의ID' in headers_clean:
+            inquiry_col_idx = headers_clean.index('문의ID') + 1
+        
+        id_col_values = wks.col_values(inquiry_col_idx)
         id_col_clean = [str(x).strip() for x in id_col_values]
         
         # 4. 행 위치 결정
@@ -371,7 +377,14 @@ def save_estimate_details(est_data, metadata=None):
         metadata_json = json.dumps(metadata, ensure_ascii=False) if metadata else ""
         
         for col_idx, header in enumerate(headers_clean, 1):
-            if header == "문의ID":
+            if header == "견적ID":
+                # 기존 행이면 기존 견적ID 유지, 새 행이면 생성
+                if target_id in id_col_clean:
+                    existing_row = wks.row_values(target_row)
+                    row_data[col_idx] = existing_row[0] if existing_row else f"EST-{datetime.now().strftime('%y%m%d')}-{str(uuid4())[:6]}"
+                else:
+                    row_data[col_idx] = f"EST-{datetime.now().strftime('%y%m%d')}-{str(uuid4())[:6]}"
+            elif header == "문의ID":
                 row_data[col_idx] = target_id
             elif header == "업체명":
                 row_data[col_idx] = est_data.get('업체명', '')
@@ -391,22 +404,32 @@ def save_estimate_details(est_data, metadata=None):
                 row_data[col_idx] = int(est_data.get('합계금액', 0))
             elif header == "매입원가":
                 row_data[col_idx] = int(est_data.get('매입원가', 0))
-            elif header == "부대비용":
-                row_data[col_idx] = int(est_data.get('부대비용', 0))
+            elif header == "예상수익":
+                supply = int(est_data.get('공급가액', 0))
+                cost = int(est_data.get('매입원가', 0))
+                additional = int(est_data.get('부대비용', 0))
+                row_data[col_idx] = supply - cost - additional
+            elif header == "사업자번호":
+                row_data[col_idx] = metadata.get('사업자번호', '')
             elif "수익" in header and ("률" in header or "율" in header):
-                # 수익률/수익율 계산
                 supply = int(est_data.get('공급가액', 0))
                 cost = int(est_data.get('매입원가', 0))
                 profit = supply - cost
                 margin = f"{round((profit / supply * 100), 1)}%" if supply > 0 else "0%"
                 row_data[col_idx] = margin
-            elif header in ["메모", "비고", "Notes", "Meta"]:
-                # 메타데이터를 메모 필드에 저장
-                row_data[col_idx] = metadata_json
-            elif "기록" in header or "일시" in header or "시간" in header:
+            elif header == "대표자":
+                row_data[col_idx] = metadata.get('대표자', '')
+            elif header == "담당자명" or header == "담당자":
+                row_data[col_idx] = metadata.get('담당자', metadata.get('책임자', ''))
+            elif header == "연락처":
+                row_data[col_idx] = metadata.get('연락처', '')
+            elif "기록" in header or "일시" in header:
                 row_data[col_idx] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            elif header in ["메모", "비고", "Notes", "Meta"]:
+                row_data[col_idx] = metadata_json
             else:
-                row_data[col_idx] = ""
+                # 기존 값 유지 (빈 값으로 덮어쓰지 않음)
+                pass
         
         # 6. 행 업데이트 (gspread Cell 사용)
         from gspread.cell import Cell
