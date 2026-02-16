@@ -94,29 +94,77 @@ def calculate_kpi(df_inq):
 # ---------------------------------------------------------
 # 3. 차트용 데이터
 # ---------------------------------------------------------
-def get_monthly_trend(df_inq):
+def get_monthly_trend(df_inq, df_settlement=None, df_estimate=None, selected_year=None):
+    """
+    월별 매출 추이 (정산 데이터 → 견적 공급가액 → 건수 fallback)
+    Args:
+        df_inq: 문의 데이터
+        df_settlement: 정산 데이터 (있으면 우선 사용)
+        df_estimate: 견적 데이터 (정산 없으면 사용)
+        selected_year: 특정 연도 필터 (None이면 전체)
+    """
+    # 1) 정산 데이터에서 매출 추출 (가장 정확)
+    if df_settlement is not None and not df_settlement.empty:
+        col_date_s = find_col(df_settlement, ["계약일", "정산일", "날짜", "작성일"])
+        col_amt = find_col(df_settlement, ["공급가액", "합계금액", "청구금액", "청구금액적기"])
+        if col_date_s and col_amt:
+            try:
+                df_s = df_settlement.copy()
+                df_s[col_date_s] = pd.to_datetime(df_s[col_date_s], errors='coerce')
+                df_s = df_s.dropna(subset=[col_date_s])
+                df_s['_amount'] = df_s[col_amt].apply(safe_int)
+                if selected_year:
+                    df_s = df_s[df_s[col_date_s].dt.year == selected_year]
+                df_s['Month'] = df_s[col_date_s].dt.strftime('%Y-%m')
+                trend = df_s.groupby('Month')['_amount'].sum().reset_index()
+                trend.columns = ['Month', 'Sales']
+                trend = trend[trend['Sales'] > 0].sort_values('Month')
+                if not trend.empty:
+                    return trend
+            except Exception:
+                pass
+
+    # 2) 견적 데이터에서 공급가액 추출
+    if df_estimate is not None and not df_estimate.empty:
+        col_date_e = find_col(df_estimate, ["기록일시", "작성일", "날짜"])
+        col_supply = find_col(df_estimate, ["공급가액", "합계금액"])
+        if col_date_e and col_supply:
+            try:
+                df_e = df_estimate.copy()
+                df_e[col_date_e] = pd.to_datetime(df_e[col_date_e], errors='coerce')
+                df_e = df_e.dropna(subset=[col_date_e])
+                df_e['_amount'] = df_e[col_supply].apply(safe_int)
+                if selected_year:
+                    df_e = df_e[df_e[col_date_e].dt.year == selected_year]
+                df_e['Month'] = df_e[col_date_e].dt.strftime('%Y-%m')
+                trend = df_e.groupby('Month')['_amount'].sum().reset_index()
+                trend.columns = ['Month', 'Sales']
+                trend = trend[trend['Sales'] > 0].sort_values('Month')
+                if not trend.empty:
+                    return trend
+            except Exception:
+                pass
+
+    # 3) 문의 데이터 기반 건수 fallback (체결 건의 건수 추이)
     if df_inq.empty: return pd.DataFrame()
-    col_date = find_col(df_inq, ["문의날짜", "날짜"])
+    col_date = find_col(df_inq, ["작성일", "문의날짜", "날짜", "행사시작일"])
     col_status = find_col(df_inq, ["체결", "상태"])
-    col_note = find_col(df_inq, ["특이사항", "비고"])
     
-    # 필수 컬럼 없으면 빈 표 반환
     if not col_date or not col_status: return pd.DataFrame()
     
     try:
         df = df_inq.copy()
         df[col_date] = pd.to_datetime(df[col_date], errors='coerce')
         df = df.dropna(subset=[col_date])
-        df = df[df[col_status].astype(str).str.contains('체결|완료', na=False)]
+        df = df[df[col_status].astype(str).str.contains('체결|완료|진행|배정', na=False)]
         
-        if col_note:
-            df['parsed_sales'] = df.apply(lambda r: parse_financials(r, col_note)[0], axis=1)
-        else:
-            df['parsed_sales'] = 0
-            
+        if selected_year:
+            df = df[df[col_date].dt.year == selected_year]
+        
+        if df.empty: return pd.DataFrame()
+        
         df['Month'] = df[col_date].dt.strftime('%Y-%m')
-        trend = df.groupby('Month')['parsed_sales'].sum().reset_index()
-        trend.columns = ['Month', 'Sales']
+        trend = df.groupby('Month').size().reset_index(name='Sales')
         trend = trend.sort_values('Month')
         return trend
     except:
@@ -235,7 +283,7 @@ def get_calendar_events(df_inq):
             # 종료일 컬럼이 있으면 사용, 없으면 시작일과 동일
             if col_end and col_end in df_inq.columns:
                 raw_end = row.get(col_end, '')
-                end_str = str(raw_end).strip() if raw_end and not pd.isna(raw_end) else start_str
+                end_str = str(raw_end).strip() if raw_end and not pd.isna(raw_end) and str(raw_end).strip() not in ('', 'nan', 'None') else start_str
             else:
                 # 단일 컬럼에 "~"로 구분된 경우
                 if "~" in start_str:
@@ -245,26 +293,56 @@ def get_calendar_events(df_inq):
                 else:
                     end_str = start_str
             
-            # 날짜 형식 정규화 (YYYY-MM-DD만 추출)
-            start_dt = start_str[:10] if len(start_str) >= 10 else start_str
-            end_dt = end_str[:10] if len(end_str) >= 10 else end_str
+            # 날짜 형식 정규화 — 다양한 형식 지원
+            def _normalize_date(s):
+                """날짜 문자열을 YYYY-MM-DD 형식으로 정규화"""
+                s = str(s).strip()
+                if not s or s in ('nan', 'None', ''): return None
+                # 이미 YYYY-MM-DD 형식이면 [:10] 추출
+                if len(s) >= 10 and s[4] in ('-', '/') and s[7] in ('-', '/'):
+                    return s[:10].replace('/', '-')
+                # YYYY.MM.DD 형식
+                m = re.search(r'(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})', s)
+                if m:
+                    return f"{m.group(1)}-{m.group(2).zfill(2)}-{m.group(3).zfill(2)}"
+                # MM/DD/YYYY 등
+                m2 = re.search(r'(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{4})', s)
+                if m2:
+                    return f"{m2.group(3)}-{m2.group(1).zfill(2)}-{m2.group(2).zfill(2)}"
+                return None
+
+            start_dt = _normalize_date(start_str)
+            end_dt = _normalize_date(end_str)
+
+            if not start_dt: continue
+            if not end_dt: end_dt = start_dt
             
-            # 유효한 날짜인지 간단 체크
-            if not start_dt or len(start_dt) < 8: continue
+            # FullCalendar의 end는 exclusive → 1일 추가
+            try:
+                end_date_obj = datetime.strptime(end_dt, "%Y-%m-%d")
+                end_dt_exclusive = (end_date_obj + timedelta(days=1)).strftime("%Y-%m-%d")
+            except:
+                end_dt_exclusive = end_dt
             
             status = str(row.get(col_status, '')) if col_status else ''
             color = "#3B82F6"  # 기본: 파랑
-            if "체결" in status or "완료" in status: color = "#059669"  # 녹색
+            if "완료" in status or "정산" in status: color = "#059669"  # 녹색
+            elif "체결" in status or "배정" in status or "진행" in status: color = "#2563EB"  # 진한파랑
             elif "미정" in status or "접수" in status: color = "#D97706"  # 주황
-            elif "취소" in status: color = "#DC2626"  # 빨강
+            elif "취소" in status or "미체결" in status: color = "#DC2626"  # 빨강
             
             client_name = row.get(col_client, '') if col_client in df_inq.columns else ''
+            if pd.isna(client_name): client_name = ''
             event_name = row.get(col_event, '') if col_event in df_inq.columns else ''
+            if pd.isna(event_name): event_name = ''
+            
+            title = f"{client_name} ({event_name})" if client_name else str(event_name)
+            if not title.strip() or title.strip() == '()': title = f"행사 {start_dt}"
             
             events.append({
-                "title": f"{client_name} ({event_name})" if client_name else event_name,
+                "title": title,
                 "start": start_dt, 
-                "end": end_dt,
+                "end": end_dt_exclusive,
                 "backgroundColor": color, 
                 "borderColor": color, 
                 "allDay": True

@@ -30,7 +30,7 @@ def save_inquiry():
     """
     # 1. 업체명 결정 로직
     sel_client = st.session_state.get('form_client_select')
-    new_client = st.session_state.get('form_new_client_name')
+    new_client = st.session_state.get('form_new_client_name', '').strip()
     
     final_client_name = ""
     is_new_client = False
@@ -38,20 +38,33 @@ def save_inquiry():
     if sel_client == "(신규 입력)":
         final_client_name = new_client
         is_new_client = True
-    else:
-        final_client_name = sel_client
-
+    elif sel_client:
+        final_client_name = str(sel_client).strip()
+    
     # 2. 필수값 유효성 검사
-    if not final_client_name:
-        st.error("🚨 업체명을 확인해주세요.")
+    if not final_client_name or final_client_name in ('None', 'nan', ''):
+        st.session_state['_save_error'] = "🚨 업체명을 확인해주세요."
         return
     if not st.session_state.get('form_evt_name'):
-        st.error("🚨 행사명을 입력해주세요.")
+        st.session_state['_save_error'] = "🚨 행사명을 입력해주세요."
         return
 
     # 3. 데이터 준비
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     new_id = str(uuid.uuid4())[:8]
+
+    # 복장/식사/주차를 특이사항에 통합 저장
+    _dress = st.session_state.get('form_dress', '').strip()
+    _meal = st.session_state.get('form_meal', '').strip()
+    _parking = st.session_state.get('form_parking', '').strip()
+    _note_raw = st.session_state.get('form_note', '').strip()
+    
+    _note_parts = []
+    if _dress: _note_parts.append(f"[복장:{_dress}]")
+    if _meal: _note_parts.append(f"[식사:{_meal}]")
+    if _parking: _note_parts.append(f"[주차:{_parking}]")
+    if _note_raw: _note_parts.append(_note_raw)
+    combined_note = " ".join(_note_parts)
 
     # [매우 중요] 구글 시트 '문의작성' 탭의 23개 헤더 순서와 100% 일치시킴
     # 1.문의ID | 2.작성일 | 3.업체명 | 4.담당자 | 5.연락처 | 6.행사명 | 7.장소 |
@@ -74,7 +87,7 @@ def save_inquiry():
         st.session_state.get('form_headcount', ''),  # 12. 필요인력
         st.session_state.get('form_pay', ''),        # 13. 페이
         sc.STATUS_FLOW[0],                              # 14. 상태 ('접수')
-        st.session_state.get('form_note', ''),       # 15. 특이사항
+        combined_note,                                   # 15. 특이사항 (복장/식사/주차 포함)
         "",                                          # 16. 비고
         "",                                          # 17. 만족도
         "",                                          # 18. 관계
@@ -104,7 +117,8 @@ def save_inquiry():
         keys_to_clear = [
             'form_evt_name', 'form_evt_place', 'form_date_start', 'form_date_end', 
             'form_evt_time', 'form_service', 'form_headcount', 'form_pay',
-            'form_contact', 'form_manager', 'form_note', 'form_new_client_name'
+            'form_contact', 'form_manager', 'form_note', 'form_new_client_name',
+            'form_dress', 'form_meal', 'form_parking'
         ]
         for k in keys_to_clear:
             st.session_state[k] = ""
@@ -112,7 +126,7 @@ def save_inquiry():
         # 성공 메시지를 위한 플래그 설정
         st.session_state['save_success'] = True
     else:
-        st.error(f"저장 실패: {msg}")
+        st.session_state['_save_error'] = f"저장 실패: {msg}"
 
 # ==============================================================================
 # 3. 메인 화면
@@ -126,6 +140,11 @@ def show(data):
         st.balloons()
         st.success("✅ 문의가 정상적으로 접수되었습니다!")
         st.session_state['save_success'] = False # 메시지 1회만 표시
+    
+    # 저장 오류 표시
+    if st.session_state.get('_save_error'):
+        st.error(st.session_state['_save_error'])
+        st.session_state['_save_error'] = None
     
     parser = InquiryParser()
     
@@ -187,7 +206,8 @@ def show(data):
     form_keys = [
         'form_evt_name', 'form_evt_place', 'form_date_start', 'form_date_end', 
         'form_evt_time', 'form_service', 'form_headcount', 'form_pay',
-        'form_contact', 'form_manager', 'form_note', 'form_new_client_name'
+        'form_contact', 'form_manager', 'form_note', 'form_new_client_name',
+        'form_dress', 'form_meal', 'form_parking'
     ]
     for k in form_keys:
         if k not in st.session_state: st.session_state[k] = ""
@@ -250,7 +270,15 @@ def show(data):
         r3_c3.text_input("페이 (예산)", key="form_pay", placeholder="500만원 내외")
         
         st.markdown("<br>", unsafe_allow_html=True)
-        st.text_area("특이사항 (복장, 식사, 주차 등)", key="form_note", height=100)
+        
+        # [3] 현장 조건
+        st.markdown('<div class="header-text">3. 현장 조건</div>', unsafe_allow_html=True)
+        r4_c1, r4_c2, r4_c3 = st.columns([1, 1, 1])
+        r4_c1.text_input("👔 복장", key="form_dress", placeholder="예: 정장, 캐주얼, 유니폼")
+        r4_c2.text_input("🍽️ 식사", key="form_meal", placeholder="예: 제공, 각자, 도시락")
+        r4_c3.text_input("🅿️ 주차", key="form_parking", placeholder="예: 가능, 불가, 인근유료")
+        
+        st.text_area("📝 특이사항 (기타 요청사항)", key="form_note", height=80)
 
         st.markdown('</div>', unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)

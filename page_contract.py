@@ -120,9 +120,75 @@ def show(data):
     st.markdown("---")
 
     # ================================================================
-    # 3. 사업자 정보 입력 (OCR + 나중에 입력)
+    # 3. 사업자 정보 입력 (이전 업체 검색 + OCR + 나중에 입력)
     # ================================================================
     st.markdown("### 🏢 사업자 정보 입력")
+    
+    # ── 이전 업체 사업자정보 검색/재사용 ──
+    with st.expander("🔍 이전 업체 사업자정보 검색 (기존 데이터 재사용)", expanded=False):
+        df_settlement_all = pd.DataFrame()
+        try:
+            _dispatch_data = db.load_dispatch_data()
+            df_settlement_all = _dispatch_data.get('settlement', pd.DataFrame())
+        except Exception:
+            pass
+        # 정산 데이터에서 이전 사업자번호 보유 업체 추출
+        _prev_biz = pd.DataFrame()
+        if not df_settlement_all.empty:
+            _biz_col = None
+            for _c in ['사업자번호', '사업자등록번호']:
+                if _c in df_settlement_all.columns:
+                    _biz_col = _c
+                    break
+            _comp_col = None
+            for _c in ['업체명', '법인명', '업체']:
+                if _c in df_settlement_all.columns:
+                    _comp_col = _c
+                    break
+            if _biz_col and _comp_col:
+                _prev_biz = df_settlement_all[df_settlement_all[_biz_col].astype(str).str.strip() != ''][[_comp_col, _biz_col]].drop_duplicates()
+                _prev_biz = _prev_biz.rename(columns={_comp_col: '업체명', _biz_col: '사업자번호'})
+                # 대표자/이메일 추가
+                for _extra in ['대표자', '이메일']:
+                    if _extra in df_settlement_all.columns:
+                        _prev_biz[_extra] = df_settlement_all.loc[_prev_biz.index, _extra].values
+        
+        # 고객 DB에서도 검색
+        df_client_all = data.get('client', pd.DataFrame())
+        if not df_client_all.empty and '업체명' in df_client_all.columns:
+            _client_biz_col = None
+            for _c in ['사업자번호', '사업자등록번호']:
+                if _c in df_client_all.columns:
+                    _client_biz_col = _c
+                    break
+            if _client_biz_col:
+                _client_with_biz = df_client_all[df_client_all[_client_biz_col].astype(str).str.strip() != ''][['업체명', _client_biz_col]].drop_duplicates()
+                _client_with_biz = _client_with_biz.rename(columns={_client_biz_col: '사업자번호'})
+                if not _client_with_biz.empty:
+                    _prev_biz = pd.concat([_prev_biz, _client_with_biz], ignore_index=True).drop_duplicates(subset=['업체명'])
+        
+        if not _prev_biz.empty:
+            _search_q = st.text_input("업체명 검색", key="biz_search_q", placeholder="업체명을 입력하세요")
+            if _search_q:
+                _filtered = _prev_biz[_prev_biz['업체명'].astype(str).str.contains(_search_q, na=False, case=False)]
+            else:
+                _filtered = _prev_biz
+            
+            if not _filtered.empty:
+                st.dataframe(_filtered, use_container_width=True, hide_index=True)
+                _sel_biz_options = _filtered['업체명'].tolist()
+                _sel_biz = st.selectbox("재사용할 업체 선택", _sel_biz_options, key="reuse_biz_select")
+                if st.button("✅ 사업자정보 적용", key="apply_prev_biz"):
+                    _sel_row = _filtered[_filtered['업체명'] == _sel_biz].iloc[0]
+                    st.session_state['_ocr_biz_num'] = str(_sel_row.get('사업자번호', '')).strip()
+                    st.session_state['_ocr_ceo'] = str(_sel_row.get('대표자', '')).strip() if '대표자' in _sel_row.index else ''
+                    st.session_state['_ocr_company'] = str(_sel_row.get('업체명', '')).strip()
+                    st.success(f"✅ {_sel_biz}의 사업자정보가 적용되었습니다.")
+                    st.rerun()
+            else:
+                st.info("검색 결과가 없습니다.")
+        else:
+            st.info("이전 사업자정보 데이터가 없습니다.")
 
     # ── OCR 사업자등록증 업로드 ──
     with st.expander("📸 사업자등록증 업로드 (자동 인식)", expanded=False):

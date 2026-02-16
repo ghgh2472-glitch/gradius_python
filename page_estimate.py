@@ -206,6 +206,33 @@ def show(data):
                 if not _matched_est.empty:
                     _est_meta = _matched_est.iloc[0].to_dict()
 
+            # ▶ 문의 특이사항에서 복장/식사/주차 파싱 (견적에 없을 때 fallback)
+            _inq_note = str(target.get('특이사항', '')).strip()
+            _inq_dress = ''
+            _inq_meal = ''
+            _inq_parking = ''
+            _inq_note_clean = _inq_note
+            
+            import re as _re
+            _dress_m = _re.search(r'\[복장:([^\]]+)\]', _inq_note)
+            if _dress_m:
+                _inq_dress = _dress_m.group(1).strip()
+                _inq_note_clean = _inq_note_clean.replace(_dress_m.group(0), '').strip()
+            _meal_m = _re.search(r'\[식사:([^\]]+)\]', _inq_note)
+            if _meal_m:
+                _inq_meal = _meal_m.group(1).strip()
+                _inq_note_clean = _inq_note_clean.replace(_meal_m.group(0), '').strip()
+            _parking_m = _re.search(r'\[주차:([^\]]+)\]', _inq_note)
+            if _parking_m:
+                _inq_parking = _parking_m.group(1).strip()
+                _inq_note_clean = _inq_note_clean.replace(_parking_m.group(0), '').strip()
+            
+            # 견적 메타 > 문의 파싱 순으로 결정
+            def _pick(est_key, inq_val):
+                v = str(_est_meta.get(est_key, '')).strip()
+                if v and v not in ('nan', 'None', ''): return v
+                return inq_val
+
             st.session_state.update({
                 'w_client': target.get('업체명', ''),
                 'w_event': target.get('행사명', ''),
@@ -216,10 +243,10 @@ def show(data):
                 'w_qty': qty,
                 'last_project': sel_p,
                 '_current_inq_id': target_id,
-                'w_dress': str(_est_meta.get('복장', '')).strip() if str(_est_meta.get('복장', '')) not in ('nan','') else '',
-                'w_meal': str(_est_meta.get('식사', '')).strip() if str(_est_meta.get('식사', '')) not in ('nan','') else '',
-                'w_parking': str(_est_meta.get('주차', '')).strip() if str(_est_meta.get('주차', '')) not in ('nan','') else '',
-                'w_note': str(_est_meta.get('특이사항', '')).strip() if str(_est_meta.get('특이사항', '')) not in ('nan','') else '',
+                'w_dress': _pick('복장', _inq_dress),
+                'w_meal': _pick('식사', _inq_meal),
+                'w_parking': _pick('주차', _inq_parking),
+                'w_note': _pick('특이사항', _inq_note_clean),
             })
 
             # ▶ 견적수정 시 기존 품목 로드
@@ -690,6 +717,29 @@ def _show_history_tab(df_est, df_inq, current_client):
             </div>
         </div>
         """, unsafe_allow_html=True)
+        
+        # ── 견적 품목 상세내역 (직군/인원/날짜) ──
+        try:
+            _hist_items = db.load_estimate_items(inq_id)
+            if not _hist_items.empty:
+                with st.expander(f"📦 {event} — 품목 상세 ({len(_hist_items)}건)", expanded=False):
+                    _hist_display = _hist_items.copy()
+                    _show_cols = []
+                    for _hc in ['직군명', '수량', '일수', '매출단가', '매입단가', '규격', '비고']:
+                        if _hc in _hist_display.columns:
+                            _show_cols.append(_hc)
+                    if _show_cols:
+                        # 단가 포맷팅
+                        for _fc in ['매출단가', '매입단가']:
+                            if _fc in _hist_display.columns:
+                                _hist_display[_fc] = _hist_display[_fc].apply(lambda x: f"{ue.safe_int(x):,}")
+                        _hist_display = _hist_display.rename(columns={'매출단가': '청구단가', '매입단가': '지급단가'})
+                        _show_cols = [c.replace('매출단가', '청구단가').replace('매입단가', '지급단가') for c in _show_cols]
+                        st.dataframe(_hist_display[_show_cols], use_container_width=True, hide_index=True)
+                    else:
+                        st.dataframe(_hist_display, use_container_width=True, hide_index=True)
+        except Exception:
+            pass
 
     # ── 견적 비교 ──
     st.markdown("---")

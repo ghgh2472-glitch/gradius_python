@@ -83,6 +83,38 @@ def get_contract_summary_html(inq_row, est_df):
 
     # 특이사항 / 메모 섹션
     memo_section = ''
+    
+    # 복장/식사/주차/특이사항 (견적 메타데이터에서 가져오기)
+    est_dress = str(match_row.get('복장', '')).strip() if has_data else ''
+    est_meal = str(match_row.get('식사', '')).strip() if has_data else ''
+    est_parking = str(match_row.get('주차', '')).strip() if has_data else ''
+    est_note_raw = str(match_row.get('특이사항', '')).strip() if has_data else ''
+    
+    # 문의 특이사항에서도 파싱 시도
+    if not est_dress or est_dress in ('nan', 'None'):
+        import re as _re
+        _dm = _re.search(r'\[복장:([^\]]+)\]', special)
+        est_dress = _dm.group(1).strip() if _dm else ''
+    if not est_meal or est_meal in ('nan', 'None'):
+        import re as _re
+        _mm = _re.search(r'\[식사:([^\]]+)\]', special)
+        est_meal = _mm.group(1).strip() if _mm else ''
+    if not est_parking or est_parking in ('nan', 'None'):
+        import re as _re
+        _pm = _re.search(r'\[주차:([^\]]+)\]', special)
+        est_parking = _pm.group(1).strip() if _pm else ''
+    if est_note_raw in ('nan', 'None'): est_note_raw = ''
+    
+    if est_dress or est_meal or est_parking:
+        _cond_items = []
+        if est_dress: _cond_items.append(f"👔 복장: <b>{est_dress}</b>")
+        if est_meal: _cond_items.append(f"🍽️ 식사: <b>{est_meal}</b>")
+        if est_parking: _cond_items.append(f"🅿️ 주차: <b>{est_parking}</b>")
+        memo_section += f'<div style="background:#EFF6FF;padding:10px 14px;border-radius:6px;margin-top:10px;border-left:4px solid #3B82F6;"><div style="font-size:11px;font-weight:bold;color:#1E40AF;">📋 현장 조건</div><div style="font-size:13px;color:#1E3A5F;margin-top:4px;display:flex;gap:20px;">{"&nbsp;&nbsp;|&nbsp;&nbsp;".join(_cond_items)}</div></div>'
+    
+    if est_note_raw:
+        memo_section += f'<div style="background:#F0FDF4;padding:10px 14px;border-radius:6px;margin-top:8px;border-left:4px solid #10B981;"><div style="font-size:11px;font-weight:bold;color:#065F46;">📝 견적 특이사항</div><div style="font-size:13px;color:#064E3B;margin-top:4px;">{est_note_raw}</div></div>'
+    
     if special:
         memo_section += f'<div style="background:#fef3c7;padding:10px 14px;border-radius:6px;margin-top:10px;border-left:4px solid #f59e0b;"><div style="font-size:11px;font-weight:bold;color:#92400e;">⚠️ 특이사항</div><div style="font-size:13px;color:#78350f;margin-top:4px;">{special}</div></div>'
     if note:

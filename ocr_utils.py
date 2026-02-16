@@ -115,10 +115,13 @@ def extract_business_info_advanced(image_text: str) -> Dict[str, str]:
 # Google Cloud Vision API (최우선)
 # ==============================================================
 def try_extract_with_google_vision(image_file) -> Optional[Dict[str, str]]:
-    """Google Cloud Vision API로 사업자등록증 OCR"""
+    """Google Cloud Vision API로 사업자등록증 OCR (타임아웃 10초)"""
     if not GCLOUD_VISION_AVAILABLE:
         return None
     try:
+        import signal
+        import threading
+
         creds_path = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS', '')
         if not creds_path:
             for candidate in ['service_account.json', 'credentials.json', 'google_credentials.json']:
@@ -126,18 +129,43 @@ def try_extract_with_google_vision(image_file) -> Optional[Dict[str, str]]:
                     os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = os.path.abspath(candidate)
                     break
 
-        client = vision.ImageAnnotatorClient()
         image_file.seek(0)
         content = image_file.read()
         image_file.seek(0)
 
-        img = vision.Image(content=content)
-        response = client.document_text_detection(
-            image=img,
-            image_context={"language_hints": ["ko", "en"]}
-        )
+        # 타임아웃 적용: 스레드 기반으로 10초 제한
+        result_holder = [None]
+        error_holder = [None]
 
-        if response.error.message:
+        def _call_vision():
+            try:
+                client = vision.ImageAnnotatorClient()
+                img = vision.Image(content=content)
+                response = client.document_text_detection(
+                    image=img,
+                    image_context={"language_hints": ["ko", "en"]}
+                )
+                if response.error.message:
+                    error_holder[0] = response.error.message
+                    return
+                result_holder[0] = response
+            except Exception as e:
+                error_holder[0] = str(e)
+
+        thread = threading.Thread(target=_call_vision)
+        thread.start()
+        thread.join(timeout=10)  # 최대 10초 대기
+
+        if thread.is_alive():
+            print("Google Vision API 타임아웃 (10초)")
+            return None
+
+        if error_holder[0]:
+            print(f"Google Vision API 오류: {error_holder[0]}")
+            return None
+
+        response = result_holder[0]
+        if response is None:
             return None
 
         extracted_text = response.full_text_annotation.text if response.full_text_annotation else ""
@@ -157,9 +185,11 @@ def try_extract_with_google_vision(image_file) -> Optional[Dict[str, str]]:
 # EasyOCR (로컬 폴백)
 # ==============================================================
 def try_extract_with_easyocr(image_file) -> Optional[Dict[str, str]]:
-    """EasyOCR로 사업자등록증 OCR"""
+    """EasyOCR로 사업자등록증 OCR (타임아웃 15초)"""
     try:
         import easyocr
+        import threading
+
         image_file.seek(0)
         image = Image.open(image_file)
         img_array = np.array(image)
@@ -171,10 +201,25 @@ def try_extract_with_easyocr(image_file) -> Optional[Dict[str, str]]:
         else:
             enhanced = np.array(image.convert('L'))
 
-        reader = easyocr.Reader(['ko', 'en'], gpu=False)
-        results = reader.readtext(enhanced, detail=0)
-        extracted_text = "\n".join(results)
+        result_holder = [None]
 
+        def _run_ocr():
+            try:
+                reader = easyocr.Reader(['ko', 'en'], gpu=False)
+                results = reader.readtext(enhanced, detail=0)
+                result_holder[0] = "\n".join(results)
+            except Exception:
+                pass
+
+        thread = threading.Thread(target=_run_ocr)
+        thread.start()
+        thread.join(timeout=15)
+
+        if thread.is_alive() or not result_holder[0]:
+            print("EasyOCR 타임아웃 또는 실패")
+            return None
+
+        extracted_text = result_holder[0]
         info = extract_business_info_advanced(extracted_text)
         info['_raw_text'] = extracted_text[:500]
         return info if info.get('business_number') or info.get('company_name') else None

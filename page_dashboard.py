@@ -203,17 +203,18 @@ def show(data):
                 with cols[col_idx + 1]:
                     st.markdown('<div class="pipeline-arrow">→</div>', unsafe_allow_html=True)
         
-        # 이탈 상태 (접수 아래에 표시)
+        # 이탈 상태 (파이프라인 아래 독립 섹션)
         exit_total = sum(exit_counts.values())
         if exit_total > 0:
             st.markdown("")
-            exit_cols = st.columns([1, 1, 1, 4])
+            st.markdown("##### 🚫 이탈 현황")
+            exit_cols = st.columns([1, 1, 1, 3])
             for i, status_name in enumerate(sc.STATUS_EXIT):
                 cfg = sc.STATUS_CONFIG[status_name]
                 count = exit_counts[status_name]
                 with exit_cols[i]:
                     st.markdown(f"""
-                    <div class="pipeline-exit" style="background:{cfg['bg']};">
+                    <div class="pipeline-exit" style="background:{cfg['bg']};border-color:{cfg['color']};">
                         <div class="pipeline-exit-label" style="color:{cfg['color']};">{cfg['icon']} {status_name}</div>
                         <div class="pipeline-exit-count" style="color:{cfg['color']};">{count}</div>
                     </div>
@@ -221,6 +222,12 @@ def show(data):
                     if count > 0:
                         if st.button("상세", key=f"pipe_exit_{status_name}"):
                             st.session_state['pipeline_detail_status'] = status_name
+            with exit_cols[3]:
+                st.markdown(f"""
+                <div style="background:#FEF2F2;border:1px solid #FECACA;border-radius:8px;padding:12px;font-size:13px;color:#991B1B;">
+                    ⚠️ 이탈 합계 <b>{exit_total}건</b> (미체결 {exit_counts.get('미체결',0)} / 보류 {exit_counts.get('보류',0)} / 취소 {exit_counts.get('취소',0)})
+                </div>
+                """, unsafe_allow_html=True)
         
         # ── 파이프라인 상세 패널 ──
         _pipe_sel = st.session_state.get('pipeline_detail_status', '')
@@ -244,7 +251,14 @@ def show(data):
                 col_contact = ud.find_col(df_inq, ["연락처", "담당자연락처", "전화"])
                 col_manager = ud.find_col(df_inq, ["담당자", "담당자명"])
                 col_date = ud.find_col(df_inq, ["행사시작일", "일시", "시작일"])
+                col_date_end = ud.find_col(df_inq, ["행사종료일", "종료일"])
                 col_location = ud.find_col(df_inq, ["장소", "행사장소"])
+                col_svc_type = ud.find_col(df_inq, ["서비스종류", "서비스"])
+                col_headcount = ud.find_col(df_inq, ["필요인력", "요청인원", "인원"])
+                col_time = ud.find_col(df_inq, ["행사시간", "시간"])
+                col_pay = ud.find_col(df_inq, ["페이", "예산"])
+                col_note = ud.find_col(df_inq, ["특이사항"])
+                col_status_val = ud.find_col(df_inq, ["상태"])
                 
                 for _pi, _pr in _pipe_df.iterrows():
                     _p_id = str(_pr.get(col_id, '')) if col_id else ''
@@ -253,21 +267,51 @@ def show(data):
                     _p_contact = str(_pr.get(col_contact, '')) if col_contact else '-'
                     _p_manager = str(_pr.get(col_manager, '')) if col_manager else '-'
                     _p_date = str(_pr.get(col_date, '')) if col_date else '-'
+                    _p_date_end = str(_pr.get(col_date_end, '')) if col_date_end else ''
                     _p_location = str(_pr.get(col_location, '')) if col_location else '-'
+                    _p_svc_type = str(_pr.get(col_svc_type, '')) if col_svc_type else '-'
+                    _p_headcount = str(_pr.get(col_headcount, '')) if col_headcount else '-'
+                    _p_time = str(_pr.get(col_time, '')) if col_time else '-'
+                    _p_pay = str(_pr.get(col_pay, '')) if col_pay else '-'
+                    _p_note = str(_pr.get(col_note, '')) if col_note else ''
+                    
+                    # nan 처리
+                    for _var_name in ['_p_date_end', '_p_svc_type', '_p_headcount', '_p_time', '_p_pay', '_p_note']:
+                        _val = locals()[_var_name]
+                        if _val in ('nan', 'None', ''): locals()[_var_name] = '-'
+                    
+                    _date_display = _p_date
+                    if _p_date_end and _p_date_end not in ('-', 'nan', 'None', ''):
+                        _date_display = f"{_p_date} ~ {_p_date_end}"
+                    
+                    # 견적 금액 확인
+                    _est_data = data.get('estimate', pd.DataFrame())
+                    _est_amount = 0
+                    if not _est_data.empty and '문의ID' in _est_data.columns:
+                        _est_match = _est_data[_est_data['문의ID'].astype(str).str.strip() == _p_id]
+                        if not _est_match.empty:
+                            _est_amount = ud.safe_int(_est_match.iloc[0].get('합계금액', 0))
                     
                     with st.container(border=True):
-                        _dc1, _dc2, _dc3 = st.columns([2, 2, 1])
+                        _dc1, _dc2, _dc3 = st.columns([2.5, 2.5, 1])
                         with _dc1:
                             st.markdown(f"**🏢 {_p_company}** — {_p_event}")
                             st.caption(f"📋 {_p_id}")
+                            st.markdown(f"📅 {_date_display}  |  ⏰ {_p_time}")
+                            st.markdown(f"📍 {_p_location}")
                         with _dc2:
-                            st.markdown(f"📅 {_p_date}  |  📍 {_p_location}")
                             st.markdown(f"👤 {_p_manager}  |  📞 {_p_contact}")
+                            st.markdown(f"🔧 서비스: {_p_svc_type}  |  👥 인원: {_p_headcount}")
+                            st.markdown(f"💵 페이: {_p_pay}")
+                            if _p_note and _p_note != '-':
+                                st.caption(f"📝 {_p_note}")
                         with _dc3:
                             # 배정 인원 확인
                             _p_staff_detail = ud.get_dispatch_detail_for_event(df_dispatch, _p_event)
                             _p_staff_count = len(_p_staff_detail) if not _p_staff_detail.empty else 0
                             st.metric("배정인원", f"{_p_staff_count}명")
+                            if _est_amount > 0:
+                                st.metric("견적액", f"{_est_amount:,}원")
                 
                 st.caption(f"총 {len(_pipe_df)}건")
             else:
@@ -414,19 +458,34 @@ def show(data):
         
         with col_chart:
             st.markdown('<div class="section-title">📈 월별 매출 추이</div>', unsafe_allow_html=True)
-            trend_df = ud.get_monthly_trend(df_inq)
+            
+            # 연도 선택기
+            current_year = datetime.now().year
+            year_options = ["전체"] + [str(y) for y in range(current_year, current_year - 5, -1)]
+            sel_year_str = st.selectbox("📅 연도 필터", year_options, key="trend_year_filter")
+            sel_year = int(sel_year_str) if sel_year_str != "전체" else None
+            
+            # 정산/견적 데이터 전달하여 실제 매출 표시
+            df_est_for_trend = data.get('estimate', pd.DataFrame())
+            trend_df = ud.get_monthly_trend(df_inq, df_settlement=df_settlement, df_estimate=df_est_for_trend, selected_year=sel_year)
             if not trend_df.empty:
                 fig = px.bar(trend_df, x='Month', y='Sales', 
                            text_auto='.2s', color_discrete_sequence=['#667eea'])
                 fig.update_layout(
                     margin=dict(l=10, r=10, t=10, b=10), height=300,
-                    showlegend=False, hovermode='x unified'
+                    showlegend=False, hovermode='x unified',
+                    xaxis_title="월", yaxis_title="매출액(원)"
                 )
                 fig.update_yaxes(rangemode="tozero")
                 fig.update_traces(marker_line=dict(width=0))
                 st.plotly_chart(fig, use_container_width=True)
+                
+                # 요약 통계
+                total_sales = int(trend_df['Sales'].sum())
+                avg_sales = int(trend_df['Sales'].mean())
+                st.caption(f"총 매출: {total_sales:,}원 | 월평균: {avg_sales:,}원 | {len(trend_df)}개월")
             else:
-                st.info("📊 매출 데이터가 없습니다.")
+                st.info("📊 매출 데이터가 없습니다. 견적/정산 데이터가 쌓이면 표시됩니다.")
         
         with col_ranking:
             st.markdown('<div class="section-title">🏆 Top 고객사</div>', unsafe_allow_html=True)
@@ -758,15 +817,22 @@ def show(data):
     # [Tab 6] 캘린더
     with tab6:
         st.markdown('<div class="section-title">📆 전체 행사 일정표</div>', unsafe_allow_html=True)
-        st.caption("📌 체결된 행사만 달력에 표시됩니다.")
         
-        # 체결 이후 건만 필터링하여 캘린더 이벤트 생성
-        confirmed_statuses = sc.CONFIRMED_STATUSES  # ["체결", "배정완료", "진행중", "완료", "정산완료"]
-        if col_status:
-            confirmed_df = df_inq[df_inq[col_status].astype(str).str.strip().isin(confirmed_statuses)]
+        # 캘린더 필터 옵션
+        cal_filter = st.radio("표시 범위", ["체결 건만", "전체"], horizontal=True, key="cal_range_filter")
+        
+        if cal_filter == "체결 건만":
+            st.caption("📌 체결된 행사만 달력에 표시됩니다.")
+            confirmed_statuses = sc.CONFIRMED_STATUSES
+            if col_status:
+                cal_df = df_inq[df_inq[col_status].astype(str).str.strip().isin(confirmed_statuses)]
+            else:
+                cal_df = df_inq
         else:
-            confirmed_df = df_inq
-        events = ud.get_calendar_events(confirmed_df)
+            st.caption("📌 전체 문의 건이 달력에 표시됩니다.")
+            cal_df = df_inq
+
+        events = ud.get_calendar_events(cal_df)
         
         cal_options = {
             "headerToolbar": {
@@ -783,10 +849,27 @@ def show(data):
             "eventDisplay": "block",
         }
         
-        calendar(events=events if events else [], options=cal_options)
+        # 범례 표시
+        st.markdown("""
+        <div style="display:flex;gap:15px;margin-bottom:8px;font-size:12px;">
+            <span>🟦 <span style="color:#2563EB;">체결/배정/진행</span></span>
+            <span>🟩 <span style="color:#059669;">완료/정산</span></span>
+            <span>🟧 <span style="color:#D97706;">접수/미정</span></span>
+            <span>🟥 <span style="color:#DC2626;">취소/미체결</span></span>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        try:
+            cal_result = calendar(events=events if events else [], options=cal_options, key="main_calendar")
+        except Exception as e:
+            st.warning(f"캘린더 렌더링 오류: {e}")
+            st.info("대안으로 리스트 뷰를 표시합니다.")
+            if events:
+                for ev in events[:20]:
+                    st.markdown(f"📅 **{ev.get('start', '')}** — {ev.get('title', '')}")
         
         if not events:
-            st.info("📅 체결된 행사 일정이 없습니다.")
+            st.info("📅 표시할 행사 일정이 없습니다. 문의접수에서 행사시작일을 입력해주세요.")
         
         st.markdown("---")
         st.markdown('<div class="section-title">📋 전체 현장 목록 (배정현황 포함)</div>', unsafe_allow_html=True)

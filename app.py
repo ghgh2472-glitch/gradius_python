@@ -105,9 +105,18 @@ with st.sidebar:
     st.markdown("---")
     
     # 데이터 새로고침 버튼
-    if st.button("🔄 데이터 동기화", use_container_width=True):
+    if st.button("🔄 데이터 동기화", use_container_width=True, help="클릭 시 최신 데이터 즉시 반영"):
         st.cache_data.clear() # 캐시 삭제
         st.rerun() # 앱 재실행
+    
+    # 메뉴 변경 시 자동 데이터 갱신
+    if 'last_menu' not in st.session_state:
+        st.session_state['last_menu'] = menu
+    elif st.session_state['last_menu'] != menu:
+        st.session_state['last_menu'] = menu
+        st.cache_data.clear()
+        
+    st.caption("💡 페이지 전환 시 자동 동기화됩니다")
         
     st.markdown("""
     <div style='position: fixed; bottom: 20px; font-size: 12px; color: #94a3b8;'>
