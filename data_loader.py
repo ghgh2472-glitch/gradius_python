@@ -44,11 +44,14 @@ def load_all_data():
     data = {}
     client = get_connection()
     
-    # 필수 시트만 로드 (API 할당량 절약 - 3개 시트만 로드)
+    # 필수 시트 로드 (견적 시스템용 Roles/Factors/Guides 포함)
     sheet_map = {
         "inq": "문의작성",
         "staff": "STAFF",
-        "client": "고객정보"
+        "client": "고객정보",
+        "roles": "Roles",
+        "factors": "Factors",
+        "guides": "Guides",
         # 배정기록, 견적상세, 계약건은청구금액적기는 필요할 때만 로드
     }
     

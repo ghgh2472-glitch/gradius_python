@@ -270,9 +270,12 @@ def show_settlement_detail(data):
     df_inq = data.get('inq', pd.DataFrame())
     brain = SettlementBrain(df_inq)
 
-    # 필터링
-    if '체결' not in df_inq.columns: df_inq['체결'] = ""
-    mask = df_inq['체결'].astype(str).str.contains("|".join(sc.CONFIRMED_STATUSES), na=False)
+    # 필터링 — 상태 컬럼에서 정산 대상 필터링 (체결 이후 건)
+    status_col = '상태' if '상태' in df_inq.columns else '체결' if '체결' in df_inq.columns else None
+    if not status_col:
+        st.warning("상태 컬럼을 찾을 수 없습니다.")
+        return
+    mask = df_inq[status_col].astype(str).str.strip().isin(sc.CONFIRMED_STATUSES)
     targets = df_inq[mask]
     # 정렬 컬럼 존재 여부 확인 (문의날짜가 없으면 첫 컬럼으로 정렬)
     sort_col = '문의날짜' if '문의날짜' in targets.columns else '일시' if '일시' in targets.columns else targets.columns[0]
@@ -316,37 +319,78 @@ def show_settlement_detail(data):
             st.components.v1.html(html, height=500, scrolling=True)
         with c2:
             st.subheader("입금 관리")
-            st.info(f"현재 상태: {row['체결']}")
-            if row['체결'] == sc.STATUS_FLOW[3]:  # '배정완료'
-                if st.button("💰 입금 확인 (완료처리)"):
-                    db.update_cell("문의작성", row['업체명'], 5, sc.STATUS_FLOW[5])  # '완료'
-                    st.success("입금 확인됨!"); time.sleep(1); st.rerun()
+            cur_status = str(row.get(status_col, '')).strip()
+            st.markdown(f"현재 상태: {sc.get_status_badge_html(cur_status)}", unsafe_allow_html=True)
+            
+            inq_id_for_update = str(row.get('문의ID', '')).strip()
+            if cur_status in ['배정완료', '진행중']:
+                if st.button("✅ 현장 완료 처리"):
+                    db.update_status(inq_id_for_update, sc.STATUS_FLOW[5])  # '완료'
+                    st.success("현장 완료 처리됨!"); st.cache_data.clear(); time.sleep(1); st.rerun()
+            elif cur_status == '완료':
+                st.success("✅ 현장 완료 — 아래 인력 급여 탭에서 지급 후 정산 완료 처리하세요.")
 
     with tab_s:
-        # 인력 파싱 데이터 가져오기
-        note_text = str(row.get('특이사항', ''))
-        staff_data = brain.parse_dispatch_data(note_text)
+        # 배정기록 시트에서 직접 인력 데이터 조회 (우선)
+        inq_id = str(row.get('문의ID', '')).strip()
+        assignment_df = pd.DataFrame()
+        if inq_id:
+            try:
+                assignment_df = db.get_assignments_by_inquiry(inq_id)
+            except Exception:
+                pass
         
-        if not staff_data:
-            st.warning("⚠️ 배정된 인원 데이터를 찾을 수 없습니다.")
-            st.caption("아래 '원본 데이터 확인'을 눌러 데이터가 올바르게 저장되었는지 확인하세요.")
-        else:
-            st.subheader(f"지급 대상자 ({len(staff_data)}명)")
-            for i, s in enumerate(staff_data):
-                with st.expander(f"{s['이름']} ({s['지급단가']:,}원 x {s['일수']}일 = {s['총지급액']:,}원)"):
+        if not assignment_df.empty:
+            # 배정기록 시트에서 직접 조회 성공
+            name_col = '이름' if '이름' in assignment_df.columns else '인력명' if '인력명' in assignment_df.columns else None
+            role_col = '역할' if '역할' in assignment_df.columns else '직무' if '직무' in assignment_df.columns else None
+            rate_col = '단가' if '단가' in assignment_df.columns else '지급단가' if '지급단가' in assignment_df.columns else None
+            days_col = '일수' if '일수' in assignment_df.columns else '근무일수' if '근무일수' in assignment_df.columns else None
+            total_col = '총지급액' if '총지급액' in assignment_df.columns else None
+            
+            st.subheader(f"지급 대상자 ({len(assignment_df)}명) — 배정기록 기반")
+            for i, arow in assignment_df.iterrows():
+                a_name = str(arow.get(name_col, 'N/A')) if name_col else 'N/A'
+                a_role = str(arow.get(role_col, '')) if role_col else ''
+                a_rate = int(float(arow.get(rate_col, 0) or 0)) if rate_col else 0
+                a_days = int(float(arow.get(days_col, 1) or 1)) if days_col else 1
+                a_total = int(float(arow.get(total_col, a_rate * a_days) or 0)) if total_col else a_rate * a_days
+                
+                with st.expander(f"{a_name} ({a_role}) — {a_rate:,}원 × {a_days}일 = {a_total:,}원"):
                     c1, c2 = st.columns([2, 1])
                     with c1:
-                        html_p = brain.get_payslip_html(s['이름'], row['행사명'], s['지급단가'], s['일수'], s['총지급액'])
+                        html_p = brain.get_payslip_html(a_name, row['행사명'], a_rate, a_days, a_total)
                         st.components.v1.html(html_p, height=350)
                     with c2:
-                        if st.checkbox("이체 완료", key=f"pay_{i}"):
+                        if st.checkbox("이체 완료", key=f"pay_assign_{i}"):
                             st.success("지급 완료됨")
+        else:
+            # 배정기록 없으면 기존 특이사항 텍스트 파싱 fallback
+            note_text = str(row.get('특이사항', ''))
+            staff_data = brain.parse_dispatch_data(note_text)
+            
+            if not staff_data:
+                st.warning("⚠️ 배정된 인원 데이터를 찾을 수 없습니다.")
+                st.caption("인력배정 → 배정 확정을 먼저 진행해주세요.")
+            else:
+                st.subheader(f"지급 대상자 ({len(staff_data)}명) — 특이사항 파싱")
+                for i, s in enumerate(staff_data):
+                    with st.expander(f"{s['이름']} ({s['지급단가']:,}원 x {s['일수']}일 = {s['총지급액']:,}원)"):
+                        c1, c2 = st.columns([2, 1])
+                        with c1:
+                            html_p = brain.get_payslip_html(s['이름'], row['행사명'], s['지급단가'], s['일수'], s['총지급액'])
+                            st.components.v1.html(html_p, height=350)
+                        with c2:
+                            if st.checkbox("이체 완료", key=f"pay_{i}"):
+                                st.success("지급 완료됨")
 
-            if row['체결'] == sc.STATUS_FLOW[5]:  # '완료'
-                st.divider()
-                if st.button("🏁 최종 정산 완료 (프로젝트 종료)", type="primary"):
-                    db.update_cell("문의작성", row['업체명'], 5, sc.STATUS_FLOW[6])  # '정산완료'
-                    st.balloons(); st.success("모든 정산이 완료되었습니다!"); st.rerun()
+        # 정산 완료 버튼
+        if cur_status == '완료':
+            st.divider()
+            if st.button("🏁 최종 정산 완료 (프로젝트 종료)", type="primary"):
+                db.update_status(inq_id_for_update, sc.STATUS_FLOW[6])  # '정산완료'
+                st.cache_data.clear()
+                st.balloons(); st.success("모든 정산이 완료되었습니다!"); st.rerun()
 
 
 def show_tax_invoice_management():

@@ -17,6 +17,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.neighbors import NearestNeighbors
 from pydantic import BaseModel, validator
 import data_loader as db
+import status_config as sc
 import json
 from uuid import uuid4
 
@@ -320,14 +321,15 @@ def tab_assignment(data):
         else:
             st.error("❌ STAFF 데이터가 비어있습니다!")
     
-    # 체결된 계약만 필터링
+    # 체결 이후 계약 필터링 (체결, 배정완료, 진행중 포함)
+    assignable_statuses = ['체결', '배정완료', '진행중']
     if not df_inq.empty and '상태' in df_inq.columns:
-        contracts = df_inq[df_inq['상태'] == '체결'].sort_values('작성일', ascending=False)
+        contracts = df_inq[df_inq['상태'].isin(assignable_statuses)].sort_values('작성일', ascending=False)
     else:
         contracts = pd.DataFrame()
     
     if contracts.empty:
-        st.warning("⚠️ 체결된 계약이 없습니다. 계약을 먼저 체결해주세요.")
+        st.warning("⚠️ 배정 가능한 계약이 없습니다. (체결/배정완료/진행중 상태의 계약 필요)")
         return
     
     # [좌측] 계약 선택
@@ -707,9 +709,15 @@ def tab_assignment(data):
                     try:
                         success = db.update_assignment_status(assign_id, '확정')
                         if success:
+                            # 문의작성 시트 상태도 '배정완료'로 자동 갱신
+                            try:
+                                db.update_status(selected_inq_id, sc.STATUS_FLOW[3])  # '배정완료'
+                            except Exception:
+                                pass  # 이미 배정완료 상태면 무시
                             st.cache_data.clear()
                             assigned_name = selected_assign.get(name_col, '해당 직원') if name_col else '해당 직원'
-                            st.success(f"✅ {assigned_name}님의 배정이 확정되었습니다.")
+                            st.success(f"✅ {assigned_name}님 배정 확정! → 문의 상태가 '배정완료'로 변경되었습니다.")
+                            st.info("📌 다음 단계: **출석부 탭**에서 일일 출석 기록을 입력하세요.")
                         else:
                             st.error("배정 확정에 실패했습니다. (Sheet 업데이트 실패)")
                     except Exception as e:
@@ -735,10 +743,11 @@ def tab_attendance(data):
         st.warning("⚠️ 체결된 계약이 없습니다.")
         return
     
-    # 체결된 계약 필터링
-    contracts = df_inq[df_inq['상태'] == '체결'].sort_values('작성일', ascending=False)
+    # 배정 이후 계약 필터링 (체결, 배정완료, 진행중 포함)
+    att_statuses = ['체결', '배정완료', '진행중']
+    contracts = df_inq[df_inq['상태'].isin(att_statuses)].sort_values('작성일', ascending=False)
     if contracts.empty:
-        st.warning("⚠️ 체결된 계약이 없습니다. 계약을 먼저 체결해주세요.")
+        st.warning("⚠️ 출석 기록 가능한 계약이 없습니다. (배정 완료된 계약 필요)")
         return
     
     # 계약 선택
@@ -1230,6 +1239,25 @@ def show(data):
     
     st.title("👥 인력파견 시스템 v3.0")
     st.caption("🚀 스마트 AI 기반 인력배정 & 자동 급여계산 시스템")
+    
+    # 플로우 가이드
+    st.markdown("""
+    <div style="background: linear-gradient(135deg, #EFF6FF, #F0FDF4); border: 1px solid #BFDBFE; 
+                border-radius: 12px; padding: 14px 20px; margin-bottom: 16px;">
+        <div style="font-weight: 700; font-size: 14px; color: #1E40AF; margin-bottom: 6px;">📌 업무 플로우</div>
+        <div style="display: flex; align-items: center; gap: 6px; font-size: 13px; flex-wrap: wrap;">
+            <span style="background:#DBEAFE;color:#1E40AF;padding:4px 10px;border-radius:8px;font-weight:600;">1️⃣ 인력배정</span>
+            <span style="color:#9CA3AF;">→</span>
+            <span style="background:#FEF3C7;color:#92400E;padding:4px 10px;border-radius:8px;font-weight:600;">2️⃣ 배정확정</span>
+            <span style="color:#9CA3AF;">→</span>
+            <span style="background:#D1FAE5;color:#065F46;padding:4px 10px;border-radius:8px;font-weight:600;">3️⃣ 출석부 기록</span>
+            <span style="color:#9CA3AF;">→</span>
+            <span style="background:#EDE9FE;color:#5B21B6;padding:4px 10px;border-radius:8px;font-weight:600;">4️⃣ 평가 & 지급</span>
+            <span style="color:#9CA3AF;">→</span>
+            <span style="background:#FEE2E2;color:#991B1B;padding:4px 10px;border-radius:8px;font-weight:600;">5️⃣ 정산 완료</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
     
     # 대시보드 요약
     st.markdown('<div class="section-title">📊 오늘의 현황</div>', unsafe_allow_html=True)
