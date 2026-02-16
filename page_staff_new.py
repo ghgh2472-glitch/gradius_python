@@ -219,11 +219,11 @@ def _search_staff(df_staff, search_q, gender_f, age_filter, rec_filter,
 
 
 # ==============================================================================
-# 1. 탭1: 인력배정
+# 1. 탭1: 인력배정 (좌우분할 UI)
 # ==============================================================================
 
 def tab_assignment(data):
-    """인력배정 — 견적품목 기반 + 본사인원 + 고도화 검색 + 다중배정"""
+    """인력배정 — 좌: 검색/추가 | 우: 배정현황 실시간 표시"""
     df_inq = data.get('inq', pd.DataFrame())
     df_staff = data.get('staff', pd.DataFrame())
 
@@ -264,217 +264,235 @@ def tab_assignment(data):
                 </div>
                 """, unsafe_allow_html=True)
 
-    # ── 인력 배정 ──
-    st.markdown('<div class="section-title">🎯 인력 배정</div>', unsafe_allow_html=True)
-    if 'assign_cart' not in st.session_state:
-        st.session_state.assign_cart = []
+    # ================================================================
+    # 좌우 분할 레이아웃
+    # ================================================================
+    col_left, col_right = st.columns([1.3, 1])
 
-    # 직군 선택
-    role_options = [rs['role'] for rs in role_status] if role_status else []
-    role_options.append("기타 (직접입력)")
-    col_role, col_custom = st.columns([2, 1])
-    with col_role:
-        sel_role = st.selectbox("배정 직군", role_options, key="assign_role")
-    with col_custom:
-        if sel_role == "기타 (직접입력)":
-            sel_role = st.text_input("직군명 입력", key="custom_role")
-        else:
-            st.empty()
+    # ── 왼쪽: 검색 & 추가 ──
+    with col_left:
+        st.markdown('<div class="section-title">🎯 인력 배정</div>', unsafe_allow_html=True)
+        if 'assign_cart' not in st.session_state:
+            st.session_state.assign_cart = []
 
-    role_info = next((rs for rs in role_status if rs['role'] == sel_role), None)
-    default_rate = role_info['pay_rate'] if role_info else 100000
-    default_days = role_info['days'] if role_info else 1
-
-    # ── 본사 인원 배정 ──
-    st.markdown("##### 🏢 본사 인원 배정")
-    hq_cols = st.columns(len(db.HQ_STAFF) + 1)
-    for i, hq in enumerate(db.HQ_STAFF):
-        with hq_cols[i]:
-            if st.button(f"➕ {hq['이름']}", key=f"hq_{hq['이름']}", use_container_width=True):
-                st.session_state.assign_cart.append({
-                    '인력명': hq['이름'], '구분': '본사',
-                    '직무': sel_role if sel_role else hq['직무'],
-                    '지급단가': 0, '근무일수': default_days, '총지급액': 0,
-                })
-                st.rerun()
-
-    # ── 외부 인력 검색 (고도화 필터) ──
-    st.markdown("##### 👥 외부 인력 검색")
-
-    # 기본 검색
-    col_name, col_gender = st.columns([3, 1])
-    with col_name:
-        search_q = st.text_input("🔍 이름 / 지역 / 직무 검색", placeholder="예: 김, 서울, 경호",
-                                 key="staff_search")
-    with col_gender:
-        gender_f = st.radio("성별", ["전체", "M", "F"], horizontal=True, key="gender_f")
-
-    # 상세 필터 (Expander)
-    with st.expander("🔧 상세 필터 (연령대·추천도·키·총점·영어·운전 등)", expanded=False):
-        fc1, fc2, fc3 = st.columns(3)
-        with fc1:
-            age_filter = st.multiselect("연령대", ["20대", "30대", "40대", "50대↑"], key="age_f")
-            rec_filter = st.multiselect("추천도", ["우선투입", "일반", "보류"], key="rec_f")
-        with fc2:
-            role_filter = st.text_input("가능직무", placeholder="예: 경호, 안내, 의전", key="role_f")
-            region_filter = st.text_input("이동가능지역", placeholder="예: 서울, 경기", key="region_f")
-        with fc3:
-            min_height = st.number_input("최소 키(cm)", min_value=0, value=0, step=5, key="height_f")
-            min_score = st.number_input("최소 총점", min_value=0, value=0, step=10, key="score_f")
-            ec1, ec2 = st.columns(2)
-            with ec1:
-                english_f = st.selectbox("영어", ["무관", "가능"], key="eng_f")
-            with ec2:
-                driving_f = st.selectbox("운전", ["무관", "가능"], key="drv_f")
-
-    # 검색 실행
-    col_ai, col_manual = st.columns(2)
-    do_ai = col_ai.button("🤖 AI 추천", use_container_width=True, type="primary", key="ai_btn")
-    do_search = col_manual.button("🔍 검색", use_container_width=True, key="search_btn")
-
-    if do_ai or do_search:
-        with st.spinner("인력을 검색 중..."):
-            if do_ai:
-                from smart_assignment import SmartAssignment
-                dispatch_data = db.load_dispatch_data()
-                df_dispatch = dispatch_data.get('dispatch', pd.DataFrame())
-                location = str(sel.get('장소', ''))
-                g_val = gender_f if gender_f != "전체" else None
-                result = SmartAssignment.ai_recommend(
-                    staff_df=df_staff, dispatch_df=df_dispatch,
-                    job_type=sel_role, location=location.split()[0] if location else None,
-                    gender=g_val, top_n=20)
+        # 직군 선택
+        role_options = [rs['role'] for rs in role_status] if role_status else []
+        role_options.append("기타 (직접입력)")
+        col_role, col_custom = st.columns([2, 1])
+        with col_role:
+            sel_role = st.selectbox("배정 직군", role_options, key="assign_role")
+        with col_custom:
+            if sel_role == "기타 (직접입력)":
+                sel_role = st.text_input("직군명 입력", key="custom_role")
             else:
-                result = _search_staff(
-                    df_staff, search_q, gender_f, age_filter, rec_filter,
-                    role_filter, region_filter, min_height, min_score,
-                    english_f, driving_f)
+                st.empty()
 
-            st.session_state.search_results = result
-            st.session_state.search_done = True
+        role_info = next((rs for rs in role_status if rs['role'] == sel_role), None)
+        default_rate = role_info['pay_rate'] if role_info else 100000
+        default_days = role_info['days'] if role_info else 1
 
-    # 검색 결과 표시 + 체크박스
-    if st.session_state.get('search_done') and not st.session_state.get('search_results', pd.DataFrame()).empty:
-        results = st.session_state.search_results
-        st.markdown(f"**{len(results)}명 검색됨**")
-
-        selected_indices = []
-        for idx, row in results.reset_index(drop=True).iterrows():
-            name = row.get('이름', 'N/A')
-            gender = row.get('성별', '-')
-            age = row.get('나이', '-')
-            region = row.get('이동가능지역', row.get('거주지', '-'))
-            role = row.get('가능직무', '-')
-            height = row.get('키', '-')
-            score = row.get('총점', '-')
-            recommend = row.get('추천도', '-')
-            ai_score = row.get('AI점수', '')
-            ai_txt = f" · AI:{ai_score}" if ai_score != '' else ''
-
-            label = (f"{name}  |  {gender}/{age}  |  📍{region}  |  🔧{role}  "
-                     f"|  📏{height}cm  |  ⭐{score}  |  {recommend}{ai_txt}")
-
-            if st.checkbox(label, key=f"staff_sel_{idx}"):
-                selected_indices.append(idx)
-
-        if selected_indices:
-            pay_rate = st.number_input("지급단가 (원/일)", value=default_rate, step=10000, key="batch_rate")
-            work_days = st.number_input("근무일수", value=default_days, min_value=1, key="batch_days")
-
-            if st.button(f"✅ 선택한 {len(selected_indices)}명 배정 추가", type="primary",
-                         use_container_width=True, key="add_selected"):
-                for si in selected_indices:
-                    row = results.iloc[si]
+        # ── 본사 인력 ──
+        st.markdown("##### 🏢 본사 인원 배정")
+        hq_cols = st.columns(min(len(db.HQ_STAFF) + 1, 5))
+        for i, hq in enumerate(db.HQ_STAFF):
+            with hq_cols[i % len(hq_cols)]:
+                if st.button(f"➕ {hq['이름']}", key=f"hq_{hq['이름']}", use_container_width=True):
                     st.session_state.assign_cart.append({
-                        '인력명': row.get('이름', ''),
-                        '구분': '외부',
-                        '직무': sel_role,
-                        '지급단가': int(pay_rate),
-                        '근무일수': int(work_days),
-                        '총지급액': int(pay_rate) * int(work_days),
+                        '인력명': hq['이름'], '구분': '본사',
+                        '직무': sel_role if sel_role else hq['직무'],
+                        '지급단가': 0, '근무일수': default_days, '총지급액': 0,
                     })
-                st.rerun()
-
-    # ── 배정 카트 ──
-    cart = st.session_state.assign_cart
-    if cart:
-        st.markdown(f'<div class="section-title">🛒 배정 대기 ({len(cart)}명)</div>', unsafe_allow_html=True)
-        st.dataframe(pd.DataFrame(cart), use_container_width=True, hide_index=True)
-
-        col_act1, col_act2 = st.columns(2)
-        with col_act1:
-            if st.button("💾 배정 확정 (시트 저장)", type="primary", use_container_width=True, key="confirm_cart"):
-                success_count = 0
-                with st.spinner("배정 정보를 저장 중..."):
-                    for item in cart:
-                        assignment_dict = {
-                            "배정ID": "", "문의ID": sel_id,
-                            "행사명": sel.get('행사명', ''),
-                            "인력명": item['인력명'], "구분": item['구분'],
-                            "직무": item['직무'], "연락처": "",
-                            "지급단가": item['지급단가'], "근무일수": item['근무일수'],
-                            "총지급액": item['총지급액'], "지급상태": "배정중",
-                            "배정일시": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                        }
-                        if db.save_assignment_record(assignment_dict):
-                            success_count += 1
-
-                if success_count > 0:
-                    _auto_update_status(sel_id, role_status)
-                    st.session_state.assign_cart = []
-                    st.cache_data.clear()
-                    st.balloons()
-                    st.success(f"✅ {success_count}명 배정 완료!")
                     st.rerun()
+
+        # ── 외부 인력 검색 ──
+        st.markdown("##### 👥 외부 인력 검색")
+        col_name, col_gender = st.columns([3, 1])
+        with col_name:
+            search_q = st.text_input("🔍 이름 / 지역 / 직무 검색", placeholder="예: 김, 서울, 경호",
+                                     key="staff_search")
+        with col_gender:
+            gender_f = st.radio("성별", ["전체", "M", "F"], horizontal=True, key="gender_f")
+
+        with st.expander("🔧 상세 필터", expanded=False):
+            fc1, fc2, fc3 = st.columns(3)
+            with fc1:
+                age_filter = st.multiselect("연령대", ["20대", "30대", "40대", "50대↑"], key="age_f")
+                rec_filter = st.multiselect("추천도", ["우선투입", "일반", "보류"], key="rec_f")
+            with fc2:
+                role_filter = st.text_input("가능직무", placeholder="예: 경호, 안내", key="role_f")
+                region_filter = st.text_input("이동가능지역", placeholder="예: 서울, 경기", key="region_f")
+            with fc3:
+                min_height = st.number_input("최소 키(cm)", min_value=0, value=0, step=5, key="height_f")
+                min_score = st.number_input("최소 총점", min_value=0, value=0, step=10, key="score_f")
+                ec1, ec2 = st.columns(2)
+                with ec1:
+                    english_f = st.selectbox("영어", ["무관", "가능"], key="eng_f")
+                with ec2:
+                    driving_f = st.selectbox("운전", ["무관", "가능"], key="drv_f")
+
+        col_ai, col_manual = st.columns(2)
+        do_ai = col_ai.button("🤖 AI 추천", use_container_width=True, type="primary", key="ai_btn")
+        do_search = col_manual.button("🔍 검색", use_container_width=True, key="search_btn")
+
+        if do_ai or do_search:
+            with st.spinner("인력을 검색 중..."):
+                if do_ai:
+                    from smart_assignment import SmartAssignment
+                    dispatch_data = db.load_dispatch_data()
+                    df_dispatch = dispatch_data.get('dispatch', pd.DataFrame())
+                    location = str(sel.get('장소', ''))
+                    g_val = gender_f if gender_f != "전체" else None
+                    result = SmartAssignment.ai_recommend(
+                        staff_df=df_staff, dispatch_df=df_dispatch,
+                        job_type=sel_role, location=location.split()[0] if location else None,
+                        gender=g_val, top_n=20)
                 else:
-                    st.error("❌ 배정 저장 실패")
-        with col_act2:
-            if st.button("🗑️ 카트 비우기", use_container_width=True, key="clear_cart"):
-                st.session_state.assign_cart = []
-                st.rerun()
+                    result = _search_staff(
+                        df_staff, search_q, gender_f, age_filter, rec_filter,
+                        role_filter, region_filter, min_height, min_score,
+                        english_f, driving_f)
 
-    # ── 배정된 인력 ──
-    st.markdown('<div class="section-title">📋 배정된 인력</div>', unsafe_allow_html=True)
-    if st.button("🔄 새로고침", key="refresh_assignments"):
-        st.cache_data.clear()
-        st.rerun()
+                st.session_state.search_results = result
+                st.session_state.search_done = True
 
-    assignments_df = db.get_assignments_by_inquiry(sel_id)
-    if not assignments_df.empty:
-        display_cols = ['인력명', '구분', '직무', '지급단가', '근무일수', '총지급액', '지급상태', '배정일시']
-        avail = [c for c in display_cols if c in assignments_df.columns]
-        st.dataframe(assignments_df[avail], use_container_width=True, hide_index=True)
+        # 검색 결과 (컴팩트)
+        if st.session_state.get('search_done') and not st.session_state.get('search_results', pd.DataFrame()).empty:
+            results = st.session_state.search_results
+            st.markdown(f"**{len(results)}명 검색됨**")
 
-        st.markdown("##### 🔧 배정 관리")
-        name_col = '인력명' if '인력명' in assignments_df.columns else '이름'
-        assign_labels = [f"{row.get(name_col, 'N/A')} — {row.get('직무', row.get('역할', '-'))}"
-                         for _, row in assignments_df.iterrows()]
-        sel_assign_idx = st.selectbox("대상", range(len(assign_labels)),
-                                      format_func=lambda x: assign_labels[x], key="manage_assign")
-        sel_assign = assignments_df.iloc[sel_assign_idx]
+            selected_indices = []
+            for idx, row in results.reset_index(drop=True).iterrows():
+                name = row.get('이름', 'N/A')
+                gender = row.get('성별', '-')
+                age = row.get('나이', '-')
+                region = row.get('이동가능지역', row.get('거주지', '-'))
+                role = row.get('가능직무', '-')
+                height = row.get('키', '-')
+                score = row.get('총점', '-')
+                recommend = row.get('추천도', '-')
+                ai_score = row.get('AI점수', '')
+                ai_txt = f" · AI:{ai_score}" if ai_score != '' else ''
 
-        col_m1, col_m2, col_m3 = st.columns(3)
-        with col_m1:
-            if st.button("📊 확정", key="confirm_one", use_container_width=True):
-                aid = sel_assign.get('배정ID', '')
-                if aid and db.update_assignment_status(aid, '확정'):
-                    _auto_update_status(sel_id, role_status)
-                    st.cache_data.clear()
-                    st.success("✅ 확정!")
+                label = (f"{name}  |  {gender}/{age}  |  📍{region}  |  🔧{role}  "
+                         f"|  📏{height}cm  |  ⭐{score}  |  {recommend}{ai_txt}")
+
+                if st.checkbox(label, key=f"staff_sel_{idx}"):
+                    selected_indices.append(idx)
+
+            if selected_indices:
+                pay_rate = st.number_input("지급단가 (원/일)", value=default_rate, step=10000, key="batch_rate")
+                work_days = st.number_input("근무일수", value=default_days, min_value=1, key="batch_days")
+
+                if st.button(f"✅ 선택한 {len(selected_indices)}명 배정 추가", type="primary",
+                             use_container_width=True, key="add_selected"):
+                    for si in selected_indices:
+                        row = results.iloc[si]
+                        st.session_state.assign_cart.append({
+                            '인력명': row.get('이름', ''),
+                            '구분': '외부',
+                            '직무': sel_role,
+                            '지급단가': int(pay_rate),
+                            '근무일수': int(work_days),
+                            '총지급액': int(pay_rate) * int(work_days),
+                        })
                     st.rerun()
-        with col_m2:
-            if st.button("❌ 취소", key="cancel_one", use_container_width=True):
-                aid = sel_assign.get('배정ID', '')
-                if aid and db.update_assignment_status(aid, '취소'):
-                    st.cache_data.clear()
-                    st.success("취소 완료")
+
+    # ── 오른쪽: 배정 현황 실시간 ──
+    with col_right:
+        # 배정 카트
+        cart = st.session_state.get('assign_cart', [])
+        if cart:
+            st.markdown(f'<div class="section-title">🛒 배정 대기 ({len(cart)}명)</div>', unsafe_allow_html=True)
+            cart_df = pd.DataFrame(cart)
+            st.dataframe(cart_df, use_container_width=True, hide_index=True, height=min(200, 35 * len(cart) + 38))
+
+            # 개별 삭제
+            for ci_idx in range(len(cart)):
+                item = cart[ci_idx]
+                dc1, dc2 = st.columns([3, 1])
+                with dc2:
+                    if st.button(f"🗑️", key=f"del_cart_{ci_idx}", help=f"{item['인력명']} 제거"):
+                        st.session_state.assign_cart.pop(ci_idx)
+                        st.rerun()
+
+            col_act1, col_act2 = st.columns(2)
+            with col_act1:
+                if st.button("💾 배정 확정", type="primary", use_container_width=True, key="confirm_cart"):
+                    success_count = 0
+                    with st.spinner("배정 정보를 저장 중..."):
+                        for item in cart:
+                            assignment_dict = {
+                                "배정ID": "", "문의ID": sel_id,
+                                "행사명": sel.get('행사명', ''),
+                                "인력명": item['인력명'], "구분": item['구분'],
+                                "직무": item['직무'], "연락처": "",
+                                "지급단가": item['지급단가'], "근무일수": item['근무일수'],
+                                "총지급액": item['총지급액'], "지급상태": "배정중",
+                                "배정일시": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                            }
+                            if db.save_assignment_record(assignment_dict):
+                                success_count += 1
+
+                    if success_count > 0:
+                        _auto_update_status(sel_id, role_status)
+                        st.session_state.assign_cart = []
+                        st.cache_data.clear()
+                        st.balloons()
+                        st.success(f"✅ {success_count}명 배정 완료!")
+                        st.rerun()
+                    else:
+                        st.error("❌ 배정 저장 실패")
+            with col_act2:
+                if st.button("🗑️ 전체 비우기", use_container_width=True, key="clear_cart"):
+                    st.session_state.assign_cart = []
                     st.rerun()
-        with col_m3:
-            total_assigned = len(assignments_df)
-            total_hq = len(assignments_df[assignments_df['구분'].astype(str) == '본사']) if '구분' in assignments_df.columns else 0
-            st.metric("현황", f"외부 {total_assigned - total_hq} + 본사 {total_hq}")
-    else:
-        st.info("👉 아직 배정된 인력이 없습니다.")
+        else:
+            st.markdown('<div class="section-title">🛒 배정 대기</div>', unsafe_allow_html=True)
+            st.info("👈 왼쪽에서 인력을 검색하고 추가하세요")
+
+        # ── 배정된 인력 ──
+        st.markdown('<div class="section-title">📋 배정된 인력</div>', unsafe_allow_html=True)
+        if st.button("🔄 새로고침", key="refresh_assignments"):
+            st.cache_data.clear()
+            st.rerun()
+
+        assignments_df = db.get_assignments_by_inquiry(sel_id)
+        if not assignments_df.empty:
+            display_cols = ['인력명', '구분', '직무', '지급단가', '근무일수', '총지급액', '지급상태']
+            avail = [c for c in display_cols if c in assignments_df.columns]
+            st.dataframe(assignments_df[avail], use_container_width=True, hide_index=True,
+                         height=min(300, 35 * len(assignments_df) + 38))
+
+            st.markdown("##### 🔧 배정 관리")
+            name_col = '인력명' if '인력명' in assignments_df.columns else '이름'
+            assign_labels = [f"{row.get(name_col, 'N/A')} — {row.get('직무', row.get('역할', '-'))}"
+                             for _, row in assignments_df.iterrows()]
+            sel_assign_idx = st.selectbox("대상", range(len(assign_labels)),
+                                          format_func=lambda x: assign_labels[x], key="manage_assign")
+            sel_assign = assignments_df.iloc[sel_assign_idx]
+
+            col_m1, col_m2, col_m3 = st.columns(3)
+            with col_m1:
+                if st.button("📊 확정", key="confirm_one", use_container_width=True):
+                    aid = sel_assign.get('배정ID', '')
+                    if aid and db.update_assignment_status(aid, '확정'):
+                        _auto_update_status(sel_id, role_status)
+                        st.cache_data.clear()
+                        st.success("✅ 확정!")
+                        st.rerun()
+            with col_m2:
+                if st.button("❌ 취소", key="cancel_one", use_container_width=True):
+                    aid = sel_assign.get('배정ID', '')
+                    if aid and db.update_assignment_status(aid, '취소'):
+                        st.cache_data.clear()
+                        st.success("취소 완료")
+                        st.rerun()
+            with col_m3:
+                total_assigned = len(assignments_df)
+                total_hq = len(assignments_df[assignments_df['구분'].astype(str) == '본사']) if '구분' in assignments_df.columns else 0
+                st.metric("현황", f"외부 {total_assigned - total_hq} + 본사 {total_hq}")
+        else:
+            st.info("👉 아직 배정된 인력이 없습니다.")
 
 
 # ==============================================================================

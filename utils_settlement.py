@@ -112,27 +112,144 @@ class SettlementBrain:
         }
 
     # ... (HTML 생성 함수들은 기존과 동일하게 유지) ...
-    def get_invoice_html(self, client_name, project_name, date_str, amount):
+    def get_invoice_html(self, client_name, project_name, date_str, amount, items=None):
+        """
+        거래명세서 HTML — items가 있으면 품목별 상세 표시
+        items: list of dict [{'품목명': ..., '수량': ..., '단가': ..., '금액': ...}, ...]
+        """
         now = datetime.now().strftime("%Y-%m-%d")
+        amount = int(amount) if amount else 0
         amount_vat = int(amount * 1.1)
         vat = amount_vat - amount
-        return f"""<html><body>
-        <h1 style="text-align:center;">거 래 명 세 서</h1>
-        <table border="1" style="width:100%; border-collapse:collapse; text-align:center;">
-            <tr><th>날짜</th><td>{now}</td><th>공급받는자</th><td>{client_name}</td></tr>
-            <tr><th>품목</th><td>{project_name}</td><th>공급가액</th><td>{amount:,}</td></tr>
-            <tr><th>세액</th><td>{vat:,}</td><th>합계</th><td><b>{amount_vat:,}</b></td></tr>
-        </table></body></html>"""
 
-    def get_payslip_html(self, staff_name, project_name, pay, days, total):
-        tax = int(total * 0.033)
+        # 품목별 상세 행
+        item_rows = ""
+        if items and len(items) > 0:
+            for idx, it in enumerate(items, 1):
+                it_name = it.get('품목명', it.get('직종', f'항목{idx}'))
+                it_qty = it.get('수량', it.get('인원수', 1))
+                it_unit = it.get('단가', it.get('단가(일)', 0))
+                it_days = it.get('일수', it.get('일수', 1))
+                it_amt = it.get('금액', it.get('소계', 0))
+                try:
+                    it_qty = int(float(it_qty or 0))
+                    it_unit = int(float(it_unit or 0))
+                    it_days = int(float(it_days or 1))
+                    it_amt = int(float(it_amt or 0))
+                except:
+                    it_qty, it_unit, it_days, it_amt = 1, 0, 1, 0
+                if it_amt == 0:
+                    it_amt = it_qty * it_unit * it_days
+                item_rows += f"""
+                <tr>
+                    <td style="padding:8px; border:1px solid #ddd;">{idx}</td>
+                    <td style="padding:8px; border:1px solid #ddd; text-align:left;">{it_name}</td>
+                    <td style="padding:8px; border:1px solid #ddd;">{it_qty}</td>
+                    <td style="padding:8px; border:1px solid #ddd;">{it_unit:,}</td>
+                    <td style="padding:8px; border:1px solid #ddd;">{it_days}</td>
+                    <td style="padding:8px; border:1px solid #ddd; text-align:right; font-weight:bold;">{it_amt:,}</td>
+                </tr>"""
+        else:
+            item_rows = f"""
+            <tr>
+                <td style="padding:8px; border:1px solid #ddd;">1</td>
+                <td style="padding:8px; border:1px solid #ddd; text-align:left;">{project_name}</td>
+                <td style="padding:8px; border:1px solid #ddd;">1</td>
+                <td style="padding:8px; border:1px solid #ddd;">{amount:,}</td>
+                <td style="padding:8px; border:1px solid #ddd;">1</td>
+                <td style="padding:8px; border:1px solid #ddd; text-align:right; font-weight:bold;">{amount:,}</td>
+            </tr>"""
+
+        return f"""<html><body style="font-family:'맑은 고딕',sans-serif; padding:20px;">
+        <div style="border:2px solid #333; padding:24px;">
+        <h1 style="text-align:center; border-bottom:3px double #333; padding-bottom:12px; margin-bottom:20px;">거 래 명 세 서</h1>
+        <table style="width:100%; border-collapse:collapse; margin-bottom:16px;">
+            <tr>
+                <th style="background:#f0f0f0; padding:8px; border:1px solid #ddd; width:15%;">발행일</th>
+                <td style="padding:8px; border:1px solid #ddd; width:35%;">{now}</td>
+                <th style="background:#f0f0f0; padding:8px; border:1px solid #ddd; width:15%;">공급받는자</th>
+                <td style="padding:8px; border:1px solid #ddd; width:35%; font-weight:bold;">{client_name}</td>
+            </tr>
+            <tr>
+                <th style="background:#f0f0f0; padding:8px; border:1px solid #ddd;">행사명</th>
+                <td style="padding:8px; border:1px solid #ddd;" colspan="3">{project_name}</td>
+            </tr>
+            <tr>
+                <th style="background:#f0f0f0; padding:8px; border:1px solid #ddd;">행사일</th>
+                <td style="padding:8px; border:1px solid #ddd;" colspan="3">{date_str}</td>
+            </tr>
+        </table>
+
+        <table style="width:100%; border-collapse:collapse; margin-bottom:16px;">
+            <thead>
+                <tr style="background:#2563eb; color:white;">
+                    <th style="padding:8px; border:1px solid #ddd; width:8%;">No</th>
+                    <th style="padding:8px; border:1px solid #ddd;">품목</th>
+                    <th style="padding:8px; border:1px solid #ddd; width:10%;">수량</th>
+                    <th style="padding:8px; border:1px solid #ddd; width:15%;">단가</th>
+                    <th style="padding:8px; border:1px solid #ddd; width:10%;">일수</th>
+                    <th style="padding:8px; border:1px solid #ddd; width:18%;">금액</th>
+                </tr>
+            </thead>
+            <tbody>
+                {item_rows}
+            </tbody>
+        </table>
+
+        <table style="width:100%; border-collapse:collapse;">
+            <tr>
+                <th style="background:#f0f0f0; padding:10px; border:1px solid #ddd; width:25%;">공급가액</th>
+                <td style="padding:10px; border:1px solid #ddd; text-align:right; width:25%;">{amount:,}원</td>
+                <th style="background:#f0f0f0; padding:10px; border:1px solid #ddd; width:25%;">부가세(10%)</th>
+                <td style="padding:10px; border:1px solid #ddd; text-align:right; width:25%;">{vat:,}원</td>
+            </tr>
+            <tr>
+                <th style="background:#1e40af; color:white; padding:12px; border:1px solid #ddd;" colspan="2">합 계</th>
+                <td style="padding:12px; border:1px solid #ddd; text-align:right; font-size:18px; font-weight:bold; color:#1e40af;" colspan="2">{amount_vat:,}원</td>
+            </tr>
+        </table>
+        </div>
+        </body></html>"""
+
+    def get_payslip_html(self, staff_name, project_name, pay, days, total, tax_rate=0.033):
+        """급여명세서 HTML — tax_rate: 0.033 (3.3%) 또는 0.009 (0.9%)"""
+        tax_rate = float(tax_rate) if tax_rate else 0.033
+        tax = int(total * tax_rate)
         net = total - tax
-        return f"""<html><body>
-        <h2 style="text-align:center;">급여명세서 ({staff_name})</h2>
-        <div style="border:1px solid #ccc; padding:20px;">
-            <p><b>프로젝트:</b> {project_name}</p>
-            <p><b>지급내역:</b> {pay:,}원 x {days}일 = {total:,}원</p>
-            <p><b>공제내역:</b> 소득세(3.3%) -{tax:,}원</p>
-            <hr>
-            <h3 style="text-align:right; color:blue;">실 수령액: {net:,}원</h3>
+        tax_pct = f"{tax_rate * 100:.1f}%"
+        tax_label = "소득세(3.3%)" if abs(tax_rate - 0.033) < 0.001 else f"원천징수({tax_pct})"
+        return f"""<html><body style="font-family:'맑은 고딕',sans-serif; padding:16px;">
+        <div style="border:2px solid #333; padding:20px;">
+        <h2 style="text-align:center; border-bottom:2px solid #333; padding-bottom:8px;">급여명세서</h2>
+        <table style="width:100%; border-collapse:collapse; margin:12px 0;">
+            <tr>
+                <th style="background:#f0f0f0; padding:8px; border:1px solid #ddd; width:25%;">성명</th>
+                <td style="padding:8px; border:1px solid #ddd; font-weight:bold;">{staff_name}</td>
+            </tr>
+            <tr>
+                <th style="background:#f0f0f0; padding:8px; border:1px solid #ddd;">프로젝트</th>
+                <td style="padding:8px; border:1px solid #ddd;">{project_name}</td>
+            </tr>
+        </table>
+        <table style="width:100%; border-collapse:collapse; margin:12px 0;">
+            <tr style="background:#2563eb; color:white;">
+                <th style="padding:8px; border:1px solid #ddd;">항목</th>
+                <th style="padding:8px; border:1px solid #ddd;">내용</th>
+                <th style="padding:8px; border:1px solid #ddd; text-align:right;">금액</th>
+            </tr>
+            <tr>
+                <td style="padding:8px; border:1px solid #ddd;">기본급</td>
+                <td style="padding:8px; border:1px solid #ddd;">{pay:,}원 × {days}일</td>
+                <td style="padding:8px; border:1px solid #ddd; text-align:right;">{total:,}원</td>
+            </tr>
+            <tr style="color:#dc2626;">
+                <td style="padding:8px; border:1px solid #ddd;">공제</td>
+                <td style="padding:8px; border:1px solid #ddd;">{tax_label}</td>
+                <td style="padding:8px; border:1px solid #ddd; text-align:right;">-{tax:,}원</td>
+            </tr>
+        </table>
+        <div style="background:#1e40af; color:white; padding:14px; text-align:right; border-radius:4px; margin-top:12px;">
+            <span style="font-size:14px;">실 수령액</span>
+            <span style="font-size:22px; font-weight:bold; margin-left:12px;">{net:,}원</span>
+        </div>
         </div></body></html>"""

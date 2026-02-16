@@ -185,29 +185,106 @@ def show_settlement_overview():
                 )
                 st.success(f"✅ 입금이 저장되었습니다!\n- 합계: ₩{int(total_new_paid):,}")
                 st.balloons()
-                # 캐시 무효화해서 테이블 새로고침
+                # 캐시만 무효화 (rerun 제거 — 데이터 증발 방지)
                 st.cache_data.clear()
-                import time
-                time.sleep(1)
-                st.rerun()
             else:
                 st.error("❌ 입금 금액을 입력해주세요.")
     
-    # 테이블 표시
-    st.markdown("### 📋 전체 계약 정산 현황")
+    # 테이블 표시 — 직접 수정 가능한 data_editor 사용
+    st.markdown("### 📋 전체 계약 정산 현황 (직접 수정 가능)")
+    st.caption("💡 받은금액, 잔액 등을 직접 수정 후 '변경사항 저장' 버튼을 클릭하세요.")
     
     display_cols = ['문의ID', '업체', '현장명', '공급가액', '부가세', '받은금액', '잔액', '진행상황']
     available_cols = [c for c in display_cols if c in settlement_df.columns]
     
     if available_cols:
-        display_df = settlement_df[available_cols].copy()
-        st.dataframe(
-            display_df,
+        edit_df = settlement_df[available_cols].copy()
+        # 숫자 컬럼 변환
+        for nc in ['공급가액', '부가세', '받은금액', '잔액']:
+            if nc in edit_df.columns:
+                edit_df[nc] = pd.to_numeric(edit_df[nc], errors='coerce').fillna(0).astype(int)
+
+        # 수정 가능 컬럼 설정
+        editable_cols = {}
+        for c in available_cols:
+            if c in ['받은금액', '잔액']:
+                editable_cols[c] = st.column_config.NumberColumn(c, min_value=0, step=10000, format="%d")
+            elif c in ['진행상황']:
+                editable_cols[c] = st.column_config.SelectboxColumn(c, options=["미입금", "부분입금", "입금완료"])
+            else:
+                editable_cols[c] = st.column_config.Column(c, disabled=True)
+
+        edited = st.data_editor(
+            edit_df,
+            column_config=editable_cols,
             use_container_width=True,
-            hide_index=True
+            hide_index=True,
+            num_rows="fixed",
+            key="settlement_editor"
         )
+        
+        if st.button("💾 변경사항 저장", key="save_manual_edit"):
+            _save_count = 0
+            for idx in range(len(edited)):
+                orig = edit_df.iloc[idx]
+                curr = edited.iloc[idx]
+                changed = False
+                for cc in ['받은금액', '잔액', '진행상황']:
+                    if cc in orig.index and str(orig[cc]) != str(curr[cc]):
+                        changed = True
+                        break
+                if changed:
+                    inq_id_edit = str(curr.get('문의ID', '')).strip()
+                    if inq_id_edit:
+                        _paid_v = int(curr.get('받은금액', 0))
+                        _bal_v = int(curr.get('잔액', 0))
+                        _status_v = str(curr.get('진행상황', ''))
+                        _direct_save_settlement(inq_id_edit, _paid_v, _bal_v, _status_v)
+                        _save_count += 1
+            if _save_count > 0:
+                st.success(f"✅ {_save_count}건 저장 완료!")
+                st.cache_data.clear()
+            else:
+                st.info("변경된 데이터가 없습니다.")
     else:
         st.warning("⚠️ 표시할 컬럼이 없습니다")
+
+
+def _direct_save_settlement(inquiry_id, paid, balance, status):
+    """받은금액/잔액/진행상황을 직접 저장 (data_editor 연동)"""
+    try:
+        client = db.get_connection()
+        if not client:
+            return False
+        sh = client.open_by_key(db.SHEET_ID)
+        wks = sh.worksheet("계약건은청구금액적기")
+        headers = wks.row_values(1)
+        all_records = wks.get_all_records()
+        target_row = None
+        for idx, record in enumerate(all_records, start=2):
+            if str(record.get('문의ID', '')).strip() == str(inquiry_id).strip():
+                target_row = idx
+                break
+        if not target_row:
+            return False
+        col_map = {}
+        for i, h in enumerate(headers, 1):
+            if '받은금액' in str(h):
+                col_map['받은금액'] = i
+            elif h == '잔액':
+                col_map['잔액'] = i
+            elif h == '진행상황':
+                col_map['진행상황'] = i
+        if '받은금액' in col_map:
+            wks.update_cell(target_row, col_map['받은금액'], int(paid))
+        if '잔액' in col_map:
+            wks.update_cell(target_row, col_map['잔액'], int(balance))
+        if '진행상황' in col_map and status:
+            wks.update_cell(target_row, col_map['진행상황'], status)
+        return True
+    except Exception as e:
+        st.error(f"저장 실패: {e}")
+        return False
 
 
 def save_payment_record(inquiry_id, total_paid, total_invoice):
@@ -362,10 +439,24 @@ def show_settlement_detail(data):
         c1, c2 = st.columns(2)
         with c1:
             st.subheader("거래명세서 발행")
-            # 견적상세 데이터로 정확한 거래명세서 생성
+            # 견적품목 데이터로 세부 항목 조회
             invoice_supply = summary['매출']
-            html = brain.get_invoice_html(row['업체명'], row['행사명'], row.get('일시','-'), invoice_supply)
-            st.components.v1.html(html, height=500, scrolling=True)
+            invoice_items = None
+            try:
+                df_items = data.get('estimate_items', pd.DataFrame())
+                if not df_items.empty and '문의ID' in df_items.columns:
+                    matched_items = df_items[df_items['문의ID'].astype(str).str.strip() == inq_id]
+                    if not matched_items.empty:
+                        invoice_items = matched_items.to_dict('records')
+            except Exception:
+                pass
+            # 행사일 표시
+            event_date = str(row.get('행사시작일', row.get('일시', '-')))
+            end_date = str(row.get('행사종료일', ''))
+            if end_date and end_date.strip() and end_date != event_date:
+                event_date = f"{event_date} ~ {end_date}"
+            html = brain.get_invoice_html(row['업체명'], row['행사명'], event_date, invoice_supply, items=invoice_items)
+            st.components.v1.html(html, height=550, scrolling=True)
         with c2:
             st.subheader("입금 관리")
             cur_status = str(row.get(status_col, '')).strip()
@@ -380,6 +471,17 @@ def show_settlement_detail(data):
                 st.success("✅ 현장 완료 — 아래 인력 급여 탭에서 지급 후 정산 완료 처리하세요.")
 
     with tab_s:
+        # 공제 방식 선택
+        tax_opt_col, _ = st.columns([1, 2])
+        with tax_opt_col:
+            tax_choice = st.radio(
+                "💰 공제 방식 선택",
+                ["3.3% 공제 (사업소득세)", "0.9% 공제 (일용직)"],
+                key=f"tax_choice_{inq_id}",
+                horizontal=True
+            )
+        sel_tax_rate = 0.033 if "3.3%" in tax_choice else 0.009
+
         # 배정기록 시트에서 직접 인력 데이터 조회 (우선)
         inq_id = str(row.get('문의ID', '')).strip()
         assignment_df = pd.DataFrame()
@@ -408,8 +510,8 @@ def show_settlement_detail(data):
                 with st.expander(f"{a_name} ({a_role}) — {a_rate:,}원 × {a_days}일 = {a_total:,}원"):
                     c1, c2 = st.columns([2, 1])
                     with c1:
-                        html_p = brain.get_payslip_html(a_name, row['행사명'], a_rate, a_days, a_total)
-                        st.components.v1.html(html_p, height=350)
+                        html_p = brain.get_payslip_html(a_name, row['행사명'], a_rate, a_days, a_total, tax_rate=sel_tax_rate)
+                        st.components.v1.html(html_p, height=400)
                     with c2:
                         if st.checkbox("이체 완료", key=f"pay_assign_{i}"):
                             st.success("지급 완료됨")
@@ -427,8 +529,8 @@ def show_settlement_detail(data):
                     with st.expander(f"{s['이름']} ({s['지급단가']:,}원 x {s['일수']}일 = {s['총지급액']:,}원)"):
                         c1, c2 = st.columns([2, 1])
                         with c1:
-                            html_p = brain.get_payslip_html(s['이름'], row['행사명'], s['지급단가'], s['일수'], s['총지급액'])
-                            st.components.v1.html(html_p, height=350)
+                            html_p = brain.get_payslip_html(s['이름'], row['행사명'], s['지급단가'], s['일수'], s['총지급액'], tax_rate=sel_tax_rate)
+                            st.components.v1.html(html_p, height=400)
                         with c2:
                             if st.checkbox("이체 완료", key=f"pay_{i}"):
                                 st.success("지급 완료됨")

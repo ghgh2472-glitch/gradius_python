@@ -12,6 +12,20 @@ import data_loader as db
 from datetime import datetime, timedelta
 import json
 
+
+def _parse_event_date(val):
+    """행사시작일/종료일 문자열을 date 객체로 변환"""
+    if not val or str(val).strip() == '':
+        return None
+    s = str(val).strip()
+    for fmt in ('%Y-%m-%d', '%Y/%m/%d', '%Y.%m.%d', '%m/%d/%Y'):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
 # 배정기록 컬럼명 매핑 (시트 실제 컬럼 → 표시명)
 COL_MAP = {
     '배정ID': '배정ID',
@@ -549,9 +563,23 @@ def show(data):
                 input_mode = st.radio("입력 방식", ["단건 입력", "일괄 입력 (전체 인원)"], horizontal=True)
 
                 if input_mode == "단건 입력":
+                    # 행사 기간에서 날짜 상속
+                    sel_proj = projects.loc[sel_idx2]
+                    _s_date = _parse_event_date(sel_proj.get('행사시작일', ''))
+                    _e_date = _parse_event_date(sel_proj.get('행사종료일', ''))
+                    _today = datetime.now().date()
+                    if _s_date and _e_date:
+                        _default_att_date = max(_s_date, min(_today, _e_date))
+                    elif _s_date:
+                        _default_att_date = max(_s_date, _today)
+                    else:
+                        _default_att_date = _today
+
                     c_d, c_s, c_in, c_out = st.columns(4)
                     with c_d:
-                        att_date = st.date_input("출석일자", datetime.now(), key="att_date_single")
+                        att_date = st.date_input("출석일자", _default_att_date, key="att_date_single")
+                        if _s_date and _e_date:
+                            st.caption(f"행사: {_s_date}~{_e_date}")
                     with c_s:
                         att_status = st.selectbox("상태", ["출석", "결근", "지각", "조퇴"], key="att_status_single")
                     with c_in:
@@ -577,7 +605,19 @@ def show(data):
 
                 else:  # 일괄 입력
                     st.caption("선택한 날짜에 전체 배정 인원의 출석을 일괄 기록합니다.")
-                    bulk_date = st.date_input("출석일자", datetime.now(), key="att_date_bulk")
+                    sel_proj_bulk = projects.loc[sel_idx2]
+                    _sb_date = _parse_event_date(sel_proj_bulk.get('행사시작일', ''))
+                    _eb_date = _parse_event_date(sel_proj_bulk.get('행사종료일', ''))
+                    _today_b = datetime.now().date()
+                    if _sb_date and _eb_date:
+                        _default_bulk_date = max(_sb_date, min(_today_b, _eb_date))
+                    elif _sb_date:
+                        _default_bulk_date = max(_sb_date, _today_b)
+                    else:
+                        _default_bulk_date = _today_b
+                    bulk_date = st.date_input("출석일자", _default_bulk_date, key="att_date_bulk")
+                    if _sb_date and _eb_date:
+                        st.caption(f"행사: {_sb_date}~{_eb_date}")
                     bulk_status = st.selectbox("전체 상태", ["출석", "결근", "지각", "조퇴"], key="att_status_bulk")
                     c_bi, c_bo = st.columns(2)
                     with c_bi:
