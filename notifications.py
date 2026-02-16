@@ -190,13 +190,17 @@ def notify_state_change(old_status: str, new_status: str, inquiry_id: str,
     """
     context = context or {}
     
+    # status_config.STATUS_FLOW 기준 상태 전이 템플릿
     templates = {
-        ('문의', '견적대기'): "🧮 견적이 생성되었습니다. (ID: {inquiry_id})",
-        ('견적대기', '계약대기'): "📝 계약이 시작되었습니다. (ID: {inquiry_id})",
-        ('계약대기', '계약완료'): "✅ 계약이 완료되었습니다. (ID: {inquiry_id})",
-        ('계약완료', '배정중'): "👷 인원 배정이 시작되었습니다. (ID: {inquiry_id})",
-        ('배정중', '정산대기'): "💰 정산 준비 중입니다. (ID: {inquiry_id})",
-        ('정산대기', '정산완료'): "🎉 정산이 완료되었습니다. (ID: {inquiry_id})",
+        ('접수', '견적'): "🧮 견적이 생성되었습니다. (ID: {inquiry_id})",
+        ('견적', '체결'): "📝 계약이 체결되었습니다. (ID: {inquiry_id})",
+        ('체결', '배정완료'): "👷 인력 배정이 완료되었습니다. (ID: {inquiry_id})",
+        ('배정완료', '진행중'): "🔥 현장 진행이 시작되었습니다. (ID: {inquiry_id})",
+        ('진행중', '완료'): "✅ 현장이 종료되었습니다. (ID: {inquiry_id})",
+        ('완료', '정산완료'): "🎉 정산이 완료되었습니다. (ID: {inquiry_id})",
+        # 이탈 상태
+        ('접수', '미체결'): "❌ 문의가 미체결 처리되었습니다. (ID: {inquiry_id})",
+        ('견적', '미체결'): "❌ 견적이 미체결 처리되었습니다. (ID: {inquiry_id})",
     }
     
     template = templates.get((old_status, new_status))

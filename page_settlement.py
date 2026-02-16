@@ -2,6 +2,7 @@
 import streamlit as st
 import pandas as pd
 import data_loader as db
+import status_config as sc
 from utils_settlement import SettlementBrain
 import time
 from PIL import Image
@@ -271,7 +272,7 @@ def show_settlement_detail(data):
 
     # 필터링
     if '체결' not in df_inq.columns: df_inq['체결'] = ""
-    mask = df_inq['체결'].astype(str).str.contains("배정완료|입금완료|정산완료", na=False)
+    mask = df_inq['체결'].astype(str).str.contains("|".join(sc.CONFIRMED_STATUSES), na=False)
     targets = df_inq[mask]
     # 정렬 컬럼 존재 여부 확인 (문의날짜가 없으면 첫 컬럼으로 정렬)
     sort_col = '문의날짜' if '문의날짜' in targets.columns else '일시' if '일시' in targets.columns else targets.columns[0]
@@ -316,9 +317,9 @@ def show_settlement_detail(data):
         with c2:
             st.subheader("입금 관리")
             st.info(f"현재 상태: {row['체결']}")
-            if row['체결'] == "배정완료":
+            if row['체결'] == sc.STATUS_FLOW[3]:  # '배정완료'
                 if st.button("💰 입금 확인 (완료처리)"):
-                    db.update_cell("문의작성", row['업체명'], 5, "입금완료")
+                    db.update_cell("문의작성", row['업체명'], 5, sc.STATUS_FLOW[5])  # '완료'
                     st.success("입금 확인됨!"); time.sleep(1); st.rerun()
 
     with tab_s:
@@ -341,10 +342,10 @@ def show_settlement_detail(data):
                         if st.checkbox("이체 완료", key=f"pay_{i}"):
                             st.success("지급 완료됨")
 
-            if row['체결'] == "입금완료":
+            if row['체결'] == sc.STATUS_FLOW[5]:  # '완료'
                 st.divider()
                 if st.button("🏁 최종 정산 완료 (프로젝트 종료)", type="primary"):
-                    db.update_cell("문의작성", row['업체명'], 5, "정산완료")
+                    db.update_cell("문의작성", row['업체명'], 5, sc.STATUS_FLOW[6])  # '정산완료'
                     st.balloons(); st.success("모든 정산이 완료되었습니다!"); st.rerun()
 
 

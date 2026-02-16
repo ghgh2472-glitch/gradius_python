@@ -7,6 +7,7 @@ import utils_dashboard as ud
 import data_loader as db
 from streamlit_calendar import calendar
 from datetime import datetime, timedelta
+import status_config as sc
 
 # ==============================================================================
 # 1. 스타일링
@@ -52,6 +53,22 @@ def apply_styles():
             font-size: 18px; font-weight: 700; color: #111827; margin-bottom: 15px;
             padding-left: 8px; border-left: 4px solid #3B82F6;
         }
+        
+        /* Pipeline Board Styles */
+        .pipeline-stage {
+            border-radius: 12px; padding: 16px; text-align: center;
+            min-height: 110px; position: relative; transition: transform 0.2s;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+        .pipeline-stage:hover { transform: translateY(-3px); box-shadow: 0 4px 16px rgba(0,0,0,0.15); }
+        .pipeline-count { font-size: 36px; font-weight: 800; margin: 4px 0; }
+        .pipeline-label { font-size: 13px; font-weight: 600; opacity: 0.9; }
+        .pipeline-arrow { display: flex; align-items: center; justify-content: center;
+                         font-size: 18px; color: #9CA3AF; padding-top: 30px; }
+        .pipeline-exit { border-radius: 10px; padding: 10px; text-align: center;
+                        border: 1px dashed #D1D5DB; min-height: 70px; }
+        .pipeline-exit-count { font-size: 22px; font-weight: 700; margin: 2px 0; }
+        .pipeline-exit-label { font-size: 11px; font-weight: 600; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -144,7 +161,187 @@ def show(data):
     
     st.markdown("---")
     
-    # 4. 탭 구성
+    # =========================================================================
+    # 4. 파이프라인 보드 (전체 진행 현황)
+    # =========================================================================
+    st.subheader("🔄 파이프라인 보드")
+    st.caption("문의 → 정산완료까지 전체 진행 현황을 한 눈에 확인하세요")
+    
+    # 상태 컬럼 탐지
+    col_status = ud.find_col(df_inq, ["체결", "상태", "진행상태"])
+    
+    if col_status:
+        status_series = df_inq[col_status].astype(str).str.strip()
+        
+        # 각 상태별 건수 집계
+        stage_counts = {}
+        for s in sc.STATUS_FLOW:
+            stage_counts[s] = int((status_series == s).sum())
+        exit_counts = {}
+        for s in sc.STATUS_EXIT:
+            exit_counts[s] = int((status_series == s).sum())
+        
+        # 메인 파이프라인 (7 stages + 6 arrows = 13 columns)
+        cols = st.columns([3, 1, 3, 1, 3, 1, 3, 1, 3, 1, 3, 1, 3])
+        for i, status_name in enumerate(sc.STATUS_FLOW):
+            cfg = sc.STATUS_CONFIG[status_name]
+            col_idx = i * 2
+            with cols[col_idx]:
+                count = stage_counts[status_name]
+                st.markdown(f"""
+                <div class="pipeline-stage" style="background:{cfg['bg']};border:2px solid {cfg['color']};">
+                    <div class="pipeline-label" style="color:{cfg['color']};">{cfg['icon']} {status_name}</div>
+                    <div class="pipeline-count" style="color:{cfg['color']};">{count}</div>
+                    <div style="font-size:11px;color:{cfg['color']};opacity:0.7;">{cfg['desc'][:8]}</div>
+                </div>
+                """, unsafe_allow_html=True)
+            if i < len(sc.STATUS_FLOW) - 1:
+                with cols[col_idx + 1]:
+                    st.markdown('<div class="pipeline-arrow">→</div>', unsafe_allow_html=True)
+        
+        # 이탈 상태 (접수 아래에 표시)
+        exit_total = sum(exit_counts.values())
+        if exit_total > 0:
+            st.markdown("")
+            exit_cols = st.columns([1, 1, 1, 4])
+            for i, status_name in enumerate(sc.STATUS_EXIT):
+                cfg = sc.STATUS_CONFIG[status_name]
+                count = exit_counts[status_name]
+                with exit_cols[i]:
+                    st.markdown(f"""
+                    <div class="pipeline-exit" style="background:{cfg['bg']};">
+                        <div class="pipeline-exit-label" style="color:{cfg['color']};">{cfg['icon']} {status_name}</div>
+                        <div class="pipeline-exit-count" style="color:{cfg['color']};">{count}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+        
+        # 진행률 바 (체결 이후 건수 / 전체 건수)
+        total = len(df_inq)
+        if total > 0:
+            confirmed = sum(stage_counts[s] for s in sc.CONFIRMED_STATUSES if s in stage_counts)
+            completed = stage_counts.get("정산완료", 0)
+            in_progress_pct = round(confirmed / total * 100, 1) if total > 0 else 0
+            completed_pct = round(completed / total * 100, 1) if total > 0 else 0
+            
+            st.markdown("")
+            prog_cols = st.columns(3)
+            with prog_cols[0]:
+                st.metric("📋 전체 건수", f"{total}건")
+            with prog_cols[1]:
+                st.metric("✅ 확정(체결 이후)", f"{confirmed}건", f"{in_progress_pct}%")
+            with prog_cols[2]:
+                st.metric("💰 정산완료", f"{completed}건", f"{completed_pct}%")
+    else:
+        st.warning("상태 컬럼을 찾을 수 없습니다.")
+    
+    st.markdown("---")
+    
+    # =========================================================================
+    # 5. 상태 변경 관리
+    # =========================================================================
+    with st.expander("🔧 상태 변경 관리 (클릭하여 펼치기)"):
+        st.caption("문의건의 상태를 직접 변경할 수 있습니다")
+        
+        if col_status and not df_inq.empty:
+            # 문의 ID 컬럼 찾기
+            col_id = ud.find_col(df_inq, ["문의ID", "ID", "No", "번호"])
+            col_company = ud.find_col(df_inq, ["업체", "업체명", "회사명", "고객사"])
+            col_service = ud.find_col(df_inq, ["서비스", "서비스종류", "행사명"])
+            
+            if col_id:
+                # 검색 & 필터
+                filter_col1, filter_col2 = st.columns(2)
+                with filter_col1:
+                    selected_status_filter = st.selectbox(
+                        "상태 필터",
+                        ["전체"] + sc.ALL_STATUS,
+                        key="pipeline_status_filter"
+                    )
+                with filter_col2:
+                    search_keyword = st.text_input("🔍 업체명/ID 검색", key="pipeline_search")
+                
+                # 필터된 데이터
+                filtered_df = df_inq.copy()
+                if selected_status_filter != "전체":
+                    filtered_df = filtered_df[filtered_df[col_status].astype(str).str.strip() == selected_status_filter]
+                if search_keyword:
+                    mask = pd.Series([False]*len(filtered_df), index=filtered_df.index)
+                    if col_id:
+                        mask |= filtered_df[col_id].astype(str).str.contains(search_keyword, na=False, case=False)
+                    if col_company:
+                        mask |= filtered_df[col_company].astype(str).str.contains(search_keyword, na=False, case=False)
+                    filtered_df = filtered_df[mask]
+                
+                if filtered_df.empty:
+                    st.info("조건에 맞는 문의건이 없습니다.")
+                else:
+                    st.markdown(f"**{len(filtered_df)}건** 검색됨")
+                    
+                    # 상태 변경할 건 선택
+                    display_options = []
+                    for _, row in filtered_df.head(30).iterrows():
+                        inq_id = str(row.get(col_id, ''))
+                        company = str(row.get(col_company, '')) if col_company else ''
+                        cur_status = str(row.get(col_status, ''))
+                        cfg = sc.STATUS_CONFIG.get(cur_status, {"icon": "❓"})
+                        label = f"{cfg['icon']} [{cur_status}] {inq_id}"
+                        if company:
+                            label += f" - {company}"
+                        display_options.append(label)
+                    
+                    if display_options:
+                        selected = st.selectbox(
+                            "변경할 문의 선택 (최근 30건)",
+                            display_options,
+                            key="pipeline_select_inq"
+                        )
+                        
+                        if selected:
+                            # 선택된 항목에서 ID 추출
+                            sel_idx = display_options.index(selected)
+                            sel_row = filtered_df.head(30).iloc[sel_idx]
+                            sel_id = str(sel_row.get(col_id, ''))
+                            cur_status_val = str(sel_row.get(col_status, '')).strip()
+                            
+                            # 현재 상태 표시
+                            st.markdown(f"**현재 상태**: {sc.get_status_badge_html(cur_status_val)}", unsafe_allow_html=True)
+                            
+                            # 전환 가능 상태
+                            next_statuses = sc.get_next_statuses(cur_status_val)
+                            
+                            if next_statuses:
+                                # 진행률 표시
+                                progress = sc.get_status_progress(cur_status_val)
+                                st.progress(progress / 100, text=f"진행률: {progress}%")
+                                
+                                change_col1, change_col2 = st.columns([2, 1])
+                                with change_col1:
+                                    new_status = st.selectbox(
+                                        "변경할 상태 선택",
+                                        next_statuses,
+                                        format_func=lambda x: f"{sc.get_status_icon(x)} {x} — {sc.STATUS_CONFIG.get(x, {}).get('desc', '')}",
+                                        key="pipeline_new_status"
+                                    )
+                                with change_col2:
+                                    st.markdown("<br>", unsafe_allow_html=True)
+                                    if st.button("✅ 상태 변경", type="primary", key="pipeline_change_btn"):
+                                        try:
+                                            db.update_status(sel_id, new_status)
+                                            st.success(f"'{sel_id}' → {sc.get_status_icon(new_status)} {new_status} 변경 완료!")
+                                            st.cache_data.clear()
+                                            st.rerun()
+                                        except Exception as e:
+                                            st.error(f"변경 실패: {e}")
+                            else:
+                                st.info(f"'{cur_status_val}'는 최종 상태입니다. 더 이상 전환할 수 없습니다.")
+            else:
+                st.warning("문의 ID 컬럼을 찾을 수 없습니다.")
+        else:
+            st.warning("문의 데이터가 없습니다.")
+    
+    st.markdown("---")
+    
+    # 6. 탭 구성
     tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         "📊 분석", "🔥 긴급", "👥 인력", "💼 고객", "💰 정산", "📅 캘린더", "📋 리포트"
     ])

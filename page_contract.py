@@ -3,6 +3,7 @@ import streamlit as st
 import pandas as pd
 import utils_contract as uc 
 import data_loader as db
+import status_config as sc
 import time
 
 def show(data):
@@ -16,7 +17,7 @@ def show(data):
     df_inq = data.get('inq', pd.DataFrame())
     df_est = data.get('estimate', pd.DataFrame()) 
     
-    pending = df_inq[df_inq['상태'] == '견적'] if not df_inq.empty else pd.DataFrame()
+    pending = df_inq[df_inq['상태'] == sc.STATUS_FLOW[1]] if not df_inq.empty else pd.DataFrame()  # '견적'
 
     col_list, col_main = st.columns([1, 2.5])
 
@@ -98,8 +99,8 @@ def show(data):
                     with st.spinner("계약 정보 저장 중..."):
                         try:
                             # 1. 문의작성 시트 - 상태를 "체결"로 변경
-                            if db.update_cell("문의작성", sel_id, col_name="상태", value="체결"):
-                                st.success("✅ 계약 상태가 '체결'로 변경되었습니다")
+                            if db.update_cell("문의작성", sel_id, col_name="상태", value=sc.STATUS_FLOW[2]):  # '체결'
+                                st.success(f"✅ 계약 상태가 '{sc.STATUS_FLOW[2]}'로 변경되었습니다")
                             
                             # 2. 계약건은 청구금액적기 시트에 계약 정보 저장
                             # 안전한 정수 변환

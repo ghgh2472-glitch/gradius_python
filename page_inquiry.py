@@ -2,6 +2,7 @@
 import streamlit as st
 import pandas as pd
 import data_loader as db
+import status_config as sc
 from datetime import datetime
 import uuid
 from utils_inquiry import InquiryParser
@@ -70,7 +71,7 @@ def save_inquiry():
         st.session_state.get('form_service', ''),    # 11. 서비스종류
         st.session_state.get('form_headcount', ''),  # 12. 요청인원
         st.session_state.get('form_pay', ''),        # 13. 페이
-        "접수",                                      # 14. 상태
+        sc.STATUS_FLOW[0],                              # 14. 상태 ('접수')
         st.session_state.get('form_note', ''),       # 15. 특이사항
         ""                                           # 16. 비고 (여분)
     ]

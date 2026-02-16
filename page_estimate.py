@@ -3,6 +3,7 @@ import streamlit as st
 import pandas as pd
 import utils_estimate as ue 
 import data_loader as db
+import status_config as sc
 from datetime import datetime, timedelta
 import time  # 라이브러리 전용 time 임포트
 import base64
@@ -73,7 +74,7 @@ def show(data):
     # 프로젝트 대기열 필터링
     pending = pd.DataFrame()
     if not df_inq.empty and '상태' in df_inq.columns:
-        pending = df_inq[df_inq['상태'] == '접수'].sort_values('작성일', ascending=False)
+        pending = df_inq[df_inq['상태'] == sc.STATUS_FLOW[0]].sort_values('작성일', ascending=False)  # '접수'
     
     c_load, c_dummy = st.columns([1.5, 2.5])
     with c_load:
@@ -331,7 +332,7 @@ def show(data):
                             
                             with st.spinner("🚀 데이터 파이프라인 동기화 중..."):
                                 if db.save_estimate_details(est_package, metadata=metadata):
-                                    db.update_status(target_id, "견적")
+                                    db.update_status(target_id, sc.STATUS_FLOW[1])  # '견적'
                                     st.balloons()
                                     st.success(f"✅ {final_save_name} 저장 완료!")
                                     time.sleep(1.5)
