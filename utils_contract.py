@@ -1,4 +1,4 @@
-# utils_contract.py
+# utils_contract.py  v2 — 카드형 계약 승인 UI
 import pandas as pd
 import streamlit as st
 
@@ -11,104 +11,149 @@ def safe_int(val):
         return int(float(val))
     except: return 0
 
+
+def _safe_str(row, key, fallback=''):
+    v = row.get(key, fallback)
+    if pd.isna(v): return ''
+    return str(v).strip()
+
+
 def get_contract_summary_html(inq_row, est_df):
-    """
-    [V20 Header-Based Matching]
-    헤더명 기반으로 데이터를 찾아 열 번호 변화에 강합니다.
-    """
+    """카드형 계약 미리보기 — 문의 상세 + 금액 요약"""
     target_id = str(inq_row.get('문의ID', '')).strip()
-    
+
+    # ── 견적 데이터 매칭 ──
     match_row = pd.Series()
     has_data = False
-    
-    # 1. 정확한 ID 매칭 (문의ID 컬럼 기반)
     if not est_df.empty and '문의ID' in est_df.columns:
         mask = est_df['문의ID'].astype(str).str.strip() == target_id
         if mask.any():
             match_row = est_df[mask].iloc[0]
             has_data = True
-    
-    # 2. 헤더명으로 데이터 추출 (안전한 방식)
-    supply = 0
-    cost = 0
-    total = 0
-    profit = 0
-    margin = "0%"
-    
-    if has_data:
-        # DataFrame 행 접근 시 값이 없으면 0 또는 기본값 반환
-        try:
-            supply = safe_int(match_row.get('공급가액', 0))
-        except:
-            supply = 0
-        try:
-            cost = safe_int(match_row.get('매입원가', 0))
-        except:
-            cost = 0
-        try:
-            total = safe_int(match_row.get('합계금액', 0))
-        except:
-            total = 0
-        try:
-            profit = safe_int(match_row.get('예상수익', 0))
-        except:
-            profit = 0
-        # 수익률 또는 수익율 컬럼 확인
-        margin_val = None
-        if '수익률' in match_row.index:
-            margin_val = match_row.get('수익률', '0%')
-        elif '수익율' in match_row.index:
-            margin_val = match_row.get('수익율', '0%')
-        margin = str(margin_val) if margin_val else '0%'
+
+    supply = safe_int(match_row.get('공급가액', 0)) if has_data else 0
+    cost = safe_int(match_row.get('매입원가', 0)) if has_data else 0
+    total = safe_int(match_row.get('합계금액', 0)) if has_data else 0
+    vat = safe_int(match_row.get('부가세', 0)) if has_data else 0
+    extra = safe_int(match_row.get('부대비용', 0)) if has_data else 0
+    profit = supply - cost - extra
+    margin_val = match_row.get('수익률', match_row.get('수익율', '')) if has_data else ''
+    margin = str(margin_val) if margin_val and not pd.isna(margin_val) else (f"{profit/supply*100:.1f}%" if supply > 0 else "0%")
 
     status_color = "#1e40af" if has_data else "#dc2626"
-    status_msg = f"✅ 데이터 연동됨" if has_data else f"❌ 데이터 미검출 (ID:{target_id})"
-    
-    # 수익률 색상 (음수면 빨강, 양수면 초록)
+    status_msg = "✅ 견적 연동됨" if has_data else f"❌ 견적 미검출 (ID:{target_id})"
     profit_color = "#dc2626" if profit < 0 else "#059669" if profit > 0 else "#64748b"
 
+    # ── 문의 상세 정보 ──
+    client = _safe_str(inq_row, '업체명')
+    event = _safe_str(inq_row, '행사명')
+    site = _safe_str(inq_row, '장소', _safe_str(inq_row, '행사장소'))
+    manager = _safe_str(inq_row, '담당자')
+    contact = _safe_str(inq_row, '연락처', _safe_str(inq_row, '담당자연락처'))
+    sdate = _safe_str(inq_row, '행사시작일', _safe_str(inq_row, '시작일'))
+    edate = _safe_str(inq_row, '행사종료일', _safe_str(inq_row, '종료일'))
+    htime = _safe_str(inq_row, '행사시간', _safe_str(inq_row, '시간'))
+    svc = _safe_str(inq_row, '서비스종류')
+    people = _safe_str(inq_row, '필요인력', _safe_str(inq_row, '요청인원'))
+    pay = _safe_str(inq_row, '페이')
+    special = _safe_str(inq_row, '특이사항')
+    note = _safe_str(inq_row, '비고')
+    counsel = _safe_str(inq_row, '상담내용및 고객성향', _safe_str(inq_row, '상담내용'))
+    relation = _safe_str(inq_row, '관계')
+    category = _safe_str(inq_row, '구분')
+    date_range = f"{sdate} ~ {edate}" if sdate and edate else sdate
+
+    def _info_row(icon, label, value):
+        if not value: return ''
+        return f'<div style="display:flex;gap:8px;padding:6px 0;border-bottom:1px solid #f1f5f9;"><span style="min-width:22px;">{icon}</span><span style="color:#64748b;min-width:65px;font-size:12px;font-weight:600;">{label}</span><span style="font-size:13px;color:#1e293b;">{value}</span></div>'
+
+    info_rows = ''.join(filter(None, [
+        _info_row('🏢', '업체명', client),
+        _info_row('🎪', '행사명', event),
+        _info_row('📍', '장소', site),
+        _info_row('📅', '기간', date_range),
+        _info_row('⏰', '시간', htime),
+        _info_row('👤', '담당자', f"{manager} ({contact})" if contact else manager),
+        _info_row('🔧', '서비스', svc),
+        _info_row('👥', '인력', people),
+        _info_row('💵', '페이', pay),
+        _info_row('🏷️', '구분', category),
+        _info_row('🤝', '관계', relation),
+    ]))
+
+    # 특이사항 / 메모 섹션
+    memo_section = ''
+    if special:
+        memo_section += f'<div style="background:#fef3c7;padding:10px 14px;border-radius:6px;margin-top:10px;border-left:4px solid #f59e0b;"><div style="font-size:11px;font-weight:bold;color:#92400e;">⚠️ 특이사항</div><div style="font-size:13px;color:#78350f;margin-top:4px;">{special}</div></div>'
+    if note:
+        memo_section += f'<div style="background:#ede9fe;padding:10px 14px;border-radius:6px;margin-top:8px;border-left:4px solid #7c3aed;"><div style="font-size:11px;font-weight:bold;color:#5b21b6;">📝 비고</div><div style="font-size:13px;color:#4c1d95;margin-top:4px;">{note}</div></div>'
+    if counsel:
+        memo_section += f'<div style="background:#ecfdf5;padding:10px 14px;border-radius:6px;margin-top:8px;border-left:4px solid #10b981;"><div style="font-size:11px;font-weight:bold;color:#065f46;">💬 상담 내용 / 고객성향</div><div style="font-size:13px;color:#064e3b;margin-top:4px;">{counsel}</div></div>'
+
     return f"""
-    <div style="background:white; border-radius:12px; border:2px solid {status_color}; font-family:'Malgun Gothic'; box-shadow:0 4px 16px rgba(0,0,0,0.1); overflow:hidden;">
-        <div style="background:linear-gradient(135deg, {status_color}15 0%, {status_color}05 100%); padding:16px; border-bottom:2px solid {status_color}; display:flex; justify-content:space-between; align-items:center;">
+    <div style="font-family:'Malgun Gothic',sans-serif;">
+        <!-- 헤더 -->
+        <div style="background:linear-gradient(135deg,#1e40af,#3b82f6);padding:18px 20px;border-radius:12px 12px 0 0;color:white;display:flex;justify-content:space-between;align-items:center;">
             <div>
-                <span style="font-size:12px; color:{status_color}; font-weight:bold; text-transform:uppercase;">📋 계약 미리보기</span>
-                <div style="font-size:20px; font-weight:900; color:#0f172a; margin-top:4px;">{inq_row.get('행사명', '제목없음')}</div>
-                <div style="font-size:13px; color:#64748b; margin-top:4px;">문의ID: <b>{target_id}</b></div>
+                <div style="font-size:11px;opacity:.8;text-transform:uppercase;letter-spacing:1px;">계약 승인 미리보기</div>
+                <div style="font-size:22px;font-weight:900;margin-top:4px;">{event or '제목없음'}</div>
+                <div style="font-size:12px;opacity:.75;margin-top:4px;">{client} | ID: {target_id}</div>
             </div>
-            <span style="font-size:13px; color:{status_color}; font-weight:bold; background:white; padding:8px 12px; border-radius:6px; border:1px solid {status_color};">{status_msg}</span>
+            <span style="background:rgba(255,255,255,.2);padding:6px 12px;border-radius:20px;font-size:12px;font-weight:bold;">{status_msg}</span>
         </div>
-        <div style="padding:20px;">
-            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px; margin-bottom:16px;">
-                <div style="background:#f0f9ff; padding:14px; border-radius:8px; border-left:4px solid #3b82f6;">
-                    <div style="font-size:12px; color:#1e40af; font-weight:bold; text-transform:uppercase;">💰 공급가액</div>
-                    <div style="font-size:20px; font-weight:900; color:#1e40af; margin-top:6px;">{supply:,}원</div>
+
+        <!-- 문의 상세 카드 -->
+        <div style="background:white;padding:18px 20px;border:1px solid #e2e8f0;border-top:none;">
+            <div style="font-size:13px;font-weight:bold;color:#334155;margin-bottom:8px;">📋 문의 상세</div>
+            {info_rows}
+            {memo_section}
+        </div>
+
+        <!-- 금액 카드 -->
+        <div style="background:#f8fafc;padding:18px 20px;border:1px solid #e2e8f0;border-top:none;">
+            <div style="font-size:13px;font-weight:bold;color:#334155;margin-bottom:12px;">💰 금액 요약</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+                <div style="background:white;padding:14px;border-radius:8px;border:1px solid #dbeafe;text-align:center;">
+                    <div style="font-size:11px;color:#3b82f6;font-weight:bold;">공급가액</div>
+                    <div style="font-size:20px;font-weight:900;color:#1e40af;margin-top:4px;">{supply:,}원</div>
                 </div>
-                <div style="background:#fef2f2; padding:14px; border-radius:8px; border-left:4px solid #ef4444;">
-                    <div style="font-size:12px; color:#dc2626; font-weight:bold; text-transform:uppercase;">📦 매입원가</div>
-                    <div style="font-size:20px; font-weight:900; color:#dc2626; margin-top:6px;">{cost:,}원</div>
-                </div>
-            </div>
-            
-            <div style="background:linear-gradient(135deg, #1e40af 0%, #1e3a8a 100%); padding:16px; border-radius:10px; color:white; margin-bottom:12px;">
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <span style="font-size:13px; font-weight:bold; text-transform:uppercase; opacity:0.9;">🎯 최종 합계</span>
-                    <span style="font-size:28px; font-weight:900;">{total:,}원</span>
-                </div>
-            </div>
-            
-            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
-                <div style="background:#f0fdf4; padding:12px; border-radius:8px; border-left:4px solid {profit_color}; text-align:center;">
-                    <div style="font-size:12px; color:#64748b; font-weight:bold;">예상 수익</div>
-                    <div style="font-size:18px; font-weight:900; color:{profit_color}; margin-top:4px;">{profit:,}원</div>
-                </div>
-                <div style="background:#fef3c7; padding:12px; border-radius:8px; border-left:4px solid #f59e0b; text-align:center;">
-                    <div style="font-size:12px; color:#64748b; font-weight:bold;">수익률</div>
-                    <div style="font-size:18px; font-weight:900; color:#f59e0b; margin-top:4px;">{margin}</div>
+                <div style="background:white;padding:14px;border-radius:8px;border:1px solid #fecaca;text-align:center;">
+                    <div style="font-size:11px;color:#ef4444;font-weight:bold;">지출금액</div>
+                    <div style="font-size:20px;font-weight:900;color:#dc2626;margin-top:4px;">{cost:,}원</div>
                 </div>
             </div>
+            <!-- 합계 대형 배너 -->
+            <div style="background:linear-gradient(135deg,#1e40af,#1e3a8a);padding:16px;border-radius:10px;color:white;margin-top:12px;display:flex;justify-content:space-between;align-items:center;">
+                <div>
+                    <div style="font-size:12px;opacity:.85;">🎯 최종 합계</div>
+                    <div style="font-size:11px;opacity:.7;margin-top:2px;">부가세(VAT) {vat:,}원 포함</div>
+                </div>
+                <div style="font-size:28px;font-weight:900;">{total:,}원</div>
+            </div>
+            <!-- 수익 -->
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:10px;">
+                <div style="background:white;padding:10px;border-radius:8px;border:1px solid #d1fae5;text-align:center;">
+                    <div style="font-size:11px;color:#64748b;">예상 수익</div>
+                    <div style="font-size:16px;font-weight:900;color:{profit_color};margin-top:2px;">{profit:,}원</div>
+                </div>
+                <div style="background:white;padding:10px;border-radius:8px;border:1px solid #fef3c7;text-align:center;">
+                    <div style="font-size:11px;color:#64748b;">수익률</div>
+                    <div style="font-size:16px;font-weight:900;color:#f59e0b;margin-top:2px;">{margin}</div>
+                </div>
+                <div style="background:white;padding:10px;border-radius:8px;border:1px solid #e2e8f0;text-align:center;">
+                    <div style="font-size:11px;color:#64748b;">부대비용</div>
+                    <div style="font-size:16px;font-weight:900;color:#64748b;margin-top:2px;">{extra:,}원</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 하단 -->
+        <div style="background:#f1f5f9;padding:10px 20px;border-radius:0 0 12px 12px;border:1px solid #e2e8f0;border-top:none;text-align:right;">
+            <span style="font-size:11px;color:#94a3b8;">위 내용을 검토한 후 아래에서 계약을 확정하세요.</span>
         </div>
     </div>
     """.replace('\n', '').strip()
+
 
 def validate_contract_ready(biz_num, biz_ceo, is_sent):
     errs = []
