@@ -5,6 +5,7 @@ import data_loader as db
 import status_config as sc
 from utils_settlement import SettlementBrain
 import time
+from datetime import datetime
 from PIL import Image
 
 # ... (스타일링 함수 기존 동일) ...
@@ -498,13 +499,36 @@ def show_settlement_detail(data):
             invoice_supply = summary['매출']
             invoice_items = None
             try:
-                df_items = data.get('estimate_items', pd.DataFrame())
-                if not df_items.empty and '문의ID' in df_items.columns:
-                    matched_items = df_items[df_items['문의ID'].astype(str).str.strip() == inq_id]
-                    if not matched_items.empty:
-                        invoice_items = matched_items.to_dict('records')
+                # 견적품목 시트에서 직접 조회 (data 딕셔너리에 미포함이므로 직접 로드)
+                matched_items = db.load_estimate_items(inq_id)
+                if not matched_items.empty:
+                    invoice_items = matched_items.to_dict('records')
             except Exception:
                 pass
+            # 견적품목이 없으면 견적상세에서 항목 생성
+            if not invoice_items and est_row is not None:
+                try:
+                    _items = []
+                    for _col_prefix in ['직종', '직군']:
+                        # 견적상세에 직종1_명칭, 직종1_인원, 직종1_단가 형식 확인
+                        for _i in range(1, 6):
+                            _name_key = f"{_col_prefix}{_i}_명칭" if f"{_col_prefix}{_i}_명칭" in est_row.index else f"{_col_prefix}{_i}" if f"{_col_prefix}{_i}" in est_row.index else None
+                            if _name_key and str(est_row.get(_name_key, '')).strip():
+                                _qty = int(float(est_row.get(f"{_col_prefix}{_i}_인원", 1) or 1))
+                                _unit = int(float(est_row.get(f"{_col_prefix}{_i}_단가", 0) or 0))
+                                _days = int(float(est_row.get(f"{_col_prefix}{_i}_일수", 1) or 1))
+                                _item = {
+                                    '품목명': str(est_row.get(_name_key, '')),
+                                    '수량': _qty,
+                                    '단가': _unit,
+                                    '일수': _days,
+                                    '금액': _qty * _unit * _days
+                                }
+                                _items.append(_item)
+                    if _items:
+                        invoice_items = _items
+                except Exception:
+                    pass
             # 행사일 표시
             event_date = str(row.get('행사시작일', row.get('일시', '-')))
             end_date = str(row.get('행사종료일', ''))
@@ -537,7 +561,7 @@ def show_settlement_detail(data):
             )
         sel_tax_rate = 0.033 if "3.3%" in tax_choice else 0.009
 
-        # 배정기록 시트에서 직접 인력 데이터 조회 (우선)
+        # 배정기록 시트에서 직접 인력 데이터 조회
         inq_id = str(row.get('문의ID', '')).strip()
         assignment_df = pd.DataFrame()
         if inq_id:
@@ -545,31 +569,147 @@ def show_settlement_detail(data):
                 assignment_df = db.get_assignments_by_inquiry(inq_id)
             except Exception:
                 pass
+
+        # STAFF 시트에서 은행/계좌 정보 로드
+        df_staff = data.get('staff', pd.DataFrame())
+        
+        def _get_bank_info(staff_name, staff_df):
+            """STAFF 시트에서 이름으로 은행/계좌 검색"""
+            if staff_df.empty:
+                return None, None
+            name_c = None
+            for c in ['이름', '인력명', '성명']:
+                if c in staff_df.columns:
+                    name_c = c
+                    break
+            if not name_c:
+                return None, None
+            matched = staff_df[staff_df[name_c].astype(str).str.strip() == str(staff_name).strip()]
+            if matched.empty:
+                return None, None
+            r = matched.iloc[0]
+            bank = str(r.get('은행명', r.get('은행', ''))).strip()
+            account = str(r.get('계좌번호', r.get('계좌', ''))).strip()
+            bank = bank if bank and bank not in ('nan', 'None', '') else None
+            account = account if account and account not in ('nan', 'None', '') else None
+            return bank, account
         
         if not assignment_df.empty:
-            # 배정기록 시트에서 직접 조회 성공
             name_col = '이름' if '이름' in assignment_df.columns else '인력명' if '인력명' in assignment_df.columns else None
             role_col = '역할' if '역할' in assignment_df.columns else '직무' if '직무' in assignment_df.columns else None
             rate_col = '단가' if '단가' in assignment_df.columns else '지급단가' if '지급단가' in assignment_df.columns else None
             days_col = '일수' if '일수' in assignment_df.columns else '근무일수' if '근무일수' in assignment_df.columns else None
             total_col = '총지급액' if '총지급액' in assignment_df.columns else None
+            assign_type_col = '구분' if '구분' in assignment_df.columns else None
             
-            st.subheader(f"지급 대상자 ({len(assignment_df)}명) — 배정기록 기반")
+            # 본사인원 제외 필터
+            hq_names = [s['이름'] for s in db.HQ_STAFF] if hasattr(db, 'HQ_STAFF') else []
+            
+            st.subheader(f"👷 지급 대상자 전체 목록 ({len(assignment_df)}명)")
+            
+            # 전체 목록을 테이블 형태로 먼저 표시
+            summary_rows = []
             for i, arow in assignment_df.iterrows():
                 a_name = str(arow.get(name_col, 'N/A')) if name_col else 'N/A'
                 a_role = str(arow.get(role_col, '')) if role_col else ''
                 a_rate = int(float(arow.get(rate_col, 0) or 0)) if rate_col else 0
                 a_days = int(float(arow.get(days_col, 1) or 1)) if days_col else 1
                 a_total = int(float(arow.get(total_col, a_rate * a_days) or 0)) if total_col else a_rate * a_days
+                a_type = str(arow.get(assign_type_col, '')) if assign_type_col else ''
                 
-                with st.expander(f"{a_name} ({a_role}) — {a_rate:,}원 × {a_days}일 = {a_total:,}원"):
+                tax_amt = int(a_total * sel_tax_rate)
+                net_pay = a_total - tax_amt
+                
+                bank, account = _get_bank_info(a_name, df_staff)
+                is_hq = a_name in hq_names
+                
+                summary_rows.append({
+                    '이름': a_name,
+                    '직무': a_role,
+                    '구분': '본사' if is_hq else a_type,
+                    '단가': f"{a_rate:,}",
+                    '일수': a_days,
+                    '총액': f"{a_total:,}",
+                    '공제': f"-{tax_amt:,}",
+                    '실수령액': f"{net_pay:,}",
+                    '은행': bank or '❗입력필요',
+                    '계좌번호': account or '❗입력필요',
+                })
+            
+            summary_df = pd.DataFrame(summary_rows)
+            st.dataframe(summary_df, use_container_width=True, hide_index=True)
+            
+            # 총합계
+            total_gross = sum(int(float(arow.get(total_col, int(float(arow.get(rate_col, 0) or 0)) * int(float(arow.get(days_col, 1) or 1))) or 0)) if total_col else int(float(arow.get(rate_col, 0) or 0)) * int(float(arow.get(days_col, 1) or 1)) for _, arow in assignment_df.iterrows())
+            total_tax = int(total_gross * sel_tax_rate)
+            total_net = total_gross - total_tax
+            st.markdown(f"**💰 합계: 총 {total_gross:,}원 | 공제 -{total_tax:,}원 | 실수령 {total_net:,}원**")
+            
+            st.divider()
+            
+            # 개별 급여명세서 + 지급 처리
+            st.subheader("📄 개별 급여명세서 및 지급 처리")
+            for i, arow in assignment_df.iterrows():
+                a_name = str(arow.get(name_col, 'N/A')) if name_col else 'N/A'
+                a_role = str(arow.get(role_col, '')) if role_col else ''
+                a_rate = int(float(arow.get(rate_col, 0) or 0)) if rate_col else 0
+                a_days = int(float(arow.get(days_col, 1) or 1)) if days_col else 1
+                a_total = int(float(arow.get(total_col, a_rate * a_days) or 0)) if total_col else a_rate * a_days
+                a_assign_id = str(arow.get('배정ID', ''))
+                is_hq = a_name in hq_names
+                
+                bank, account = _get_bank_info(a_name, df_staff)
+                bank_info = f"💳 {bank} {account}" if bank and account else "❗ 계좌정보 미등록"
+                hq_badge = " [본사]" if is_hq else ""
+                
+                with st.expander(f"{'🏢' if is_hq else '👤'} {a_name}{hq_badge} ({a_role}) — {a_total:,}원 | {bank_info}"):
                     c1, c2 = st.columns([2, 1])
                     with c1:
                         html_p = brain.get_payslip_html(a_name, row['행사명'], a_rate, a_days, a_total, tax_rate=sel_tax_rate)
                         st.components.v1.html(html_p, height=400)
                     with c2:
-                        if st.checkbox("이체 완료", key=f"pay_assign_{i}"):
-                            st.success("지급 완료됨")
+                        # 은행/계좌 정보
+                        if bank and account:
+                            st.info(f"🏦 {bank}\n\n📋 {account}")
+                        else:
+                            st.warning("계좌정보 미등록")
+                            _input_bank = st.text_input("은행명", key=f"bank_input_{i}", placeholder="예: 국민은행")
+                            _input_acct = st.text_input("계좌번호", key=f"acct_input_{i}", placeholder="000-0000-0000")
+                        
+                        # 지급 처리 (본사인원 제외)
+                        if not is_hq:
+                            pay_done = st.checkbox("✅ 이체 완료", key=f"pay_assign_{i}")
+                            if pay_done:
+                                st.success("지급 완료됨")
+                                # 지급기록 시트에 저장
+                                if st.button("💾 지급기록 저장", key=f"save_pay_{i}"):
+                                    tax_amt = int(a_total * sel_tax_rate)
+                                    payment_dict = {
+                                        '배정ID': a_assign_id,
+                                        '인력명': a_name,
+                                        '현장명': row['행사명'],
+                                        '파견기간': str(row.get('행사시작일', '')),
+                                        '파견일수': a_days,
+                                        '기본급': a_total,
+                                        '야근비': 0,
+                                        '식사비': 0,
+                                        '교통비': 0,
+                                        '보너스': 0,
+                                        '소계': a_total,
+                                        '세금공제': tax_amt,
+                                        '최종지급액': a_total - tax_amt,
+                                        '지급상태': '완료',
+                                        '지급일': datetime.now().strftime('%Y-%m-%d'),
+                                        '지급담당자': '',
+                                        '비고': f"정산페이지 ({sel_tax_rate*100:.1f}% 공제)",
+                                    }
+                                    if db.save_payment_record(payment_dict):
+                                        st.success(f"✅ {a_name} 지급기록 저장 완료!")
+                                        st.cache_data.clear()
+                                    else:
+                                        st.error("저장 실패")
+                        else:
+                            st.caption("ℹ️ 본사 인원 — 별도 정산")
         else:
             # 배정기록 없으면 기존 특이사항 텍스트 파싱 fallback
             note_text = str(row.get('특이사항', ''))

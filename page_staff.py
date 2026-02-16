@@ -355,13 +355,39 @@ def show(data):
     if inquiry_id:
         # 선택된 문의 정보 표시
         inq_info = df_inq[df_inq['문의ID'] == inquiry_id].iloc[0]
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.metric("업체명", inq_info.get('업체명', 'N/A'))
         with col2:
             st.metric("행사명", inq_info.get('행사명', 'N/A'))
         with col3:
             st.metric("연락처", inq_info.get('연락처', 'N/A'))
+        with col4:
+            # 배정 현황 표시 (배정인원/필요인원)
+            _need_col = None
+            for _c in ['필요인력', '요청인원', '인원']:
+                if _c in inq_info.index:
+                    _need_col = _c
+                    break
+            _needed = 0
+            if _need_col:
+                try:
+                    _needed = int(float(inq_info.get(_need_col, 0) or 0))
+                except:
+                    _needed = 0
+            _assigned_cnt = len(df_dispatch[df_dispatch['행사명'].astype(str).str.strip() == str(inq_info.get('행사명', '')).strip()]) if not df_dispatch.empty and '행사명' in df_dispatch.columns else 0
+            
+            if _needed > 0:
+                if _assigned_cnt >= _needed:
+                    st.markdown(f"""<div style="background:#DCFCE7;color:#166534;padding:10px;border-radius:8px;text-align:center;font-weight:bold;margin-top:8px;">
+                        ✅ 배정완료 {_assigned_cnt}/{_needed}명
+                    </div>""", unsafe_allow_html=True)
+                else:
+                    st.markdown(f"""<div style="background:#FEF3C7;color:#92400E;padding:10px;border-radius:8px;text-align:center;font-weight:bold;margin-top:8px;">
+                        ⚠️ {_assigned_cnt}/{_needed}명 (부족 {_needed - _assigned_cnt}명)
+                    </div>""", unsafe_allow_html=True)
+            else:
+                st.metric("배정인원", f"{_assigned_cnt}명")
     
     st.markdown("---")
     

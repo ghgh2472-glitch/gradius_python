@@ -183,6 +183,7 @@ def show(data):
                     st.session_state['_ocr_biz_num'] = str(_sel_row.get('사업자번호', '')).strip()
                     st.session_state['_ocr_ceo'] = str(_sel_row.get('대표자', '')).strip() if '대표자' in _sel_row.index else ''
                     st.session_state['_ocr_company'] = str(_sel_row.get('업체명', '')).strip()
+                    st.session_state['_ocr_email'] = str(_sel_row.get('이메일', '')).strip() if '이메일' in _sel_row.index else ''
                     st.success(f"✅ {_sel_biz}의 사업자정보가 적용되었습니다.")
                     st.rerun()
             else:
@@ -248,7 +249,8 @@ def show(data):
 
         c3, c4 = st.columns(2)
         company_name = c3.text_input("법인명(단체명)", value=default_company, placeholder="발주처 정식 법인명", key="company_name_input")
-        email = c4.text_input("세금계산서 발행 이메일", placeholder="example@company.com", key="email_input")
+        default_email = st.session_state.get('_ocr_email', '')
+        email = c4.text_input("세금계산서 발행 이메일", value=default_email, placeholder="example@company.com", key="email_input")
 
     is_sent = st.checkbox("계약서 발송 완료 확인", key="is_sent_check")
 

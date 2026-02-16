@@ -100,8 +100,9 @@ def get_active_assignments(inquiry_id=None):
     return dispatch_df
 
 
+@st.cache_data(ttl=60)
 def get_attendance_data(assignment_id=None, inquiry_id=None):
-    """출석부 시트에서 데이터 로드"""
+    """출석부 시트에서 데이터 로드 (캐시 60초)"""
     client = db.get_connection()
     if not client:
         return pd.DataFrame()
@@ -519,7 +520,7 @@ def show(data):
                             st.dataframe(person_att[display_cols], hide_index=True, use_container_width=True)
 
     # ========================================================================
-    # 탭2: 출석 기록 입력
+    # 탭2: 출석 기록 입력 (체크박스 매트릭스)
     # ========================================================================
     with tab_input:
         st.subheader("✏️ 출석 기록 입력")
@@ -539,108 +540,123 @@ def show(data):
             role_col2 = _safe_col(assignments_sel, ['직무', '역할'])
 
             if name_col2:
-                # 인원 선택
-                staff_df = assignments_sel[[name_col2, role_col2, '배정ID']].drop_duplicates() if role_col2 else assignments_sel[[name_col2, '배정ID']].drop_duplicates()
+                # 인원 목록 추출
+                staff_df = assignments_sel[[name_col2, '배정ID']].drop_duplicates() if '배정ID' in assignments_sel.columns else assignments_sel[[name_col2]].drop_duplicates()
+                if role_col2 and role_col2 in assignments_sel.columns:
+                    staff_df = assignments_sel[[name_col2, role_col2, '배정ID']].drop_duplicates() if '배정ID' in assignments_sel.columns else assignments_sel[[name_col2, role_col2]].drop_duplicates()
 
-                if role_col2:
-                    staff_labels = [f"{r[name_col2]} ({r[role_col2]})" for _, r in staff_df.iterrows()]
+                staff_names = [str(r[name_col2]) for _, r in staff_df.iterrows()]
+                staff_ids = [str(r.get('배정ID', '')) for _, r in staff_df.iterrows()]
+
+                # 행사 기간에서 날짜 범위 생성
+                sel_proj = projects.loc[sel_idx2]
+                _s_date = _parse_event_date(sel_proj.get('행사시작일', ''))
+                _e_date = _parse_event_date(sel_proj.get('행사종료일', ''))
+
+                if _s_date and _e_date:
+                    dates = _generate_dates(_s_date.strftime("%Y-%m-%d"), _e_date.strftime("%Y-%m-%d"))
+                    st.caption(f"📅 행사기간: {_s_date} ~ {_e_date} ({len(dates)}일)")
+                elif _s_date:
+                    dates = [_s_date.strftime("%Y-%m-%d")]
+                    st.caption(f"📅 행사일: {_s_date}")
                 else:
-                    staff_labels = [f"{r[name_col2]}" for _, r in staff_df.iterrows()]
+                    dates = [datetime.now().date().strftime("%Y-%m-%d")]
+                    st.caption("📅 행사일 미설정 — 오늘 기준")
 
-                col_s1, col_s2 = st.columns(2)
-                with col_s1:
-                    sel_staff_idx = st.selectbox("인원 선택", range(len(staff_df)), format_func=lambda x: staff_labels[x])
-                    sel_row = staff_df.iloc[sel_staff_idx]
-                    sel_assign_id = sel_row['배정ID']
-                    sel_staff_name = sel_row[name_col2]
+                # 기존 출석 데이터 로드 (한번만)
+                existing_att = get_attendance_data(inquiry_id=sel_inq_id)
 
-                with col_s2:
-                    st.info(f"선택: **{sel_staff_name}** (배정ID: {sel_assign_id})")
+                def _is_attended(name, date_str, existing_df):
+                    """기존 출석 기록에서 해당 인원+날짜의 출석 여부 확인"""
+                    if existing_df.empty:
+                        return False
+                    name_c = _safe_col(existing_df, ['인력명'])
+                    date_c = _safe_col(existing_df, ['출석날짜'])
+                    status_c = _safe_col(existing_df, ['출석상태'])
+                    if not (name_c and date_c and status_c):
+                        return False
+                    matched = existing_df[
+                        (existing_df[name_c].astype(str).str.strip() == str(name).strip()) &
+                        (existing_df[date_c].astype(str).str.strip() == str(date_str).strip())
+                    ]
+                    if not matched.empty:
+                        return '출석' in str(matched.iloc[0][status_c])
+                    return False
 
-                st.markdown("---")
+                st.markdown(f"**배정 인원: {len(staff_names)}명 | 행사 일수: {len(dates)}일**")
+                st.markdown("아래 체크박스로 출석을 기록하세요. ✅ = 출석")
+                st.divider()
 
-                # 일괄 입력 모드 / 단건 입력 모드
-                input_mode = st.radio("입력 방식", ["단건 입력", "일괄 입력 (전체 인원)"], horizontal=True)
+                # 체크박스 매트릭스 (날짜 × 인원)
+                with st.form("attendance_matrix_form", clear_on_submit=False):
+                    # 헤더 행 — 날짜 표시
+                    if len(dates) <= 7:
+                        date_cols = st.columns([1.5] + [1] * len(dates))
+                        date_cols[0].markdown("**이름**")
+                        for di, d in enumerate(dates):
+                            try:
+                                dt = datetime.strptime(d, "%Y-%m-%d")
+                                day_name = ["월","화","수","목","금","토","일"][dt.weekday()]
+                                date_cols[di + 1].markdown(f"**{dt.month}/{dt.day}**({day_name})")
+                            except Exception:
+                                date_cols[di + 1].markdown(f"**{d}**")
 
-                if input_mode == "단건 입력":
-                    # 행사 기간에서 날짜 상속
-                    sel_proj = projects.loc[sel_idx2]
-                    _s_date = _parse_event_date(sel_proj.get('행사시작일', ''))
-                    _e_date = _parse_event_date(sel_proj.get('행사종료일', ''))
-                    _today = datetime.now().date()
-                    if _s_date and _e_date:
-                        _default_att_date = max(_s_date, min(_today, _e_date))
-                    elif _s_date:
-                        _default_att_date = max(_s_date, _today)
+                        # 각 인원별 체크박스 행
+                        attendance_checks = {}
+                        for si, sname in enumerate(staff_names):
+                            row_cols = st.columns([1.5] + [1] * len(dates))
+                            role_str = f" ({staff_df.iloc[si][role_col2]})" if role_col2 and role_col2 in staff_df.columns else ""
+                            row_cols[0].markdown(f"👤 **{sname}**{role_str}")
+                            for di, d in enumerate(dates):
+                                default_val = _is_attended(sname, d, existing_att)
+                                key = f"att_chk_{si}_{di}"
+                                attendance_checks[(si, di)] = row_cols[di + 1].checkbox(
+                                    "출석", value=default_val, key=key, label_visibility="collapsed"
+                                )
                     else:
-                        _default_att_date = _today
+                        # 날짜가 7일 초과 시 — 스크롤 가능한 테이블 형식
+                        st.info(f"📎 행사기간이 {len(dates)}일입니다. 날짜별 탭으로 표시합니다.")
+                        attendance_checks = {}
+                        date_tabs = st.tabs([f"{datetime.strptime(d, '%Y-%m-%d').month}/{datetime.strptime(d, '%Y-%m-%d').day}" if len(d) >= 10 else d for d in dates])
+                        for di, (d, dtab) in enumerate(zip(dates, date_tabs)):
+                            with dtab:
+                                try:
+                                    dt = datetime.strptime(d, "%Y-%m-%d")
+                                    day_name = ["월","화","수","목","금","토","일"][dt.weekday()]
+                                    st.markdown(f"**{d} ({day_name})**")
+                                except Exception:
+                                    st.markdown(f"**{d}**")
+                                for si, sname in enumerate(staff_names):
+                                    default_val = _is_attended(sname, d, existing_att)
+                                    key = f"att_chk_{si}_{di}"
+                                    role_str = f" ({staff_df.iloc[si][role_col2]})" if role_col2 and role_col2 in staff_df.columns else ""
+                                    attendance_checks[(si, di)] = st.checkbox(
+                                        f"👤 {sname}{role_str}", value=default_val, key=key
+                                    )
 
-                    c_d, c_s, c_in, c_out = st.columns(4)
-                    with c_d:
-                        att_date = st.date_input("출석일자", _default_att_date, key="att_date_single")
-                        if _s_date and _e_date:
-                            st.caption(f"행사: {_s_date}~{_e_date}")
-                    with c_s:
-                        att_status = st.selectbox("상태", ["출석", "결근", "지각", "조퇴"], key="att_status_single")
-                    with c_in:
-                        check_in = st.time_input("출근시간", value=None, key="att_checkin_single")
-                    with c_out:
-                        check_out = st.time_input("퇴근시간", value=None, key="att_checkout_single")
+                    # 전체 출석 / 전체 결근 토글
+                    c_action1, c_action2, _ = st.columns([1, 1, 2])
+                    
+                    submitted = st.form_submit_button("💾 출석 일괄 저장", type="primary", use_container_width=True)
 
-                    att_note = st.text_input("비고", key="att_note_single")
-
-                    if st.button("💾 출석 기록 저장", type="primary"):
-                        ci_str = check_in.strftime('%H:%M') if check_in else ''
-                        co_str = check_out.strftime('%H:%M') if check_out else ''
-                        result = save_attendance_record(
-                            sel_assign_id, sel_staff_name, sel_inq_id,
-                            att_date.strftime('%Y-%m-%d'), att_status,
-                            ci_str, co_str, att_note
-                        )
-                        if result:
-                            st.success(f"✅ {sel_staff_name} — {att_date} {att_status} 저장 완료!")
-                            st.cache_data.clear()
-                        else:
-                            st.error("저장 실패")
-
-                else:  # 일괄 입력
-                    st.caption("선택한 날짜에 전체 배정 인원의 출석을 일괄 기록합니다.")
-                    sel_proj_bulk = projects.loc[sel_idx2]
-                    _sb_date = _parse_event_date(sel_proj_bulk.get('행사시작일', ''))
-                    _eb_date = _parse_event_date(sel_proj_bulk.get('행사종료일', ''))
-                    _today_b = datetime.now().date()
-                    if _sb_date and _eb_date:
-                        _default_bulk_date = max(_sb_date, min(_today_b, _eb_date))
-                    elif _sb_date:
-                        _default_bulk_date = max(_sb_date, _today_b)
-                    else:
-                        _default_bulk_date = _today_b
-                    bulk_date = st.date_input("출석일자", _default_bulk_date, key="att_date_bulk")
-                    if _sb_date and _eb_date:
-                        st.caption(f"행사: {_sb_date}~{_eb_date}")
-                    bulk_status = st.selectbox("전체 상태", ["출석", "결근", "지각", "조퇴"], key="att_status_bulk")
-                    c_bi, c_bo = st.columns(2)
-                    with c_bi:
-                        bulk_in = st.time_input("출근시간", value=None, key="att_checkin_bulk")
-                    with c_bo:
-                        bulk_out = st.time_input("퇴근시간", value=None, key="att_checkout_bulk")
-
-                    st.markdown(f"**대상 인원 ({len(staff_df)}명):** {', '.join(staff_labels)}")
-
-                    if st.button("💾 전체 일괄 저장", type="primary"):
-                        ci_str = bulk_in.strftime('%H:%M') if bulk_in else ''
-                        co_str = bulk_out.strftime('%H:%M') if bulk_out else ''
-                        success = 0
-                        for _, sr in staff_df.iterrows():
-                            r = save_attendance_record(
-                                sr['배정ID'], sr[name_col2], sel_inq_id,
-                                bulk_date.strftime('%Y-%m-%d'), bulk_status,
-                                ci_str, co_str, ''
+                if submitted:
+                    success_count = 0
+                    total_count = 0
+                    with st.spinner("출석 기록 저장 중..."):
+                        for (si, di), checked in attendance_checks.items():
+                            sname = staff_names[si]
+                            sid = staff_ids[si] if si < len(staff_ids) else ''
+                            d = dates[di]
+                            status = "출석" if checked else "결근"
+                            total_count += 1
+                            result = save_attendance_record(
+                                sid, sname, sel_inq_id,
+                                d, status, '', '', ''
                             )
-                            if r:
-                                success += 1
-                        st.success(f"✅ {success}/{len(staff_df)}명 출석 저장 완료!")
-                        st.cache_data.clear()
+                            if result:
+                                success_count += 1
+                    st.success(f"✅ {success_count}/{total_count}건 출석 기록 저장 완료!")
+                    st.cache_data.clear()
             else:
                 st.warning("인력명 컬럼을 찾을 수 없습니다.")
 

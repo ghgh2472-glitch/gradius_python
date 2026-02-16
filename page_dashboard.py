@@ -306,10 +306,22 @@ def show(data):
                             if _p_note and _p_note != '-':
                                 st.caption(f"📝 {_p_note}")
                         with _dc3:
-                            # 배정 인원 확인
+                            # 배정 인원 확인 (필요인원 대비 비율 표시)
                             _p_staff_detail = ud.get_dispatch_detail_for_event(df_dispatch, _p_event)
                             _p_staff_count = len(_p_staff_detail) if not _p_staff_detail.empty else 0
-                            st.metric("배정인원", f"{_p_staff_count}명")
+                            _p_need = ud.safe_int(_p_headcount) if _p_headcount and _p_headcount != '-' else 0
+                            
+                            if _p_need > 0:
+                                if _p_staff_count >= _p_need:
+                                    st.markdown(f"""<div style="background:#DCFCE7;color:#166534;padding:8px;border-radius:8px;text-align:center;font-weight:bold;">
+                                        ✅ 배정완료<br/>{_p_staff_count}/{_p_need}명
+                                    </div>""", unsafe_allow_html=True)
+                                else:
+                                    st.markdown(f"""<div style="background:#FEF3C7;color:#92400E;padding:8px;border-radius:8px;text-align:center;font-weight:bold;">
+                                        ⚠️ 부족<br/>{_p_staff_count}/{_p_need}명
+                                    </div>""", unsafe_allow_html=True)
+                            else:
+                                st.metric("배정인원", f"{_p_staff_count}명")
                             if _est_amount > 0:
                                 st.metric("견적액", f"{_est_amount:,}원")
                 
@@ -469,15 +481,20 @@ def show(data):
             df_est_for_trend = data.get('estimate', pd.DataFrame())
             trend_df = ud.get_monthly_trend(df_inq, df_settlement=df_settlement, df_estimate=df_est_for_trend, selected_year=sel_year)
             if not trend_df.empty:
+                # 만원 단위로 변환하여 직관적 표시
+                trend_df['Sales_만원'] = trend_df['Sales'] / 10000
+                trend_df['Sales_label'] = trend_df['Sales'].apply(
+                    lambda v: f"{int(v/10000):,}만" if v >= 10000 else f"{int(v):,}"
+                )
                 fig = px.bar(trend_df, x='Month', y='Sales', 
-                           text_auto='.2s', color_discrete_sequence=['#667eea'])
+                           text='Sales_label', color_discrete_sequence=['#667eea'])
                 fig.update_layout(
                     margin=dict(l=10, r=10, t=10, b=10), height=300,
                     showlegend=False, hovermode='x unified',
                     xaxis_title="월", yaxis_title="매출액(원)"
                 )
-                fig.update_yaxes(rangemode="tozero")
-                fig.update_traces(marker_line=dict(width=0))
+                fig.update_yaxes(rangemode="tozero", tickformat=",")
+                fig.update_traces(marker_line=dict(width=0), textposition='outside')
                 st.plotly_chart(fig, use_container_width=True)
                 
                 # 요약 통계
@@ -834,6 +851,18 @@ def show(data):
 
         events = ud.get_calendar_events(cal_df)
         
+        # 이벤트 데이터 디버그 정보
+        if events:
+            st.caption(f"📅 {len(events)}개 일정이 캘린더에 표시됩니다.")
+        else:
+            # 날짜 컬럼 존재 여부 확인
+            _date_col = ud.find_col(cal_df, ["행사시작일", "시작일", "행사일시", "일시", "투입일"])
+            if _date_col and _date_col in cal_df.columns:
+                _has_date = cal_df[_date_col].astype(str).str.strip().replace(['', 'nan', 'None'], pd.NA).dropna()
+                st.caption(f"📅 날짜 데이터: {len(_has_date)}건 (컬럼: {_date_col})")
+            else:
+                st.caption("📅 날짜 컬럼을 찾을 수 없습니다.")
+        
         cal_options = {
             "headerToolbar": {
                 "left": "today prev,next",
@@ -860,7 +889,20 @@ def show(data):
         """, unsafe_allow_html=True)
         
         try:
-            cal_result = calendar(events=events if events else [], options=cal_options, key="main_calendar")
+            calendar_css = """
+                .fc { min-height: 600px; }
+                .fc .fc-toolbar { font-size: 14px; }
+                .fc .fc-button { font-size: 13px; }
+                .fc-h-event { cursor: pointer; }
+                .fc td, .fc th { border-color: #e5e7eb; }
+            """
+            cal_result = calendar(
+                events=events if events else [], 
+                options=cal_options, 
+                custom_css=calendar_css,
+                callbacks=["dateClick", "eventClick"],
+                key="main_calendar"
+            )
         except Exception as e:
             st.warning(f"캘린더 렌더링 오류: {e}")
             st.info("대안으로 리스트 뷰를 표시합니다.")

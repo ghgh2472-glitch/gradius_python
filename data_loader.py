@@ -851,25 +851,20 @@ def update_assignment_status(assign_id, new_status):
 
 @st.cache_data(ttl=120)  # 배정기록 120초 캐시 (API 할당량 절약)
 def get_assignments_by_inquiry(inquiry_id):
-    """특정 문의ID의 배정기록 조회 (캐시됨)"""
-    client = get_connection()
-    if not client:
-        return pd.DataFrame()
-    
+    """특정 문의ID의 배정기록 조회 — load_dispatch_sheet() 캐시 활용으로 API 호출 최소화"""
     try:
-        sh = client.open_by_key(SHEET_ID)
-        wks = sh.worksheet("배정기록")
-        
-        # 모든 배정기록 가져오기
-        all_records = wks.get_all_records()
-        if not all_records:
+        # 이미 캐시된 배정기록 시트 데이터를 재사용 (중복 API 호출 방지)
+        df = load_dispatch_sheet()
+        if df is None or df.empty:
             return pd.DataFrame()
         
-        df = pd.DataFrame(all_records)
+        df = df.copy()
         
         # 문의ID로 필터링
         if '문의ID' in df.columns:
             df = df[df['문의ID'].astype(str).str.strip() == str(inquiry_id).strip()]
+        else:
+            return pd.DataFrame()
         
         # 상태 필터 (취소된 배정 제외)
         if '지급상태' in df.columns:
@@ -880,27 +875,6 @@ def get_assignments_by_inquiry(inquiry_id):
         return df.reset_index(drop=True)
     
     except Exception as e:
-        import time
-        # [429] 에러 시 더 오래 대기 후 재시도
-        if "[429]" in str(e):
-            print(f"API 할당량 초과, 30초 대기 후 재시도...")
-            time.sleep(30)
-            try:
-                sh = client.open_by_key(SHEET_ID)
-                wks = sh.worksheet("배정기록")
-                all_records = wks.get_all_records()
-                if not all_records:
-                    return pd.DataFrame()
-                df = pd.DataFrame(all_records)
-                if '문의ID' in df.columns:
-                    df = df[df['문의ID'].astype(str).str.strip() == str(inquiry_id).strip()]
-                if '상태' in df.columns:
-                    df = df[df['상태'].astype(str).str.strip() != '취소']
-                return df.reset_index(drop=True)
-            except Exception as e2:
-                print(f"[429] 재시도 실패: {e2}")
-                return pd.DataFrame()
-        
         print(f"get_assignments_by_inquiry error: {e}")
         return pd.DataFrame()
 
