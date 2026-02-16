@@ -190,62 +190,117 @@ def show_settlement_overview():
             else:
                 st.error("❌ 입금 금액을 입력해주세요.")
     
-    # 테이블 표시 — 직접 수정 가능한 data_editor 사용
-    st.markdown("### 📋 전체 계약 정산 현황 (직접 수정 가능)")
-    st.caption("💡 받은금액, 잔액 등을 직접 수정 후 '변경사항 저장' 버튼을 클릭하세요.")
+    # 입금완료 / 미수금 / 전체 서브탭
+    st.markdown("### 📋 전체 계약 정산 현황")
     
     display_cols = ['문의ID', '업체', '현장명', '공급가액', '부가세', '받은금액', '잔액', '진행상황']
     available_cols = [c for c in display_cols if c in settlement_df.columns]
     
     if available_cols:
-        edit_df = settlement_df[available_cols].copy()
-        # 숫자 컬럼 변환
+        full_edit_df = settlement_df[available_cols].copy()
         for nc in ['공급가액', '부가세', '받은금액', '잔액']:
-            if nc in edit_df.columns:
-                edit_df[nc] = pd.to_numeric(edit_df[nc], errors='coerce').fillna(0).astype(int)
-
-        # 수정 가능 컬럼 설정
-        editable_cols = {}
-        for c in available_cols:
-            if c in ['받은금액', '잔액']:
-                editable_cols[c] = st.column_config.NumberColumn(c, min_value=0, step=10000, format="%d")
-            elif c in ['진행상황']:
-                editable_cols[c] = st.column_config.SelectboxColumn(c, options=["미입금", "부분입금", "입금완료"])
-            else:
-                editable_cols[c] = st.column_config.Column(c, disabled=True)
-
-        edited = st.data_editor(
-            edit_df,
-            column_config=editable_cols,
-            use_container_width=True,
-            hide_index=True,
-            num_rows="fixed",
-            key="settlement_editor"
-        )
+            if nc in full_edit_df.columns:
+                full_edit_df[nc] = pd.to_numeric(full_edit_df[nc], errors='coerce').fillna(0).astype(int)
         
-        if st.button("💾 변경사항 저장", key="save_manual_edit"):
-            _save_count = 0
-            for idx in range(len(edited)):
-                orig = edit_df.iloc[idx]
-                curr = edited.iloc[idx]
-                changed = False
-                for cc in ['받은금액', '잔액', '진행상황']:
-                    if cc in orig.index and str(orig[cc]) != str(curr[cc]):
-                        changed = True
-                        break
-                if changed:
-                    inq_id_edit = str(curr.get('문의ID', '')).strip()
-                    if inq_id_edit:
-                        _paid_v = int(curr.get('받은금액', 0))
-                        _bal_v = int(curr.get('잔액', 0))
-                        _status_v = str(curr.get('진행상황', ''))
-                        _direct_save_settlement(inq_id_edit, _paid_v, _bal_v, _status_v)
-                        _save_count += 1
-            if _save_count > 0:
-                st.success(f"✅ {_save_count}건 저장 완료!")
-                st.cache_data.clear()
+        # 잔액이 없으면 자동 계산
+        if '잔액' in full_edit_df.columns and '공급가액' in full_edit_df.columns and '부가세' in full_edit_df.columns and '받은금액' in full_edit_df.columns:
+            mask_no_bal = full_edit_df['잔액'] == 0
+            full_edit_df.loc[mask_no_bal, '잔액'] = (full_edit_df.loc[mask_no_bal, '공급가액'] + full_edit_df.loc[mask_no_bal, '부가세'] - full_edit_df.loc[mask_no_bal, '받은금액']).clip(lower=0)
+        
+        # 서브탭: 전체 / 입금완료 / 미수금(부분입금+미입금)
+        sub_all, sub_paid, sub_unpaid = st.tabs(["📋 전체", "✅ 입금완료", "🚨 미수금 업체"])
+        
+        def _render_settlement_table(df_view, key_suffix):
+            """정산 테이블 렌더링 (받은금액 수정 시 잔액 자동 계산)"""
+            if df_view.empty:
+                st.info("해당 조건의 데이터가 없습니다.")
+                return
+            
+            editable_cols = {}
+            for c in available_cols:
+                if c == '받은금액':
+                    editable_cols[c] = st.column_config.NumberColumn(c, min_value=0, step=10000, format="%d")
+                elif c == '잔액':
+                    editable_cols[c] = st.column_config.NumberColumn(c, min_value=0, format="%d", disabled=True, help="받은금액 수정 시 자동 계산됩니다")
+                elif c == '진행상황':
+                    editable_cols[c] = st.column_config.SelectboxColumn(c, options=["미입금", "부분입금", "입금완료"])
+                else:
+                    editable_cols[c] = st.column_config.Column(c, disabled=True)
+            
+            edited = st.data_editor(
+                df_view.reset_index(drop=True),
+                column_config=editable_cols,
+                use_container_width=True,
+                hide_index=True,
+                num_rows="fixed",
+                key=f"settlement_editor_{key_suffix}"
+            )
+            
+            if st.button("💾 변경사항 저장", key=f"save_manual_edit_{key_suffix}"):
+                _save_count = 0
+                for idx in range(len(edited)):
+                    orig = df_view.reset_index(drop=True).iloc[idx]
+                    curr = edited.iloc[idx]
+                    
+                    # 받은금액이 변경되면 잔액 자동 재계산
+                    paid_changed = ('받은금액' in orig.index and int(orig['받은금액']) != int(curr['받은금액']))
+                    status_changed = ('진행상황' in orig.index and str(orig['진행상황']) != str(curr['진행상황']))
+                    
+                    if paid_changed or status_changed:
+                        inq_id_edit = str(curr.get('문의ID', '')).strip()
+                        if inq_id_edit:
+                            _paid_v = int(curr.get('받은금액', 0))
+                            # 잔액 자동 계산: 공급가액 + 부가세 - 받은금액
+                            _supply = int(curr.get('공급가액', 0))
+                            _tax = int(curr.get('부가세', 0))
+                            _bal_v = max(0, _supply + _tax - _paid_v)
+                            # 진행상황 자동 결정
+                            if paid_changed:
+                                if _bal_v <= 0:
+                                    _status_v = "입금완료"
+                                elif _paid_v > 0:
+                                    _status_v = "부분입금"
+                                else:
+                                    _status_v = "미입금"
+                            else:
+                                _status_v = str(curr.get('진행상황', ''))
+                            _direct_save_settlement(inq_id_edit, _paid_v, _bal_v, _status_v)
+                            _save_count += 1
+                if _save_count > 0:
+                    st.success(f"✅ {_save_count}건 저장 완료! (잔액 자동 계산 적용)")
+                    st.cache_data.clear()
+                else:
+                    st.info("변경된 데이터가 없습니다.")
+        
+        with sub_all:
+            st.caption(f"💡 받은금액을 수정하면 잔액이 자동으로 재계산됩니다. (총 {len(full_edit_df)}건)")
+            _render_settlement_table(full_edit_df, "all")
+        
+        with sub_paid:
+            if '진행상황' in full_edit_df.columns:
+                paid_df = full_edit_df[full_edit_df['진행상황'].astype(str).str.contains('완료', na=False)]
+            elif '잔액' in full_edit_df.columns:
+                paid_df = full_edit_df[full_edit_df['잔액'] <= 0]
             else:
-                st.info("변경된 데이터가 없습니다.")
+                paid_df = pd.DataFrame()
+            st.caption(f"✅ 입금 완료된 업체 ({len(paid_df)}건)")
+            if not paid_df.empty:
+                st.metric("입금완료 합계", f"₩{int(paid_df['받은금액'].sum()):,}")
+            _render_settlement_table(paid_df, "paid")
+        
+        with sub_unpaid:
+            if '진행상황' in full_edit_df.columns:
+                unpaid_filter = full_edit_df[~full_edit_df['진행상황'].astype(str).str.contains('완료', na=False)]
+            elif '잔액' in full_edit_df.columns:
+                unpaid_filter = full_edit_df[full_edit_df['잔액'] > 0]
+            else:
+                unpaid_filter = full_edit_df
+            st.caption(f"🚨 미수금 업체 ({len(unpaid_filter)}건)")
+            if not unpaid_filter.empty and '잔액' in unpaid_filter.columns:
+                uc1, uc2 = st.columns(2)
+                uc1.metric("미수금 합계", f"₩{int(unpaid_filter['잔액'].sum()):,}")
+                uc2.metric("부분입금 건수", f"{len(unpaid_filter[unpaid_filter['받은금액'] > 0])}건")
+            _render_settlement_table(unpaid_filter, "unpaid")
     else:
         st.warning("⚠️ 표시할 컬럼이 없습니다")
 
@@ -746,36 +801,22 @@ def show_tax_invoice_management():
                 with col_ocr:
                     st.markdown("#### 🔄 정보 추출 중...")
                     
-                    # OCR 처리
+                    # OCR 처리 (통합 API)
                     try:
-                        from ocr_utils import (
-                            try_extract_with_easyocr, 
-                            try_extract_with_paddle,
-                            try_extract_with_pytesseract,
-                            get_sample_business_info
-                        )
+                        from ocr_utils import extract_business_info, get_sample_business_info
                         
-                        # OCR 처리 시도 (우선순위 있음)
-                        extracted_data = None
+                        extracted_data, engine_name, raw_text = extract_business_info(uploaded_file)
                         
-                        # 1순위: Pytesseract (가장 가능성 높음)
-                        extracted_data = try_extract_with_pytesseract(uploaded_file)
-                        if extracted_data and extracted_data.get('business_number'):
-                            st.success("✅ Pytesseract로 정보 추출 완료!")
+                        if extracted_data and (extracted_data.get('business_number') or extracted_data.get('company_name')):
+                            st.success(f"✅ {engine_name}로 정보 추출 완료!")
                         else:
-                            # 2순위: EasyOCR
-                            extracted_data = try_extract_with_easyocr(uploaded_file)
-                            if extracted_data and extracted_data.get('business_number'):
-                                st.success("✅ EasyOCR로 정보 추출 완료!")
-                            else:
-                                # 3순위: PaddleOCR
-                                extracted_data = try_extract_with_paddle(uploaded_file)
-                                if extracted_data and extracted_data.get('business_number'):
-                                    st.success("✅ PaddleOCR로 정보 추출 완료!")
-                                else:
-                                    # 4순위: 샘플 데이터
-                                    extracted_data = get_sample_business_info()
-                                    st.info("ℹ️ OCR 라이브러리 미설치 - 테스트 모드입니다")
+                            extracted_data = get_sample_business_info()
+                            engine_name = "테스트 모드"
+                            st.warning("⚠️ OCR 엔진에서 정보를 추출하지 못했습니다. 테스트 데이터를 표시합니다.")
+                        
+                        if raw_text:
+                            with st.expander("📝 OCR 원본 텍스트 보기"):
+                                st.text(raw_text)
                         
                         if extracted_data:
                             st.markdown("##### 📋 추출된 정보 (수정 가능)")
@@ -868,38 +909,15 @@ def show_tax_invoice_management():
 def extract_business_info_from_image(uploaded_file):
     """사업자등록증에서 정보 추출 (OCR) - 호환성 함수"""
     try:
-        from ocr_utils import (
-            try_extract_with_easyocr, 
-            try_extract_with_paddle, 
-            try_extract_with_pytesseract,
-            get_sample_business_info
-        )
+        from ocr_utils import extract_business_info, get_sample_business_info
         
-        # 1. Pytesseract 시도 (가장 가능성 높음)
-        result = try_extract_with_pytesseract(uploaded_file)
-        if result and result.get('business_number'):
+        result, engine_name, raw_text = extract_business_info(uploaded_file)
+        if result and (result.get('business_number') or result.get('company_name')):
             return result
         
-        # 2. EasyOCR 시도
-        result = try_extract_with_easyocr(uploaded_file)
-        if result and result.get('business_number'):
-            return result
-        
-        # 3. PaddleOCR 시도
-        result = try_extract_with_paddle(uploaded_file)
-        if result and result.get('business_number'):
-            return result
-        
-        # 4. 샘플 데이터 반환 (테스트 모드)
+        # 추출 실패 시 샘플 데이터 반환
         return get_sample_business_info()
         
     except Exception as e:
         print(f"OCR 처리 실패: {e}")
         return None
-
-    # --------------------------------------------------------------------------
-    # [디버깅용] 원본 데이터 확인
-    # --------------------------------------------------------------------------
-    with st.expander("🐛 원본 데이터 확인 (디버깅용)"):
-        st.text_area("구글 시트 '특이사항' 컬럼 원본값", value=note_text, height=200)
-        st.caption("※ 위 텍스트에 '- 이름... 지급:숫자' 형식이 포함되어 있어야 합니다.")

@@ -199,6 +199,13 @@ def show(data):
             s_t, e_t, _ = ue.smart_parse_time(target.get('행사시간', str(target.get('시간', ''))))
             qty = ue.safe_int(str(target.get('필요인력', target.get('요청인원', target.get('인원', '1')))).replace('명', ''))
 
+            # ▶ 기존 견적 메타데이터 로드 (복장/식사/주차/특이사항)
+            _est_meta = {}
+            if not df_est.empty and '문의ID' in df_est.columns:
+                _matched_est = df_est[df_est['문의ID'].astype(str).str.strip() == target_id]
+                if not _matched_est.empty:
+                    _est_meta = _matched_est.iloc[0].to_dict()
+
             st.session_state.update({
                 'w_client': target.get('업체명', ''),
                 'w_event': target.get('행사명', ''),
@@ -209,6 +216,10 @@ def show(data):
                 'w_qty': qty,
                 'last_project': sel_p,
                 '_current_inq_id': target_id,
+                'w_dress': str(_est_meta.get('복장', '')).strip() if str(_est_meta.get('복장', '')) not in ('nan','') else '',
+                'w_meal': str(_est_meta.get('식사', '')).strip() if str(_est_meta.get('식사', '')) not in ('nan','') else '',
+                'w_parking': str(_est_meta.get('주차', '')).strip() if str(_est_meta.get('주차', '')) not in ('nan','') else '',
+                'w_note': str(_est_meta.get('특이사항', '')).strip() if str(_est_meta.get('특이사항', '')) not in ('nan','') else '',
             })
 
             # ▶ 견적수정 시 기존 품목 로드
@@ -256,6 +267,15 @@ def show(data):
                 st.text_input("장소 (현장주소)", key="w_loc")
                 dates = st.date_input("기간", value=(st.session_state['w_sdate'], st.session_state['w_edate']), key="w_date_range")
                 calc_days = (dates[1] - dates[0]).days + 1 if isinstance(dates, tuple) and len(dates) == 2 else 1
+
+            with st.container(border=True):
+                st.markdown('<div class="sub-header">📋 현장 추가정보</div>', unsafe_allow_html=True)
+                wc1, wc2 = st.columns(2)
+                wc1.text_input("👔 복장", key="w_dress", placeholder="예: 정장, 캐주얼, 유니폼")
+                wc2.text_input("🍽️ 식사", key="w_meal", placeholder="예: 제공, 각자, 도시락")
+                wc3, wc4 = st.columns(2)
+                wc3.text_input("🅿️ 주차", key="w_parking", placeholder="예: 가능, 불가, 인근 유료")
+                wc4.text_input("📝 특이사항", key="w_note", placeholder="유의사항 입력")
 
             with st.container(border=True):
                 st.markdown('<div class="sub-header">2️⃣ 인력 품목 추가</div>', unsafe_allow_html=True)
@@ -446,6 +466,27 @@ def show(data):
                 </div>
             """, unsafe_allow_html=True)
 
+            # AI 견적가 추천
+            try:
+                import ai_helper as ai
+                num_items = len(st.session_state['est_items']) if not st.session_state['est_items'].empty else 0
+                if num_items > 0:
+                    df_est_all = data.get('estimate', pd.DataFrame())
+                    suggestion = ai.suggest_estimate_price(df_est_all, num_staff=num_items, num_days=1)
+                    if suggestion['recommended_supply'] > 0 and suggestion['similar_count'] >= 2:
+                        diff = supply_sum - suggestion['recommended_supply']
+                        diff_pct = (diff / suggestion['recommended_supply'] * 100) if suggestion['recommended_supply'] > 0 else 0
+                        diff_icon = "📈" if diff > 0 else "📉" if diff < 0 else "✅"
+                        st.markdown(f"""
+                        <div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:8px;padding:10px;margin-top:8px;font-size:12px;">
+                            🤖 <b>AI 추천가:</b> ₩{suggestion['recommended_supply']:,} 
+                            (과거 {suggestion['similar_count']}건 기준, 평균 마진 {suggestion['avg_margin']}%)
+                            {diff_icon} 현재 견적 대비 {'+' if diff > 0 else ''}{diff_pct:.0f}%
+                        </div>
+                        """, unsafe_allow_html=True)
+            except Exception:
+                pass
+
     # ==================================================================
     # TAB 2: 견적서 발행
     # ==================================================================
@@ -505,7 +546,11 @@ def show(data):
                                 "현장주소": f_addr or target_row.get('장소', ''),
                                 "사업자번호": "", "대표자": "",
                                 "담당자": f_ref or target_row.get('담당자', ''),
-                                "연락처": f_tel or target_row.get('연락처', '')
+                                "연락처": f_tel or target_row.get('연락처', ''),
+                                "복장": st.session_state.get('w_dress', ''),
+                                "식사": st.session_state.get('w_meal', ''),
+                                "주차": st.session_state.get('w_parking', ''),
+                                "특이사항": st.session_state.get('w_note', ''),
                             }
 
                             est_package = {

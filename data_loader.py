@@ -423,6 +423,16 @@ def save_estimate_details(est_data, metadata=None):
                 row_data[col_idx] = metadata.get('담당자', metadata.get('책임자', ''))
             elif header == "연락처":
                 row_data[col_idx] = metadata.get('연락처', '')
+            elif header == "복장":
+                row_data[col_idx] = metadata.get('복장', '')
+            elif header == "식사":
+                row_data[col_idx] = metadata.get('식사', '')
+            elif header == "주차":
+                row_data[col_idx] = metadata.get('주차', '')
+            elif header == "특이사항":
+                row_data[col_idx] = metadata.get('특이사항', '')
+            elif header == "부대비용":
+                row_data[col_idx] = int(est_data.get('부대비용', 0))
             elif "기록" in header or "일시" in header:
                 row_data[col_idx] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             elif header in ["메모", "비고", "Notes", "Meta"]:
@@ -1055,6 +1065,52 @@ def ensure_attendance_sheet():
         return False
 
 
+def ensure_evaluation_sheet():
+    """평가표 시트 존재 확인 및 필요시 생성"""
+    client = get_connection()
+    if not client:
+        return False
+    try:
+        sh = client.open_by_key(SHEET_ID)
+        try:
+            sh.worksheet("평가표")
+            return True
+        except Exception:
+            headers = ["평가ID", "배정ID", "인력명", "현장명", "근태", "수행", "외모",
+                       "팀워크", "현장적응", "총점", "평가등급", "평가자", "평가일시",
+                       "강점", "개선점", "재추천", "비고"]
+            wks = sh.add_worksheet(title="평가표", rows=1000, cols=len(headers))
+            wks.update('A1', [headers], value_input_option='RAW')
+            print("평가표 시트가 생성되었습니다.")
+            return True
+    except Exception as e:
+        print(f"Evaluation sheet error: {e}")
+        return False
+
+
+def ensure_payment_sheet():
+    """지급내역 시트 존재 확인 및 필요시 생성"""
+    client = get_connection()
+    if not client:
+        return False
+    try:
+        sh = client.open_by_key(SHEET_ID)
+        try:
+            sh.worksheet("지급내역")
+            return True
+        except Exception:
+            headers = ["지급ID", "배정ID", "인력명", "현장명", "파견기간", "파견일수",
+                       "기본급", "야근비", "식사비", "교통비", "보너스", "소계",
+                       "세금공제", "최종지급액", "지급상태", "지급일", "지급담당자", "비고"]
+            wks = sh.add_worksheet(title="지급내역", rows=1000, cols=len(headers))
+            wks.update('A1', [headers], value_input_option='RAW')
+            print("지급내역 시트가 생성되었습니다.")
+            return True
+    except Exception as e:
+        print(f"Payment sheet error: {e}")
+        return False
+
+
 def append_row(sheet_name: str, row_values: list) -> tuple:
     """
     특정 시트에 새로운 행을 추가합니다.
@@ -1271,8 +1327,10 @@ def load_estimate_items(inquiry_id: str):
 # 평가표 저장
 # ---------------------------------------------------------
 
+
 def save_evaluation(eval_dict: dict):
     """평가표 시트에 평가 기록 저장"""
+    ensure_evaluation_sheet()  # 시트 존재 보장
     client = get_connection()
     if not client:
         return False
@@ -1316,7 +1374,7 @@ def save_evaluation(eval_dict: dict):
             eval_dict.get('평가등급', 'C'),
             eval_dict.get('평가자', ''),
             eval_dict.get('평가일시', datetime.now().strftime('%Y-%m-%d %H:%M:%S')),
-            eval_dict.get('총평', eval_dict.get('강점', '')),  # 총평 (구버전 호환: 강점)
+            eval_dict.get('강점', eval_dict.get('총평', '')),  # 강점 (구버전 호환: 총평)
             eval_dict.get('개선점', ''),
             eval_dict.get('재추천', 'No'),
             eval_dict.get('비고', ''),
@@ -1336,6 +1394,7 @@ def save_evaluation(eval_dict: dict):
 
 def save_payment_record(payment_dict: dict):
     """지급내역 시트에 급여 기록 저장"""
+    ensure_payment_sheet()  # 시트 존재 보장
     client = get_connection()
     if not client:
         return False

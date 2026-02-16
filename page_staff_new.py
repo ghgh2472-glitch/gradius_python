@@ -500,7 +500,7 @@ def tab_assignment(data):
 # ==============================================================================
 
 def tab_attendance(data):
-    """출석부 — 견적 연동 시간/날짜 + 행사완료 처리"""
+    """출석부 — 견적 연동 시간/날짜 + 스케줄표 + 행사완료 처리"""
     df_inq = data.get('inq', pd.DataFrame())
     sel_id, sel = _select_contract(df_inq, ['배정완료', '진행중', '완료'], "att")
     if sel_id is None:
@@ -531,9 +531,100 @@ def tab_attendance(data):
 
     st.divider()
 
-    # ── 출석 날짜: 문의 기준 (행사시작일~행사종료일) ──
+    # ── 다일 행사 스케줄표 (일차별 인원 배분) ──
     start_date = _parse_date_safe(sel.get('행사시작일', ''))
     end_date = _parse_date_safe(sel.get('행사종료일', ''))
+    
+    if start_date and end_date and (end_date - start_date).days >= 1:
+        num_days = (end_date - start_date).days + 1
+        st.markdown(f'<div class="section-title">📅 일자별 스케줄표 ({num_days}일 행사)</div>', unsafe_allow_html=True)
+        st.caption("💡 각 인력의 일자별 투입 여부를 체크하세요. 일차별로 다른 인원을 배정할 수 있습니다.")
+        
+        # 날짜 목록 생성
+        date_list = [start_date + timedelta(days=d) for d in range(num_days)]
+        date_labels = [f"{d.month}/{d.day}({['월','화','수','목','금','토','일'][d.weekday()]})" for d in date_list]
+        
+        # 스케줄 키 초기화
+        sched_key = f"schedule_{sel_id}"
+        if sched_key not in st.session_state:
+            # 기본값: 전 인원 전일 투입
+            st.session_state[sched_key] = {
+                str(row.get(name_col, '')): [True] * num_days
+                for _, row in assignments_df.iterrows()
+            }
+        
+        schedule_data = st.session_state[sched_key]
+        
+        # 그리드 헤더
+        header_cols = st.columns([2] + [1] * min(num_days, 7))
+        with header_cols[0]:
+            st.markdown("**인력명**")
+        for di, dl in enumerate(date_labels[:7]):
+            with header_cols[di + 1]:
+                st.markdown(f"**{dl}**")
+        
+        # 7일 이상일 경우 페이지 나누기
+        page_size = 7
+        if num_days > page_size:
+            sched_page = st.radio(
+                "주차 선택",
+                [f"{i*page_size+1}~{min((i+1)*page_size, num_days)}일차" for i in range((num_days + page_size - 1) // page_size)],
+                horizontal=True, key="sched_page"
+            )
+            page_idx = [f"{i*page_size+1}~{min((i+1)*page_size, num_days)}일차" for i in range((num_days + page_size - 1) // page_size)].index(sched_page)
+            day_start = page_idx * page_size
+            day_end = min(day_start + page_size, num_days)
+        else:
+            day_start = 0
+            day_end = num_days
+        
+        visible_dates = date_labels[day_start:day_end]
+        visible_count = len(visible_dates)
+        
+        # 인력별 일자 체크박스
+        daily_counts = [0] * visible_count
+        for _, row in assignments_df.iterrows():
+            staff_name = str(row.get(name_col, ''))
+            role = str(row.get('직무', row.get('역할', '')))
+            
+            if staff_name not in schedule_data:
+                schedule_data[staff_name] = [True] * num_days
+            
+            row_cols = st.columns([2] + [1] * visible_count)
+            with row_cols[0]:
+                st.markdown(f"👤 **{staff_name}** <span style='color:#6B7280;font-size:12px;'>({role})</span>", unsafe_allow_html=True)
+            
+            for di in range(visible_count):
+                actual_di = day_start + di
+                with row_cols[di + 1]:
+                    checked = st.checkbox(
+                        "✓", value=schedule_data[staff_name][actual_di],
+                        key=f"sched_{sel_id}_{staff_name}_{actual_di}",
+                        label_visibility="collapsed"
+                    )
+                    schedule_data[staff_name][actual_di] = checked
+                    if checked:
+                        daily_counts[di] += 1
+        
+        # 일자별 인원 요약
+        st.markdown("---")
+        summary_cols = st.columns([2] + [1] * visible_count)
+        with summary_cols[0]:
+            st.markdown("**일자별 인원**")
+        for di in range(visible_count):
+            with summary_cols[di + 1]:
+                st.markdown(f"**{daily_counts[di]}명**")
+        
+        # 스케줄 저장
+        st.session_state[sched_key] = schedule_data
+        
+        st.divider()
+
+    # ── 출석 날짜: 문의 기준 (행사시작일~행사종료일) ──
+    if not start_date:
+        start_date = _parse_date_safe(sel.get('행사시작일', ''))
+    if not end_date:
+        end_date = _parse_date_safe(sel.get('행사종료일', ''))
     today = datetime.now().date()
 
     if start_date and end_date:
@@ -620,14 +711,20 @@ def tab_attendance(data):
 # ==============================================================================
 
 def tab_evaluation(data):
-    """평가 — STAFF DB 평가항목과 일치 (근태/수행/외모/팀워크)"""
+    """평가 — STAFF DB 평가항목과 일치 (근태/수행/외모/팀워크) + 캐시 최적화"""
     df_inq = data.get('inq', pd.DataFrame())
     sel_id, sel = _select_contract(df_inq, ['진행중', '완료'], "eval")
     if sel_id is None:
         st.info("📌 진행중 또는 완료 상태의 계약이 필요합니다.")
         return
 
-    assignments_df = db.get_assignments_by_inquiry(sel_id)
+    # 배정 인력 캐시 (selectbox 변경 시 재로딩 방지)
+    cache_key = f"_eval_assignments_{sel_id}"
+    if cache_key not in st.session_state or st.session_state.get('_eval_last_id') != sel_id:
+        st.session_state[cache_key] = db.get_assignments_by_inquiry(sel_id)
+        st.session_state['_eval_last_id'] = sel_id
+    
+    assignments_df = st.session_state[cache_key]
     if assignments_df.empty:
         st.info("배정된 인력이 없습니다.")
         return
@@ -641,26 +738,30 @@ def tab_evaluation(data):
 
     st.markdown(f"**{target.get(name_col, '')}** 평가")
 
-    # STAFF DB와 일치하는 4개 평가항목
-    st.caption("💡 평가 항목은 STAFF 인력 DB와 동일합니다")
-    col1, col2 = st.columns(2)
-    s1 = col1.slider("근태", 1, 5, 3, key="e_s1", help="출퇴근 시간 준수, 결근율")
-    s2 = col2.slider("수행", 1, 5, 3, key="e_s2", help="업무 수행 능력, 전문성")
-    col3, col4 = st.columns(2)
-    s3 = col3.slider("외모", 1, 5, 3, key="e_s3", help="복장, 단정함, 서비스 이미지")
-    s4 = col4.slider("팀워크", 1, 5, 3, key="e_s4", help="협업, 의사소통, 현장 적응")
+    # STAFF DB와 일치하는 4개 평가항목 — form으로 감싸서 불필요한 rerun 방지
+    st.caption("💡 평가 항목은 STAFF 인력 DB와 동일합니다. 슬라이더 조정 후 '평가 저장'을 누르세요.")
+    
+    with st.form(key=f"eval_form_{sel_id}_{sel_idx}"):
+        col1, col2 = st.columns(2)
+        s1 = col1.slider("근태", 1, 5, 3, key="e_s1", help="출퇴근 시간 준수, 결근율")
+        s2 = col2.slider("수행", 1, 5, 3, key="e_s2", help="업무 수행 능력, 전문성")
+        col3, col4 = st.columns(2)
+        s3 = col3.slider("외모", 1, 5, 3, key="e_s3", help="복장, 단정함, 서비스 이미지")
+        s4 = col4.slider("팀워크", 1, 5, 3, key="e_s4", help="협업, 의사소통, 현장 적응")
 
-    total = round((s1 + s2 + s3 + s4) / 4, 1)
-    grade = "A" if total >= 4.5 else "B" if total >= 3.5 else "C" if total >= 2.5 else "D"
+        total = round((s1 + s2 + s3 + s4) / 4, 1)
+        grade = "A" if total >= 4.5 else "B" if total >= 3.5 else "C" if total >= 2.5 else "D"
 
-    cr1, cr2 = st.columns(2)
-    cr1.metric("총점", f"{total}")
-    cr2.metric("등급", grade)
+        cr1, cr2 = st.columns(2)
+        cr1.metric("총점", f"{total}")
+        cr2.metric("등급", grade)
 
-    total_comment = st.text_area("총평", key="e_comment", placeholder="종합 평가 내용을 입력하세요")
-    recommend = st.checkbox("재추천 (다음에도 배정 추천)", value=total >= 3.5, key="e_rec")
+        total_comment = st.text_area("총평", key="e_comment", placeholder="종합 평가 내용을 입력하세요")
+        recommend = st.checkbox("재추천 (다음에도 배정 추천)", value=total >= 3.5, key="e_rec")
 
-    if st.button("✅ 평가 저장", type="primary", use_container_width=True, key="save_eval"):
+        submitted = st.form_submit_button("✅ 평가 저장", type="primary", use_container_width=True)
+    
+    if submitted:
         eval_dict = {
             '배정ID': target.get('배정ID', ''),
             '인력명': target.get(name_col, ''),
@@ -668,7 +769,7 @@ def tab_evaluation(data):
             '근태': s1, '수행': s2, '외모': s3, '팀워크': s4,
             '총점': total, '평가등급': grade,
             '평가자': '', '평가일시': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            '총평': total_comment,
+            '강점': total_comment,
             '재추천': 'Yes' if recommend else 'No', '비고': '',
         }
         with st.spinner("평가를 저장 중..."):

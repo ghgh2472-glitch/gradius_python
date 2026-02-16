@@ -195,6 +195,10 @@ def show(data):
                     <div style="font-size:11px;color:{cfg['color']};opacity:0.7;">{cfg['desc'][:8]}</div>
                 </div>
                 """, unsafe_allow_html=True)
+                # 클릭 버튼
+                if count > 0:
+                    if st.button(f"상세보기", key=f"pipe_{status_name}", use_container_width=True):
+                        st.session_state['pipeline_detail_status'] = status_name
             if i < len(sc.STATUS_FLOW) - 1:
                 with cols[col_idx + 1]:
                     st.markdown('<div class="pipeline-arrow">→</div>', unsafe_allow_html=True)
@@ -214,6 +218,64 @@ def show(data):
                         <div class="pipeline-exit-count" style="color:{cfg['color']};">{count}</div>
                     </div>
                     """, unsafe_allow_html=True)
+                    if count > 0:
+                        if st.button("상세", key=f"pipe_exit_{status_name}"):
+                            st.session_state['pipeline_detail_status'] = status_name
+        
+        # ── 파이프라인 상세 패널 ──
+        _pipe_sel = st.session_state.get('pipeline_detail_status', '')
+        if _pipe_sel:
+            _pipe_cfg = sc.STATUS_CONFIG.get(_pipe_sel, {})
+            _pipe_icon = _pipe_cfg.get('icon', '📋')
+            st.markdown(f"""
+            <div style="background:{_pipe_cfg.get('bg','#f9fafb')};border:2px solid {_pipe_cfg.get('color','#6B7280')};
+                        border-radius:12px;padding:16px;margin:12px 0;">
+                <div style="font-size:18px;font-weight:800;color:{_pipe_cfg.get('color','#111')};margin-bottom:10px;">
+                    {_pipe_icon} {_pipe_sel} 상태 상세 목록
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            _pipe_df = df_inq[status_series == _pipe_sel].copy()
+            if not _pipe_df.empty:
+                col_id = ud.find_col(df_inq, ["문의ID", "ID", "No", "번호"])
+                col_company = ud.find_col(df_inq, ["업체", "업체명", "회사명", "고객사"])
+                col_service = ud.find_col(df_inq, ["서비스", "서비스종류", "행사명"])
+                col_contact = ud.find_col(df_inq, ["연락처", "담당자연락처", "전화"])
+                col_manager = ud.find_col(df_inq, ["담당자", "담당자명"])
+                col_date = ud.find_col(df_inq, ["행사시작일", "일시", "시작일"])
+                col_location = ud.find_col(df_inq, ["장소", "행사장소"])
+                
+                for _pi, _pr in _pipe_df.iterrows():
+                    _p_id = str(_pr.get(col_id, '')) if col_id else ''
+                    _p_company = str(_pr.get(col_company, '')) if col_company else ''
+                    _p_event = str(_pr.get(col_service, '')) if col_service else ''
+                    _p_contact = str(_pr.get(col_contact, '')) if col_contact else '-'
+                    _p_manager = str(_pr.get(col_manager, '')) if col_manager else '-'
+                    _p_date = str(_pr.get(col_date, '')) if col_date else '-'
+                    _p_location = str(_pr.get(col_location, '')) if col_location else '-'
+                    
+                    with st.container(border=True):
+                        _dc1, _dc2, _dc3 = st.columns([2, 2, 1])
+                        with _dc1:
+                            st.markdown(f"**🏢 {_p_company}** — {_p_event}")
+                            st.caption(f"📋 {_p_id}")
+                        with _dc2:
+                            st.markdown(f"📅 {_p_date}  |  📍 {_p_location}")
+                            st.markdown(f"👤 {_p_manager}  |  📞 {_p_contact}")
+                        with _dc3:
+                            # 배정 인원 확인
+                            _p_staff_detail = ud.get_dispatch_detail_for_event(df_dispatch, _p_event)
+                            _p_staff_count = len(_p_staff_detail) if not _p_staff_detail.empty else 0
+                            st.metric("배정인원", f"{_p_staff_count}명")
+                
+                st.caption(f"총 {len(_pipe_df)}건")
+            else:
+                st.info("해당 상태의 건이 없습니다.")
+            
+            if st.button("✖ 상세 패널 닫기", key="close_pipe_detail"):
+                st.session_state.pop('pipeline_detail_status', None)
+                st.rerun()
         
         # 진행률 바 (체결 이후 건수 / 전체 건수)
         total = len(df_inq)
@@ -342,8 +404,8 @@ def show(data):
     st.markdown("---")
     
     # 6. 탭 구성
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
-        "📊 분석", "🔥 긴급", "👥 인력", "💼 고객", "💰 정산", "📅 캘린더", "📋 리포트"
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+        "📊 분석", "🔥 긴급", "👥 인력", "💼 고객", "💰 정산", "📅 캘린더", "📋 리포트", "🤖 AI 분석"
     ])
     
     # [Tab 1] 분석 차트
@@ -954,3 +1016,136 @@ def show(data):
                     file_name=f"월간분석_{datetime.now().strftime('%Y%m')}.txt",
                     mime="text/plain"
                 )
+
+    # [Tab 8] AI 분석
+    with tab8:
+        import ai_helper as ai
+        
+        st.markdown('<div class="section-title">🤖 AI 경영 분석</div>', unsafe_allow_html=True)
+        st.caption("데이터 기반 AI 분석으로 경영 인사이트를 제공합니다")
+        
+        # AI 종합 요약
+        exec_summary = ai.generate_executive_summary(df_inq, df_dispatch, df_settlement)
+        st.markdown(f"""
+        <div class="ai-box">
+            <b>🤖 AI 경영 요약</b><br/>
+            {exec_summary}
+        </div>
+        """, unsafe_allow_html=True)
+        
+        ai_tab1, ai_tab2, ai_tab3, ai_tab4 = st.tabs([
+            "📈 매출 예측", "🚨 리스크 분석", "👥 인력 수요", "💼 고객 분석"
+        ])
+        
+        with ai_tab1:
+            st.markdown("##### 📈 향후 3개월 매출 예측")
+            predictions = ai.predict_monthly_revenue(df_settlement, months_ahead=3)
+            if predictions:
+                for pred in predictions:
+                    trend_icon = "📈" if "+" in pred['trend'] else "📉" if "-" in pred['trend'] else "➡️"
+                    confidence_color = "#10B981" if pred['confidence'] == "높음" else "#F59E0B" if pred['confidence'] == "보통" else "#EF4444"
+                    st.markdown(f"""
+                    <div style="background:white;border:1px solid #E5E7EB;border-radius:8px;padding:14px;margin-bottom:8px;
+                                display:flex;justify-content:space-between;align-items:center;">
+                        <div>
+                            <b>{pred['month']}</b>
+                            <span style="color:#6B7280;font-size:12px;margin-left:8px;">{trend_icon} {pred['trend']}</span>
+                        </div>
+                        <div style="display:flex;align-items:center;gap:12px;">
+                            <span style="font-size:18px;font-weight:800;">₩{pred['predicted']:,}</span>
+                            <span style="background:{confidence_color};color:white;padding:2px 8px;border-radius:4px;font-size:11px;">
+                                신뢰도: {pred['confidence']}
+                            </span>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+            else:
+                st.info("💡 매출 예측을 위해 더 많은 정산 데이터가 필요합니다.")
+        
+        with ai_tab2:
+            st.markdown("##### 🚨 사업 리스크 분석")
+            risks = ai.analyze_risks(df_inq, df_dispatch, df_settlement)
+            if risks:
+                for risk in risks:
+                    level_color = "#DC2626" if risk['level'] == "높음" else "#F59E0B" if risk['level'] == "보통" else "#10B981"
+                    st.markdown(f"""
+                    <div style="background:#FFF;border:1px solid #E5E7EB;border-left:4px solid {level_color};
+                                border-radius:8px;padding:12px;margin-bottom:8px;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                            <span style="font-weight:700;">{risk['type']}</span>
+                            <span style="background:{level_color};color:white;padding:2px 8px;border-radius:4px;font-size:11px;">
+                                {risk['level']}
+                            </span>
+                        </div>
+                        <div style="font-size:13px;color:#374151;">{risk['message']}</div>
+                        <div style="font-size:12px;color:#6B7280;margin-top:4px;">💡 {risk['action']}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+            else:
+                st.success("✅ 현재 식별된 리스크가 없습니다!")
+        
+        with ai_tab3:
+            st.markdown("##### 👥 향후 4주 인력 수요 예측")
+            demand = ai.predict_staff_demand(df_inq, weeks_ahead=4)
+            if demand:
+                demand_df = pd.DataFrame(demand)
+                if not demand_df.empty and demand_df['estimated_staff'].sum() > 0:
+                    import plotly.graph_objects as go
+                    fig = go.Figure()
+                    fig.add_trace(go.Bar(
+                        x=demand_df['week'], 
+                        y=demand_df['estimated_staff'],
+                        text=demand_df['estimated_staff'],
+                        textposition='outside',
+                        marker_color='#667eea',
+                        name='필요인력'
+                    ))
+                    fig.add_trace(go.Scatter(
+                        x=demand_df['week'],
+                        y=demand_df['events'],
+                        mode='lines+markers+text',
+                        text=demand_df['events'],
+                        textposition='top center',
+                        marker_color='#f5576c',
+                        name='행사건수',
+                        yaxis='y2'
+                    ))
+                    fig.update_layout(
+                        margin=dict(l=10, r=10, t=30, b=10),
+                        height=300,
+                        yaxis=dict(title='필요인력(명)'),
+                        yaxis2=dict(title='행사건수', overlaying='y', side='right'),
+                        showlegend=True,
+                        legend=dict(orientation='h', y=-0.15)
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    total_demand = demand_df['estimated_staff'].sum()
+                    st.info(f"📊 향후 4주간 총 예상 필요인력: **{total_demand}명** / 행사 {demand_df['events'].sum()}건")
+                else:
+                    st.info("💡 확정된 행사가 아직 없습니다.")
+            else:
+                st.info("💡 수요 예측을 위한 데이터가 부족합니다.")
+        
+        with ai_tab4:
+            st.markdown("##### 💼 고객 분석")
+            retention = ai.analyze_customer_retention(df_inq)
+            
+            if retention['total_customers'] > 0:
+                rc1, rc2, rc3 = st.columns(3)
+                rc1.metric("전체 고객사", f"{retention['total_customers']}사")
+                rc2.metric("재계약률", f"{retention['retention_rate']}%")
+                rc3.metric("이탈 위험", f"{len(retention['at_risk'])}사")
+                
+                if retention['top_loyal']:
+                    st.markdown("**🏆 충성 고객 Top 5**")
+                    for i, cust in enumerate(retention['top_loyal'], 1):
+                        st.markdown(f"{i}. **{cust['company']}** — {cust['count']}회 거래")
+                
+                if retention['at_risk']:
+                    st.markdown("**⚠️ 이탈 위험 고객 (90일+ 미거래)**")
+                    for cust in retention['at_risk'][:5]:
+                        st.markdown(f"- {cust['company']} ({cust['days_since']}일 전)")
+            else:
+                st.info("💡 고객 분석을 위한 데이터가 필요합니다.")
+

@@ -134,15 +134,19 @@ def show(data):
                 st.image(Image.open(uploaded), use_column_width=True, caption="업로드된 사업자등록증")
             with col_res:
                 try:
-                    from ocr_utils import try_extract_with_pytesseract, try_extract_with_easyocr, get_sample_business_info
-                    extracted = try_extract_with_pytesseract(uploaded)
-                    if not extracted or not extracted.get('business_number'):
-                        extracted = try_extract_with_easyocr(uploaded)
-                    if not extracted or not extracted.get('business_number'):
-                        extracted = get_sample_business_info()
-                        st.info("ℹ️ OCR 라이브러리 미설치 — 테스트 모드")
+                    from ocr_utils import extract_business_info, get_sample_business_info
+                    extracted, engine_name, raw_text = extract_business_info(uploaded)
+                    
+                    if extracted and (extracted.get('business_number') or extracted.get('company_name')):
+                        st.success(f"✅ 정보 추출 완료! (엔진: {engine_name})")
                     else:
-                        st.success("✅ 정보 추출 완료!")
+                        extracted = get_sample_business_info()
+                        engine_name = "테스트 모드"
+                        st.warning("⚠️ OCR 엔진에서 정보를 추출하지 못했습니다. 테스트 데이터를 표시합니다.")
+                    
+                    if raw_text:
+                        with st.expander("📝 OCR 원본 텍스트 보기"):
+                            st.text(raw_text)
 
                     if extracted:
                         st.session_state['_ocr_biz_num'] = extracted.get('business_number', '')
