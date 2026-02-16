@@ -1090,7 +1090,6 @@ def show(data):
             if demand:
                 demand_df = pd.DataFrame(demand)
                 if not demand_df.empty and demand_df['estimated_staff'].sum() > 0:
-                    import plotly.graph_objects as go
                     fig = go.Figure()
                     fig.add_trace(go.Bar(
                         x=demand_df['week'], 
