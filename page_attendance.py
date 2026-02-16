@@ -67,7 +67,7 @@ def get_active_assignments(inquiry_id=None):
 def get_attendance_data(assignment_id):
     """
     특정 배정에 대한 출석 데이터 로드
-    Google Sheet의 '출석부' 시트에서 조회
+    Google Sheet의 '출석부' 시트에서 조회 (통합 13컬럼 구조)
     """
     client = db.get_connection()
     if not client:
@@ -78,7 +78,11 @@ def get_attendance_data(assignment_id):
         wks = sh.worksheet("출석부")
         records = wks.get_all_records()
         df = pd.DataFrame(records)
-        df = df[df.get('배정ID', '').astype(str) == str(assignment_id)]
+        if df.empty:
+            return df
+        # 배정ID 컬럼으로 필터링
+        id_col = '배정ID' if '배정ID' in df.columns else df.columns[0]
+        df = df[df[id_col].astype(str) == str(assignment_id)]
         return df
     except:
         return pd.DataFrame()
@@ -86,57 +90,24 @@ def get_attendance_data(assignment_id):
 
 def save_attendance_record(assignment_id, attendance_date, status, note=''):
     """
-    출석 기록 저장
+    출석 기록 저장 — data_loader.save_attendance_record() 통합 사용
     status: '출석', '결근', '지각', '조퇴'
     """
-    client = db.get_connection()
-    if not client:
-        return False
-    
-    try:
-        sh = client.open_by_key(db.SHEET_ID)
-        wks = sh.worksheet("출석부")
-        
-        # 기존 기록 확인
-        records = wks.get_all_records()
-        df = pd.DataFrame(records)
-        existing = df[
-            (df.get('배정ID', '').astype(str) == str(assignment_id)) &
-            (df.get('출석일자', '').astype(str) == str(attendance_date))
-        ]
-        
-        if not existing.empty:
-            # 업데이트: 기존 행 찾기
-            row_idx = None
-            for i, rec in enumerate(records):
-                if (rec.get('배정ID', '') == str(assignment_id) and 
-                    rec.get('출석일자', '') == str(attendance_date)):
-                    row_idx = i + 2
-                    break
-            
-            if row_idx:
-                headers = wks.row_values(1)
-                headers_clean = [str(h).strip() for h in headers]
-                
-                # 상태 및 비고 컬럼 위치 찾기
-                status_col = headers_clean.index('상태') + 1 if '상태' in headers_clean else 3
-                note_col = headers_clean.index('비고') + 1 if '비고' in headers_clean else 4
-                
-                wks.update_cell(row_idx, status_col, status)
-                if note:
-                    wks.update_cell(row_idx, note_col, note)
-                return True
-        else:
-            # 신규 기록
-            headers = wks.row_values(1)
-            headers_clean = [str(h).strip() for h in headers]
-            
-            new_row = [assignment_id, attendance_date, status, note] + [''] * (len(headers) - 4)
-            wks.append_row(new_row)
-            return True
-    except Exception as e:
-        print(f"Attendance save error: {e}")
-        return False
+    attendance_dict = {
+        "배정ID": str(assignment_id),
+        "문의ID": "",
+        "인력명": "",
+        "출석날짜": str(attendance_date),
+        "출근시간": "",
+        "퇴근시간": "",
+        "근무시간": 0,
+        "일급여": 0,
+        "출석상태": status,
+        "사유": "",
+        "비고": note or "",
+        "기록일시": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    }
+    return db.save_attendance_record(attendance_dict)
 
 
 # ==============================================================================

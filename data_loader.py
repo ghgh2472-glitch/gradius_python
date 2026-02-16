@@ -994,11 +994,11 @@ def ensure_attendance_sheet():
             # 이미 존재함
             return True
         except:
-            # 시트가 없음 → 생성
-            wks = sh.add_worksheet(title="출석부", rows=1000, cols=10)
+            # 시트가 없음 → 생성 (save_attendance_record 의 13칼럼과 일치)
+            wks = sh.add_worksheet(title="출석부", rows=1000, cols=13)
             
             # 헤더 설정
-            headers = ["배정ID", "출석일자", "상태", "비고", "기록자", "기록시간", "", "", "", ""]
+            headers = ["기록ID", "배정ID", "문의ID", "인력명", "출석날짜", "출근시간", "퇴근시간", "근무시간", "일급여", "출석상태", "사유", "비고", "기록일시"]
             wks.update('A1', [headers], value_input_option='RAW')
             
             print("출석부 시트가 생성되었습니다.")

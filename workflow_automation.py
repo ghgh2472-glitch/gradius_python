@@ -98,13 +98,13 @@ def create_payroll_record(assignment: Dict, sheet_client: gspread.Spreadsheet) -
     try:
         sh = sheet_client
         
-        # 인건비 시트 확인
+        # 지급내역 시트 확인 (인건비 → 지급내역으로 통합)
         try:
-            wks = sh.worksheet("인건비")
+            wks = sh.worksheet("지급내역")
         except gspread.exceptions.WorksheetNotFound:
             # 시트 없으면 생성
-            wks = sh.add_worksheet(title="인건비", rows=1000, cols=10)
-            headers = ["배정ID", "이름", "역할", "일수", "단가", "총지급액", "지급상태", "기록일시"]
+            wks = sh.add_worksheet(title="지급내역", rows=2000, cols=18)
+            headers = ["지급ID", "배정ID", "인력명", "현장명", "직무", "근무일수", "지급단가", "총지급액", "세금공제", "실지급액", "지급상태", "지급일", "은행명", "계좌번호", "예금주", "수당", "비고", "기록일시"]
             wks.update('A1', [headers], value_input_option='RAW')
         
         # 급여 기록 구성
