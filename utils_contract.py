@@ -90,7 +90,15 @@ def get_contract_summary_html(inq_row, est_df):
     est_parking = str(match_row.get('주차', '')).strip() if has_data else ''
     est_note_raw = str(match_row.get('특이사항', '')).strip() if has_data else ''
     
-    # 문의 특이사항에서도 파싱 시도
+    # 견적 메타 없으면 → 문의 개별 컬럼 → 문의 특이사항 regex fallback
+    if not est_dress or est_dress in ('nan', 'None'):
+        est_dress = _safe_str(inq_row, '복장')
+    if not est_meal or est_meal in ('nan', 'None'):
+        est_meal = _safe_str(inq_row, '식사')
+    if not est_parking or est_parking in ('nan', 'None'):
+        est_parking = _safe_str(inq_row, '주차')
+    
+    # 여전히 없으면 기존 데이터 호환: 특이사항에서 regex 파싱
     if not est_dress or est_dress in ('nan', 'None'):
         import re as _re
         _dm = _re.search(r'\[복장:([^\]]+)\]', special)

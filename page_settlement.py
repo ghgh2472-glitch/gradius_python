@@ -47,7 +47,7 @@ def show_settlement_overview():
     st.markdown('<div class="section-title">📊 전체 정산 현황</div>', unsafe_allow_html=True)
     
     try:
-        dispatch_data = db.load_dispatch_data()
+        dispatch_data = db.get_dispatch()
         settlement_df = dispatch_data.get('settlement', pd.DataFrame())
     except Exception as e:
         st.error(f"정산 데이터 로드 실패: {e}")
@@ -187,7 +187,7 @@ def show_settlement_overview():
                 st.success(f"✅ 입금이 저장되었습니다!\n- 합계: ₩{int(total_new_paid):,}")
                 st.balloons()
                 # 캐시만 무효화 (rerun 제거 — 데이터 증발 방지)
-                st.cache_data.clear()
+                db.invalidate_data()
             else:
                 st.error("❌ 입금 금액을 입력해주세요.")
     
@@ -269,7 +269,7 @@ def show_settlement_overview():
                             _save_count += 1
                 if _save_count > 0:
                     st.success(f"✅ {_save_count}건 저장 완료! (잔액 자동 계산 적용)")
-                    st.cache_data.clear()
+                    db.invalidate_data()
                 else:
                     st.info("변경된 데이터가 없습니다.")
         
@@ -603,7 +603,7 @@ def show_settlement_detail(data):
             if cur_status in ['배정완료', '진행중']:
                 if st.button("✅ 현장 완료 처리"):
                     db.update_status(inq_id_for_update, sc.STATUS_FLOW[5])  # '완료'
-                    st.success("현장 완료 처리됨!"); st.cache_data.clear(); time.sleep(1); st.rerun()
+                    st.success("현장 완료 처리됨!"); db.invalidate_data(); time.sleep(1); st.rerun()
             elif cur_status == '완료':
                 st.success("✅ 현장 완료 — 아래 인력 급여 탭에서 지급 후 정산 완료 처리하세요.")
 
@@ -651,6 +651,59 @@ def show_settlement_detail(data):
             bank = bank if bank and bank not in ('nan', 'None', '') else None
             account = account if account and account not in ('nan', 'None', '') else None
             return bank, account
+
+        def _save_bank_to_staff(staff_name, bank_name, account_num, staff_df):
+            """STAFF 시트에 은행/계좌 정보를 직접 업데이트"""
+            try:
+                client = db.get_connection()
+                if not client:
+                    return False
+                sh = client.open_by_key(db.SHEET_ID)
+                wks = sh.worksheet("STAFF")
+                headers = [str(h).strip() for h in wks.row_values(1)]
+                
+                # 이름 컬럼 찾기
+                name_col_idx = None
+                for nc in ['이름', '인력명', '성명']:
+                    if nc in headers:
+                        name_col_idx = headers.index(nc) + 1
+                        break
+                if not name_col_idx:
+                    return False
+                
+                # 은행/계좌 컬럼 찾기
+                bank_col_idx = None
+                acct_col_idx = None
+                for i, h in enumerate(headers, 1):
+                    if h in ('은행명', '은행') and not bank_col_idx:
+                        bank_col_idx = i
+                    if h in ('계좌번호', '계좌') and not acct_col_idx:
+                        acct_col_idx = i
+                
+                if not bank_col_idx or not acct_col_idx:
+                    return False
+                
+                # 이름으로 행 찾기
+                all_vals = wks.get_all_values()
+                target_row = None
+                for ri in range(1, len(all_vals)):
+                    if str(all_vals[ri][name_col_idx - 1]).strip() == str(staff_name).strip():
+                        target_row = ri + 1  # 1-based
+                        break
+                
+                if not target_row:
+                    return False
+                
+                from gspread.cell import Cell
+                cells = [
+                    Cell(row=target_row, col=bank_col_idx, value=str(bank_name).strip()),
+                    Cell(row=target_row, col=acct_col_idx, value=str(account_num).strip()),
+                ]
+                wks.update_cells(cells, value_input_option='RAW')
+                return True
+            except Exception as e:
+                print(f"계좌정보 저장 실패: {e}")
+                return False
         
         if not assignment_df.empty:
             name_col = '이름' if '이름' in assignment_df.columns else '인력명' if '인력명' in assignment_df.columns else None
@@ -660,113 +713,216 @@ def show_settlement_detail(data):
             total_col = '총지급액' if '총지급액' in assignment_df.columns else None
             assign_type_col = '구분' if '구분' in assignment_df.columns else None
             
-            # 본사인원 제외 필터
+            # 본사인원 필터
             hq_names = [s['이름'] for s in db.HQ_STAFF] if hasattr(db, 'HQ_STAFF') else []
             
-            st.subheader(f"👷 지급 대상자 전체 목록 ({len(assignment_df)}명)")
+            st.subheader(f"👷 인력 급여 편집 ({len(assignment_df)}명)")
+            st.caption("💡 단가·일수·식비·교통비를 직접 수정할 수 있습니다. **출근 체크 해제 = 노쇼(지급 0원)**")
             
-            # 전체 목록을 테이블 형태로 먼저 표시
-            summary_rows = []
+            # ── 편집용 DataFrame 구축 ──
+            edit_rows = []
             for i, arow in assignment_df.iterrows():
                 a_name = str(arow.get(name_col, 'N/A')) if name_col else 'N/A'
                 a_role = str(arow.get(role_col, '')) if role_col else ''
                 a_rate = int(float(arow.get(rate_col, 0) or 0)) if rate_col else 0
                 a_days = int(float(arow.get(days_col, 1) or 1)) if days_col else 1
-                a_total = int(float(arow.get(total_col, a_rate * a_days) or 0)) if total_col else a_rate * a_days
                 a_type = str(arow.get(assign_type_col, '')) if assign_type_col else ''
-                
-                tax_amt = int(a_total * sel_tax_rate)
-                net_pay = a_total - tax_amt
-                
-                bank, account = _get_bank_info(a_name, df_staff)
                 is_hq = a_name in hq_names
                 
-                summary_rows.append({
+                bank, account = _get_bank_info(a_name, df_staff)
+                
+                edit_rows.append({
+                    '출근': True,
                     '이름': a_name,
                     '직무': a_role,
                     '구분': '본사' if is_hq else a_type,
-                    '단가': f"{a_rate:,}",
+                    '단가': a_rate,
                     '일수': a_days,
-                    '총액': f"{a_total:,}",
-                    '공제': f"-{tax_amt:,}",
-                    '실수령액': f"{net_pay:,}",
-                    '은행': bank or '❗입력필요',
-                    '계좌번호': account or '❗입력필요',
+                    '식비': 0,
+                    '교통비': 0,
+                    '은행': bank or '',
+                    '계좌번호': account or '',
                 })
             
-            summary_df = pd.DataFrame(summary_rows)
-            st.dataframe(summary_df, use_container_width=True, hide_index=True)
+            initial_df = pd.DataFrame(edit_rows)
             
-            # 총합계
-            total_gross = sum(int(float(arow.get(total_col, int(float(arow.get(rate_col, 0) or 0)) * int(float(arow.get(days_col, 1) or 1))) or 0)) if total_col else int(float(arow.get(rate_col, 0) or 0)) * int(float(arow.get(days_col, 1) or 1)) for _, arow in assignment_df.iterrows())
-            total_tax = int(total_gross * sel_tax_rate)
+            # ── data_editor ──
+            edited_df = st.data_editor(
+                initial_df,
+                column_config={
+                    '출근': st.column_config.CheckboxColumn('출근', default=True, help="노쇼 시 체크 해제 → 지급 0원"),
+                    '이름': st.column_config.TextColumn('이름', disabled=True),
+                    '직무': st.column_config.TextColumn('직무', disabled=True),
+                    '구분': st.column_config.TextColumn('구분', disabled=True),
+                    '단가': st.column_config.NumberColumn('단가', min_value=0, step=10000, format="%d"),
+                    '일수': st.column_config.NumberColumn('일수', min_value=0, step=1),
+                    '식비': st.column_config.NumberColumn('식비', min_value=0, step=5000, format="%d"),
+                    '교통비': st.column_config.NumberColumn('교통비', min_value=0, step=5000, format="%d"),
+                    '은행': st.column_config.TextColumn('은행', help="미등록 시 직접 입력"),
+                    '계좌번호': st.column_config.TextColumn('계좌번호', help="미등록 시 직접 입력"),
+                },
+                use_container_width=True,
+                hide_index=True,
+                num_rows="fixed",
+                key=f"salary_editor_{inq_id}"
+            )
+            
+            # ── 계산 결과 ──
+            result_rows = []
+            for i, erow in edited_df.iterrows():
+                e_rate = int(erow.get('단가', 0) or 0)
+                e_days = int(erow.get('일수', 0) or 0)
+                e_meal = int(erow.get('식비', 0) or 0)
+                e_trans = int(erow.get('교통비', 0) or 0)
+                
+                if erow['출근']:
+                    gross = e_rate * e_days + e_meal + e_trans
+                else:
+                    gross = 0
+                
+                is_hq = erow.get('구분', '') == '본사'
+                tax_amt = int(gross * sel_tax_rate) if not is_hq else 0
+                net = gross - tax_amt
+                
+                result_rows.append({
+                    '이름': erow['이름'],
+                    '상태': '✅ 출근' if erow['출근'] else '❌ 노쇼',
+                    '구분': erow.get('구분', ''),
+                    '기본급': e_rate * e_days if erow['출근'] else 0,
+                    '식비': e_meal if erow['출근'] else 0,
+                    '교통비': e_trans if erow['출근'] else 0,
+                    '총액': gross,
+                    '공제': tax_amt,
+                    '실수령액': net,
+                    '_gross': gross,
+                    '_is_hq': is_hq,
+                })
+            
+            # ── 💰 지급 요약 메트릭 ──
+            st.markdown("##### 💰 지급 요약")
+            total_gross = sum(r['_gross'] for r in result_rows)
+            total_gross_excl_hq = sum(r['_gross'] for r in result_rows if not r['_is_hq'])
+            total_tax = int(total_gross_excl_hq * sel_tax_rate)
             total_net = total_gross - total_tax
-            st.markdown(f"**💰 합계: 총 {total_gross:,}원 | 공제 -{total_tax:,}원 | 실수령 {total_net:,}원**")
+            attended = sum(1 for r in result_rows if '출근' in r['상태'])
+            noshow = sum(1 for r in result_rows if '노쇼' in r['상태'])
+            
+            mc1, mc2, mc3, mc4 = st.columns(4)
+            mc1.metric("출근", f"{attended}명", delta=f"-{noshow}명 노쇼" if noshow > 0 else None, delta_color="inverse" if noshow > 0 else "off")
+            mc2.metric("총 지급액", f"₩{total_gross:,}")
+            mc3.metric("공제 합계", f"-₩{total_tax:,}")
+            mc4.metric("실수령 합계", f"₩{total_net:,}")
+            
+            # ── 결과 테이블 ──
+            display_result = pd.DataFrame(result_rows).drop(columns=['_gross', '_is_hq'])
+            # 금액 포맷팅
+            for fc in ['기본급', '식비', '교통비', '총액', '공제', '실수령액']:
+                if fc in display_result.columns:
+                    display_result[fc] = display_result[fc].apply(lambda x: f"{int(x):,}")
+            st.dataframe(display_result, use_container_width=True, hide_index=True)
             
             st.divider()
             
-            # 개별 급여명세서 + 지급 처리
-            st.subheader("📄 개별 급여명세서 및 지급 처리")
-            for i, arow in assignment_df.iterrows():
-                a_name = str(arow.get(name_col, 'N/A')) if name_col else 'N/A'
-                a_role = str(arow.get(role_col, '')) if role_col else ''
-                a_rate = int(float(arow.get(rate_col, 0) or 0)) if rate_col else 0
-                a_days = int(float(arow.get(days_col, 1) or 1)) if days_col else 1
-                a_total = int(float(arow.get(total_col, a_rate * a_days) or 0)) if total_col else a_rate * a_days
-                a_assign_id = str(arow.get('배정ID', ''))
-                is_hq = a_name in hq_names
+            # ── 저장 버튼들 ──
+            btn_c1, btn_c2 = st.columns(2)
+            
+            with btn_c1:
+                if st.button("🏦 계좌정보 → STAFF 시트 저장", key=f"save_bank_{inq_id}", use_container_width=True):
+                    save_count = 0
+                    for i, erow in edited_df.iterrows():
+                        bank_val = str(erow.get('은행', '')).strip()
+                        acct_val = str(erow.get('계좌번호', '')).strip()
+                        if bank_val and acct_val:
+                            orig_bank, orig_acct = _get_bank_info(erow['이름'], df_staff)
+                            if bank_val != (orig_bank or '') or acct_val != (orig_acct or ''):
+                                if _save_bank_to_staff(erow['이름'], bank_val, acct_val, df_staff):
+                                    save_count += 1
+                    if save_count > 0:
+                        st.success(f"✅ {save_count}명의 계좌정보가 STAFF 시트에 저장되었습니다!")
+                        db.invalidate_data()
+                    else:
+                        st.info("변경된 계좌정보가 없습니다.")
+            
+            with btn_c2:
+                if st.button("💾 지급기록 일괄 저장", key=f"save_pay_all_{inq_id}", type="primary", use_container_width=True):
+                    save_count = 0
+                    for i, erow in edited_df.iterrows():
+                        is_hq = erow.get('구분', '') == '본사'
+                        if not erow['출근'] or is_hq:
+                            continue  # 노쇼 또는 본사인원은 스킵
+                        e_rate = int(erow.get('단가', 0) or 0)
+                        e_days = int(erow.get('일수', 0) or 0)
+                        e_meal = int(erow.get('식비', 0) or 0)
+                        e_trans = int(erow.get('교통비', 0) or 0)
+                        gross = e_rate * e_days + e_meal + e_trans
+                        tax_amt = int(gross * sel_tax_rate)
+                        a_assign_id = str(assignment_df.iloc[i].get('배정ID', '')) if i < len(assignment_df) else ''
+                        payment_dict = {
+                            '배정ID': a_assign_id,
+                            '인력명': erow['이름'],
+                            '현장명': row['행사명'],
+                            '파견기간': str(row.get('행사시작일', '')),
+                            '파견일수': e_days,
+                            '기본급': e_rate * e_days,
+                            '야근비': 0,
+                            '식사비': e_meal,
+                            '교통비': e_trans,
+                            '보너스': 0,
+                            '소계': gross,
+                            '세금공제': tax_amt,
+                            '최종지급액': gross - tax_amt,
+                            '지급상태': '완료',
+                            '지급일': datetime.now().strftime('%Y-%m-%d'),
+                            '지급담당자': '',
+                            '비고': f"정산페이지 ({sel_tax_rate*100:.1f}% 공제)",
+                        }
+                        if db.save_payment_record(payment_dict):
+                            save_count += 1
+                    if save_count > 0:
+                        st.success(f"✅ {save_count}명의 지급기록이 저장되었습니다!")
+                        db.invalidate_data()
+                    else:
+                        st.warning("저장할 지급기록이 없습니다.")
+            
+            st.divider()
+            
+            # ── 개별 급여명세서 미리보기 ──
+            st.subheader("📄 개별 급여명세서")
+            for i, erow in edited_df.iterrows():
+                e_name = erow['이름']
+                e_role = erow.get('직무', '')
+                e_rate = int(erow.get('단가', 0) or 0)
+                e_days = int(erow.get('일수', 0) or 0)
+                e_meal = int(erow.get('식비', 0) or 0)
+                e_trans = int(erow.get('교통비', 0) or 0)
+                is_hq = erow.get('구분', '') == '본사'
+                is_attend = bool(erow.get('출근', True))
                 
-                bank, account = _get_bank_info(a_name, df_staff)
-                bank_info = f"💳 {bank} {account}" if bank and account else "❗ 계좌정보 미등록"
-                hq_badge = " [본사]" if is_hq else ""
+                if is_attend:
+                    gross = e_rate * e_days + e_meal + e_trans
+                else:
+                    gross = 0
                 
-                with st.expander(f"{'🏢' if is_hq else '👤'} {a_name}{hq_badge} ({a_role}) — {a_total:,}원 | {bank_info}"):
+                badge = "🏢" if is_hq else ("👤" if is_attend else "🚫")
+                status_txt = " [본사]" if is_hq else ("" if is_attend else " [노쇼]")
+                bank_val = str(erow.get('은행', '')).strip()
+                acct_val = str(erow.get('계좌번호', '')).strip()
+                bank_info = f"💳 {bank_val} {acct_val}" if bank_val and acct_val else "❗ 계좌정보 미등록"
+                
+                with st.expander(f"{badge} {e_name}{status_txt} ({e_role}) — {gross:,}원 | {bank_info}"):
+                    if not is_attend:
+                        st.warning("❌ 노쇼 — 지급 대상 아님")
+                        continue
                     c1, c2 = st.columns([2, 1])
                     with c1:
-                        html_p = brain.get_payslip_html(a_name, row['행사명'], a_rate, a_days, a_total, tax_rate=sel_tax_rate)
+                        html_p = brain.get_payslip_html(e_name, row['행사명'], e_rate, e_days, gross, tax_rate=sel_tax_rate, meal=e_meal, transport=e_trans)
                         st.components.v1.html(html_p, height=400)
                     with c2:
-                        # 은행/계좌 정보
-                        if bank and account:
-                            st.info(f"🏦 {bank}\n\n📋 {account}")
+                        if bank_val and acct_val:
+                            st.info(f"🏦 {bank_val}\n\n📋 {acct_val}")
                         else:
-                            st.warning("계좌정보 미등록")
-                            _input_bank = st.text_input("은행명", key=f"bank_input_{i}", placeholder="예: 국민은행")
-                            _input_acct = st.text_input("계좌번호", key=f"acct_input_{i}", placeholder="000-0000-0000")
-                        
-                        # 지급 처리 (본사인원 제외)
-                        if not is_hq:
-                            pay_done = st.checkbox("✅ 이체 완료", key=f"pay_assign_{i}")
-                            if pay_done:
-                                st.success("지급 완료됨")
-                                # 지급기록 시트에 저장
-                                if st.button("💾 지급기록 저장", key=f"save_pay_{i}"):
-                                    tax_amt = int(a_total * sel_tax_rate)
-                                    payment_dict = {
-                                        '배정ID': a_assign_id,
-                                        '인력명': a_name,
-                                        '현장명': row['행사명'],
-                                        '파견기간': str(row.get('행사시작일', '')),
-                                        '파견일수': a_days,
-                                        '기본급': a_total,
-                                        '야근비': 0,
-                                        '식사비': 0,
-                                        '교통비': 0,
-                                        '보너스': 0,
-                                        '소계': a_total,
-                                        '세금공제': tax_amt,
-                                        '최종지급액': a_total - tax_amt,
-                                        '지급상태': '완료',
-                                        '지급일': datetime.now().strftime('%Y-%m-%d'),
-                                        '지급담당자': '',
-                                        '비고': f"정산페이지 ({sel_tax_rate*100:.1f}% 공제)",
-                                    }
-                                    if db.save_payment_record(payment_dict):
-                                        st.success(f"✅ {a_name} 지급기록 저장 완료!")
-                                        st.cache_data.clear()
-                                    else:
-                                        st.error("저장 실패")
-                        else:
+                            st.warning("계좌정보 미등록 — 위 테이블에서 입력 후 '계좌정보 → STAFF 시트 저장' 버튼을 눌러주세요")
+                        if is_hq:
                             st.caption("ℹ️ 본사 인원 — 별도 정산")
         else:
             # 배정기록 없으면 기존 특이사항 텍스트 파싱 fallback
@@ -806,7 +962,7 @@ def show_settlement_detail(data):
                 update_payment_and_profit(inq_id_for_update, total_payment, summary['매출'])
                 # 상태 업데이트
                 db.update_status(inq_id_for_update, sc.STATUS_FLOW[6])  # '정산완료'
-                st.cache_data.clear()
+                db.invalidate_data()
                 st.balloons(); st.success("모든 정산이 완료되었습니다!"); st.rerun()
 
 
@@ -816,7 +972,7 @@ def show_tax_invoice_management():
     st.caption("거래처별 세금계산서 발행 현황을 관리하고, 사업자등록증에서 정보를 자동 추출하세요.")
     
     try:
-        dispatch_data = db.load_dispatch_data()
+        dispatch_data = db.get_dispatch()
         settlement_df = dispatch_data.get('settlement', pd.DataFrame())
     except Exception as e:
         st.error(f"데이터 로드 실패: {e}")
@@ -827,59 +983,50 @@ def show_tax_invoice_management():
         return
     
     settlement_df = settlement_df.fillna('').copy()
+    # 헤더 줄바꿈 정리
+    settlement_df.columns = [str(c).replace('\n', ' ').strip() for c in settlement_df.columns]
     
-    # 1️⃣ 세금계산서 발행 현황 요약
+    # ── 컬럼 자동 매핑 ──
+    col_company = None
+    col_tax_issued = None
+    col_inq_id = None
+    for col in settlement_df.columns:
+        if col in ('업체', '업체명') and not col_company:
+            col_company = col
+        if '발행여부' in col or '세금계산서' in col:
+            col_tax_issued = col
+        if col == '문의ID':
+            col_inq_id = col
+    
+    # 1️⃣ 발행 현황 요약
     st.markdown("### 📊 발행 현황 요약")
     
-    col_tax_issued = None
-    col_company = None
-    
-    for col in settlement_df.columns:
-        if '세금' in col or '발행' in col:
-            col_tax_issued = col
-        if '업체' in col or '업체명' in col:
-            col_company = col
-    
     if col_tax_issued and col_company:
-        issued_count = len(settlement_df[settlement_df[col_tax_issued].astype(str).str.contains('발행|완료|O|yes', na=False, case=False)])
-        not_issued_count = len(settlement_df[~settlement_df[col_tax_issued].astype(str).str.contains('발행|완료|O|yes', na=False, case=False)])
+        issued = settlement_df[settlement_df[col_tax_issued].astype(str).str.contains('발행|완료|O|yes', na=False, case=False)]
+        not_issued = settlement_df[~settlement_df[col_tax_issued].astype(str).str.contains('발행|완료|O|yes', na=False, case=False)]
         total_count = len(settlement_df)
         
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("✅ 발행 완료", issued_count)
-        with col2:
-            st.metric("⏳ 미발행", not_issued_count)
-        with col3:
-            issue_rate = int((issued_count / total_count * 100) if total_count > 0 else 0)
-            st.metric("📈 발행률", f"{issue_rate}%")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("✅ 발행 완료", len(issued))
+        c2.metric("⏳ 미발행", len(not_issued))
+        rate = int((len(issued) / total_count * 100) if total_count > 0 else 0)
+        c3.metric("📈 발행률", f"{rate}%")
     
     st.markdown("---")
     
     # 2️⃣ 업체별 세금계산서 발행 현황 테이블
     st.markdown("### 📋 업체별 발행 현황")
     
-    if col_company and col_tax_issued:
-        # 필요한 컬럼만 선택
-        display_cols = [col_company, col_tax_issued]
-        
-        # 추가 정보 컬럼 (있으면)
-        for col in settlement_df.columns:
-            if '청구' in col or '파견' in col or '현장' in col:
-                if col not in display_cols:
-                    display_cols.append(col)
-                    if len(display_cols) >= 5:
-                        break
-        
-        display_cols = [c for c in display_cols if c in settlement_df.columns]
-        
-        # 데이터 표시
-        tax_df = settlement_df[display_cols].copy()
-        st.dataframe(tax_df, use_container_width=True, hide_index=True)
+    if col_company:
+        display_cols = [c for c in [col_inq_id, col_company, '현장명', '청구금액', '공급가액', '부가세',
+                                     col_tax_issued, '사업자번호', '대표자', '이메일', '내용(품목)', '발행요청사항']
+                        if c and c in settlement_df.columns]
+        if display_cols:
+            st.dataframe(settlement_df[display_cols], use_container_width=True, hide_index=True)
     
     st.markdown("---")
     
-    # 3️⃣ 미발행 업체 강조 표시
+    # 3️⃣ 미발행 업체
     st.markdown("### 🚨 미발행 업체 (즉시 처리 필요)")
     
     if col_tax_issued and col_company:
@@ -890,34 +1037,46 @@ def show_tax_invoice_management():
         if not not_issued_df.empty:
             for idx, row in not_issued_df.iterrows():
                 company = row.get(col_company, '미등록')
+                biz_num = str(row.get('사업자번호', '')).strip()
+                email_val = str(row.get('이메일', '')).strip()
+                amount = str(row.get('청구금액', '')).strip()
                 
                 col_left, col_right = st.columns([3, 1])
                 with col_left:
+                    info_parts = [f"<b>{company}</b>"]
+                    if biz_num:
+                        info_parts.append(f"사업자: {biz_num}")
+                    if email_val:
+                        info_parts.append(f"이메일: {email_val}")
+                    if amount:
+                        info_parts.append(f"청구금액: {amount}")
+                    
                     st.markdown(f"""
-                    <div style="background-color: #FEF2F2; border-left: 4px solid #DC2626; 
-                                padding: 12px; border-radius: 4px; margin-bottom: 8px;">
-                        <b>{company}</b><br/>
-                        상태: {row.get(col_tax_issued, '미정')}
+                    <div style="background-color:#FEF2F2;border-left:4px solid #DC2626;
+                                padding:12px;border-radius:4px;margin-bottom:8px;">
+                        {'<br/>'.join(info_parts)}
                     </div>
                     """, unsafe_allow_html=True)
                 
                 with col_right:
                     if st.button("✅ 발행 완료", key=f"tax_done_{idx}"):
-                        # 실제 시트에 발행완료 저장
                         try:
                             _client = db.get_connection()
                             if _client:
                                 _sh = _client.open_by_key(db.SHEET_ID)
                                 _wks = _sh.worksheet("계약건은청구금액적기")
-                                _headers = _wks.row_values(1)
-                                _all_records = _wks.get_all_records()
-                                for _r_idx, _record in enumerate(_all_records, 2):
-                                    if _record.get(col_company) == company:
-                                        _tax_col_idx = _headers.index(col_tax_issued) + 1
-                                        _wks.update_cell(_r_idx, _tax_col_idx, "발행완료")
-                                        break
-                                st.cache_data.clear()
-                                st.success(f"{company}의 세금계산서를 발행 완료로 표시했습니다.")
+                                _headers = [str(h).replace('\n', ' ').strip() for h in _wks.row_values(1)]
+                                if col_tax_issued in _headers:
+                                    _tax_col_idx = _headers.index(col_tax_issued) + 1
+                                    _all_records = _wks.get_all_values()
+                                    # 문의ID로 행 찾기
+                                    _inq_id = str(row.get('문의ID', '')).strip()
+                                    for _r_idx in range(1, len(_all_records)):
+                                        if str(_all_records[_r_idx][0]).strip() == _inq_id:
+                                            _wks.update_cell(_r_idx + 1, _tax_col_idx, "발행완료")
+                                            break
+                                db.invalidate_data()
+                                st.success(f"✅ {company} 세금계산서 발행 완료 처리됨")
                                 time.sleep(1)
                                 st.rerun()
                         except Exception as _e:
@@ -927,208 +1086,237 @@ def show_tax_invoice_management():
     
     st.markdown("---")
     
-    # 4️⃣ 사업자등록증 OCR 업로드 (개선된 버전)
-    st.markdown("### 📸 사업자등록증 정보 자동 인식")
-    st.info("💡 업체를 선택 후 사업자등록증 사진을 업로드하면 자동으로 정보를 추출하고 저장합니다.")
+    # 4️⃣ 세금계산서 정보 등록/수정
+    st.markdown("### 📝 세금계산서 발행 정보 등록")
+    st.info("💡 업체를 선택하여 사업자등록번호, 발행 이메일, 품목 등의 정보를 등록/수정합니다.")
     
-    # 4-1. 업체 선택
     if col_company:
         company_list = ['-- 업체 선택 --'] + settlement_df[col_company].unique().tolist()
         selected_company = st.selectbox(
-            "세금계산서를 등록할 업체 선택",
+            "정보를 등록할 업체 선택",
             company_list,
-            help="정보를 등록할 업체를 먼저 선택하세요"
+            help="정보를 등록/수정할 업체를 먼저 선택하세요"
         )
         
         if selected_company != '-- 업체 선택 --':
-            # 4-2. 선택된 업체의 현재 정보 표시 (견적상세 데이터 연동)
             selected_row = settlement_df[settlement_df[col_company] == selected_company].iloc[0]
-
-            # 견적상세에서 사업자 정보 가져오기
-            try:
-                _dispatch_data_tax = db.load_dispatch_data()
-            except Exception:
-                _dispatch_data_tax = {}
-            _df_est_tax = _dispatch_data_tax.get('estimate', pd.DataFrame()) if isinstance(_dispatch_data_tax, dict) else pd.DataFrame()
-            # load_all_data에서 estimate 가져오기 시도
-            try:
-                _all_data = db.load_all_data()
-                _df_est_tax = _all_data.get('estimate', pd.DataFrame())
-            except Exception:
-                pass
-
-            _est_biz_info = {}
-            _inq_id_tax = str(selected_row.get('문의ID', '')).strip()
-            if not _df_est_tax.empty and '문의ID' in _df_est_tax.columns and _inq_id_tax:
-                _est_matches = _df_est_tax[_df_est_tax['문의ID'].astype(str).str.strip() == _inq_id_tax]
-                if not _est_matches.empty:
-                    _er = _est_matches.iloc[0]
-                    _est_biz_info = {
-                        '사업자번호': str(_er.get('사업자번호', '')),
-                        '대표자': str(_er.get('대표자', '')),
-                        '담당자': str(_er.get('담당자명', '')),
-                        '연락처': str(_er.get('연락처', '')),
-                    }
-
-            with st.expander(f"📌 {selected_company} 현재 정보", expanded=True):
-                col_cur1, col_cur2 = st.columns(2)
-                with col_cur1:
-                    st.write(f"**업체명**: {selected_company}")
-                    if _est_biz_info.get('사업자번호'):
-                        st.write(f"**사업자번호**: {_est_biz_info['사업자번호']}")
-                    if _est_biz_info.get('대표자'):
-                        st.write(f"**대표자**: {_est_biz_info['대표자']}")
-                    for col in settlement_df.columns:
-                        if '현장' in col or '파견' in col:
-                            st.write(f"**{col}**: {selected_row.get(col, '-')}")
-                with col_cur2:
-                    st.write(f"**세금계산서 발행**: {selected_row.get(col_tax_issued, '미정')}")
-                    if _est_biz_info.get('담당자'):
-                        st.write(f"**담당자**: {_est_biz_info['담당자']}")
-                    if _est_biz_info.get('연락처'):
-                        st.write(f"**연락처**: {_est_biz_info['연락처']}")
-                    for col in settlement_df.columns:
-                        if '청구' in col or '금액' in col:
-                            st.write(f"**{col}**: {selected_row.get(col, '-')}")
+            _inq_id = str(selected_row.get('문의ID', '')).strip()
             
-            # 4-3. 이미지 업로드
-            st.markdown("#### 🖼️ 사업자등록증 업로드")
+            # ── 사업자등록증 이미지 업로드 (상단에 배치) ──
             uploaded_file = st.file_uploader(
-                f"{selected_company}의 사업자등록증 이미지",
+                f"📸 {selected_company}의 사업자등록증 이미지 업로드",
                 type=["jpg", "jpeg", "png", "gif"],
-                help="선명한 사진을 업로드하면 정확도가 높습니다",
+                help="이미지를 보면서 좌측 폼에 직접 입력합니다",
                 key=f"file_{selected_company}"
             )
             
-            if uploaded_file is not None:
-                # 이미지 표시
-                col_img, col_ocr = st.columns([1, 2])
+            # ── 좌우 2컬럼 레이아웃 ──
+            col_form, col_image = st.columns([1.2, 1])
+            
+            # ────────────────────────────────────
+            # 좌측: 세금계산서 발행 정보 입력 폼
+            # ────────────────────────────────────
+            with col_form:
+                st.markdown("#### 📋 세금계산서 발행 정보")
                 
-                with col_img:
-                    from PIL import Image
-                    image = Image.open(uploaded_file)
-                    st.image(image, use_column_width=True, caption="업로드된 사업자등록증")
+                def _pick_val(sheet_key):
+                    """시트 저장값이 있으면 반환, 없으면 빈값"""
+                    saved = str(selected_row.get(sheet_key, '')).strip()
+                    if saved and saved not in ('nan', 'None', '-', ''):
+                        return saved
+                    return ''
                 
-                with col_ocr:
-                    st.markdown("#### 🔄 정보 추출 중...")
+                with st.form(key=f"tax_edit_{selected_company}"):
+                    fc1, fc2 = st.columns(2)
+                    with fc1:
+                        edit_biz_num = st.text_input("사업자등록번호", 
+                            value=_pick_val('사업자번호'),
+                            placeholder="000-00-00000")
+                        edit_ceo = st.text_input("대표자명", 
+                            value=_pick_val('대표자'),
+                            placeholder="홍길동")
+                        edit_company_name = st.text_input("법인명", 
+                            value=_pick_val('법인명'),
+                            placeholder="(주)그래디우스")
+                    with fc2:
+                        edit_email = st.text_input("세금계산서 발행 이메일", 
+                            value=_pick_val('이메일'),
+                            placeholder="tax@company.com")
+                        edit_contact = st.text_input("연락처", 
+                            value=_pick_val('연락처'),
+                            placeholder="010-0000-0000")
+                        edit_content = st.text_input("내용(품목)", 
+                            value=_pick_val('내용(품목)'),
+                            placeholder="인력파견 등")
                     
-                    # OCR 처리 (통합 API)
-                    try:
-                        from ocr_utils import extract_business_info, get_sample_business_info
-                        
-                        extracted_data, engine_name, raw_text = extract_business_info(uploaded_file)
-                        
-                        if extracted_data and (extracted_data.get('business_number') or extracted_data.get('company_name')):
-                            st.success(f"✅ {engine_name}로 정보 추출 완료!")
-                        else:
-                            extracted_data = get_sample_business_info()
-                            engine_name = "테스트 모드"
-                            st.warning("⚠️ OCR 엔진에서 정보를 추출하지 못했습니다. 테스트 데이터를 표시합니다.")
-                        
-                        if raw_text:
-                            with st.expander("📝 OCR 원본 텍스트 보기"):
-                                st.text(raw_text)
-                        
-                        if extracted_data:
-                            st.markdown("##### 📋 추출된 정보 (수정 가능)")
-                            
-                            # 4-4. 수동 수정 가능한 입력 폼
-                            with st.form(key=f"tax_form_{selected_company}"):
-                                col_form1, col_form2 = st.columns(2)
+                    edit_note = st.text_area("발행관련 요청사항", 
+                        value=_pick_val('발행요청사항'),
+                        placeholder="계산서 발행일 지정, 분할 발행 등", height=80)
+                    
+                    fc_btn1, fc_btn2 = st.columns(2)
+                    with fc_btn1:
+                        submit_edit = st.form_submit_button("💾 정보 저장", type="primary", use_container_width=True)
+                    with fc_btn2:
+                        st.form_submit_button("❌ 취소", use_container_width=True)
+                    
+                    if submit_edit:
+                        try:
+                            _client = db.get_connection()
+                            if _client:
+                                _sh = _client.open_by_key(db.SHEET_ID)
+                                _wks = _sh.worksheet("계약건은청구금액적기")
+                                _headers = [str(h).replace('\n', ' ').strip() for h in _wks.row_values(1)]
                                 
-                                with col_form1:
-                                    biz_number = st.text_input(
-                                        "📌 사업자등록번호",
-                                        value=extracted_data.get('business_number', ''),
-                                        placeholder="예: 123-45-67890"
-                                    )
-                                    company_name = st.text_input(
-                                        "🏢 업체명",
-                                        value=extracted_data.get('company_name', ''),
-                                        placeholder="예: 그래디우스 이벤트"
-                                    )
-                                    representative = st.text_input(
-                                        "👤 대표자명",
-                                        value=extracted_data.get('representative', ''),
-                                        placeholder="예: 김진영"
-                                    )
+                                _all_vals = _wks.get_all_values()
+                                _target_row = None
+                                for _ri in range(1, len(_all_vals)):
+                                    if str(_all_vals[_ri][0]).strip() == _inq_id:
+                                        _target_row = _ri + 1
+                                        break
                                 
-                                with col_form2:
-                                    business_type = st.text_input(
-                                        "📊 업종",
-                                        value=extracted_data.get('business_type', ''),
-                                        placeholder="예: 이벤트 기획 및 진행"
-                                    )
-                                    address = st.text_input(
-                                        "📍 주소",
-                                        value=extracted_data.get('address', ''),
-                                        placeholder="예: 서울시 강남구 테헤란로 123"
-                                    )
-                                    tax_email = st.text_input(
-                                        "✉️ 세금계산서 발행 이메일",
-                                        value="",
-                                        placeholder="예: tax@company.com"
-                                    )
-                                
-                                st.divider()
-                                
-                                # 저장 버튼
-                                col_save1, col_save2 = st.columns(2)
-                                with col_save1:
-                                    submit = st.form_submit_button(
-                                        "💾 이 정보 저장",
-                                        type="primary",
-                                        use_container_width=True
-                                    )
-                                
-                                with col_save2:
-                                    st.form_submit_button(
-                                        "❌ 취소",
-                                        use_container_width=True
-                                    )
-                                
-                                if submit:
-                                    # 정보 저장 (실제로는 Google Sheets에 저장)
-                                    saved_info = {
-                                        "업체": selected_company,
-                                        "사업자번호": biz_number,
-                                        "업체명": company_name,
-                                        "대표자": representative,
-                                        "업종": business_type,
-                                        "주소": address,
-                                        "세금계산서이메일": tax_email
+                                if _target_row:
+                                    from gspread.cell import Cell
+                                    _cells = []
+                                    _update_map = {
+                                        '사업자번호': edit_biz_num,
+                                        '대표자': edit_ceo,
+                                        '법인명': edit_company_name,
+                                        '이메일': edit_email,
+                                        '연락처': edit_contact,
+                                        '내용(품목)': edit_content,
+                                        '발행요청사항': edit_note,
                                     }
+                                    for _hdr, _val in _update_map.items():
+                                        if _hdr in _headers:
+                                            _ci = _headers.index(_hdr) + 1
+                                            _cells.append(Cell(row=_target_row, col=_ci, value=str(_val).strip()))
                                     
-                                    st.success(f"""
-                                    ✅ **{selected_company}**의 정보가 저장되었습니다!
-                                    
-                                    - 사업자번호: {biz_number}
-                                    - 대표자: {representative}
-                                    - 세금계산서 이메일: {tax_email}
-                                    """)
-                                    st.balloons()
-                        
-                    except Exception as e:
-                        st.error(f"❌ OCR 처리 중 오류: {str(e)[:100]}")
-                        st.info("💡 더 선명한 사진을 시도해주세요.")
+                                    if _cells:
+                                        _wks.update_cells(_cells, value_input_option='RAW')
+                                        db.invalidate_data()
+                                        st.success(f"✅ {selected_company}의 세금계산서 정보가 저장되었습니다!")
+                                        st.balloons()
+                                        time.sleep(1)
+                                        st.rerun()
+                                else:
+                                    st.error(f"❌ 문의ID '{_inq_id}'에 해당하는 행을 찾을 수 없습니다.")
+                        except Exception as _e:
+                            st.error(f"❌ 저장 실패: {_e}")
+                
+                # ── 현재 저장 정보 요약 ──
+                with st.expander(f"📌 {selected_company} 현재 저장된 정보", expanded=False):
+                    ci1, ci2 = st.columns(2)
+                    ci1.markdown(f"**업체명**: {selected_company}")
+                    ci1.markdown(f"**사업자번호**: {selected_row.get('사업자번호', '-')}")
+                    ci1.markdown(f"**대표자**: {selected_row.get('대표자', '-')}")
+                    ci1.markdown(f"**법인명**: {selected_row.get('법인명', '-')}")
+                    ci2.markdown(f"**이메일**: {selected_row.get('이메일', '-')}")
+                    ci2.markdown(f"**연락처**: {selected_row.get('연락처', '-')}")
+                    ci2.markdown(f"**청구금액**: {selected_row.get('청구금액', '-')}")
+                    ci2.markdown(f"**내용(품목)**: {selected_row.get('내용(품목)', '-')}")
+            
+            # ────────────────────────────────────
+            # 우측: 사업자등록증 이미지 표시
+            # ────────────────────────────────────
+            with col_image:
+                if uploaded_file is not None:
+                    st.markdown("#### 📸 사업자등록증")
+                    uploaded_file.seek(0)
+                    image = Image.open(uploaded_file)
+                    st.image(image, use_container_width=True, caption=f"{selected_company} 사업자등록증")
+                    st.caption("💡 이미지를 보면서 좌측 폼에 직접 입력하세요")
+                    
+                    # 이미지 로컬 저장 버튼
+                    if st.button("💾 이미지 저장", key=f"save_img_{selected_company}", use_container_width=True):
+                        try:
+                            img_url = _save_biz_image(uploaded_file, selected_company, _inq_id)
+                            if img_url:
+                                # 시트에 URL/경로 저장
+                                _client = db.get_connection()
+                                if _client:
+                                    _sh = _client.open_by_key(db.SHEET_ID)
+                                    _wks = _sh.worksheet("계약건은청구금액적기")
+                                    _headers = [str(h).replace('\n', ' ').strip() for h in _wks.row_values(1)]
+                                    if '사업자등록증URL' in _headers:
+                                        _url_ci = _headers.index('사업자등록증URL') + 1
+                                        _all_vals = _wks.get_all_values()
+                                        for _ri in range(1, len(_all_vals)):
+                                            if str(_all_vals[_ri][0]).strip() == _inq_id:
+                                                _wks.update_cell(_ri + 1, _url_ci, img_url)
+                                                break
+                                    db.invalidate_data()
+                                st.success("✅ 이미지 저장 완료!")
+                            else:
+                                st.error("❌ 이미지 저장에 실패했습니다.")
+                        except Exception as img_err:
+                            st.error(f"❌ 이미지 저장 오류: {img_err}")
+                else:
+                    st.markdown("#### 📸 사업자등록증")
+                    # 기존 저장된 이미지가 있으면 표시 (base64 / 로컬파일 / URL)
+                    biz_url = str(selected_row.get('사업자등록증URL', '')).strip()
+                    biz_b64 = str(selected_row.get('사업자등록증데이터', '')).strip()
+                    if biz_b64 and biz_b64 not in ('nan', 'None', ''):
+                        # base64 인코딩된 이미지 (계약에서 업로드)
+                        try:
+                            import base64 as _b64
+                            _img_bytes = _b64.b64decode(biz_b64)
+                            st.image(_img_bytes, use_container_width=True, caption="저장된 사업자등록증 (계약 업로드)")
+                        except Exception:
+                            st.caption("저장된 이미지를 표시할 수 없습니다.")
+                    elif biz_url and biz_url not in ('nan', 'None', '', '-'):
+                        if biz_url.startswith('http'):
+                            st.markdown(f"[🔗 저장된 사업자등록증 보기]({biz_url})")
+                        elif os.path.exists(biz_url):
+                            try:
+                                st.image(biz_url, use_container_width=True, caption="저장된 사업자등록증")
+                            except Exception:
+                                st.caption(f"📁 저장 경로: {biz_url}")
+                        else:
+                            st.caption(f"📁 저장 경로: {biz_url}")
+                    else:
+                        st.markdown("""
+                        <div style="border:2px dashed #cbd5e1; border-radius:12px; padding:40px 20px; text-align:center; color:#94a3b8;">
+                            <div style="font-size:48px;">📸</div>
+                            <div style="margin-top:10px;">사업자등록증 이미지를 업로드하면<br>여기에 표시됩니다</div>
+                            <div style="margin-top:8px; font-size:12px;">이미지를 보면서 좌측 폼에 직접 입력할 수 있습니다</div>
+                        </div>
+                        """, unsafe_allow_html=True)
         
         else:
-            st.warning("⚠️ 위에서 업체를 선택해주세요")
+            st.info("⬆️ 위에서 업체를 선택해주세요")
 
 
-
-def extract_business_info_from_image(uploaded_file):
-    """사업자등록증에서 정보 추출 (OCR) - 호환성 함수"""
+def _save_biz_image(uploaded_file, company_name, inq_id):
+    """사업자등록증 이미지를 로컬에 저장하고 경로 반환
+    
+    저장 위치: biz_images/ 폴더 (자동 생성)
+    파일명: 사업자등록증_업체명_문의ID.png
+    
+    참고: 서비스 계정은 Google Drive 스토리지 할당량이 없어
+    직접 업로드가 불가합니다. 로컬 저장으로 대체합니다.
+    """
     try:
-        from ocr_utils import extract_business_info, get_sample_business_info
+        import io
         
-        result, engine_name, raw_text = extract_business_info(uploaded_file)
-        if result and (result.get('business_number') or result.get('company_name')):
-            return result
+        # 저장 폴더 생성
+        save_dir = os.path.join(os.path.dirname(__file__) or '.', 'biz_images')
+        os.makedirs(save_dir, exist_ok=True)
         
-        # 추출 실패 시 샘플 데이터 반환
-        return get_sample_business_info()
+        # 안전한 파일명
+        safe_name = company_name.replace('/', '_').replace('\\', '_').replace(' ', '_')
+        safe_id = inq_id.replace('/', '_').replace('\\', '_')
+        filename = f"사업자등록증_{safe_name}_{safe_id}.png"
+        filepath = os.path.join(save_dir, filename)
         
+        # 이미지 저장
+        uploaded_file.seek(0)
+        img = Image.open(uploaded_file)
+        img.save(filepath, format='PNG')
+        uploaded_file.seek(0)
+        
+        print(f"사업자등록증 이미지 저장: {filepath}")
+        return filepath
+    
     except Exception as e:
-        print(f"OCR 처리 실패: {e}")
+        print(f"이미지 저장 실패: {e}")
         return None

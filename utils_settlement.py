@@ -211,13 +211,43 @@ class SettlementBrain:
         </div>
         </body></html>"""
 
-    def get_payslip_html(self, staff_name, project_name, pay, days, total, tax_rate=0.033):
-        """급여명세서 HTML — tax_rate: 0.033 (3.3%) 또는 0.009 (0.9%)"""
+    def get_payslip_html(self, staff_name, project_name, pay, days, total, tax_rate=0.033, meal=0, transport=0):
+        """급여명세서 HTML — tax_rate: 0.033 (3.3%) 또는 0.009 (0.9%), meal/transport: 부대비용"""
         tax_rate = float(tax_rate) if tax_rate else 0.033
-        tax = int(total * tax_rate)
-        net = total - tax
+        meal = int(meal) if meal else 0
+        transport = int(transport) if transport else 0
+        base_pay = int(pay) * int(days)
+        gross = base_pay + meal + transport  # total 대신 직접 계산
+        tax = int(gross * tax_rate)
+        net = gross - tax
         tax_pct = f"{tax_rate * 100:.1f}%"
         tax_label = "소득세(3.3%)" if abs(tax_rate - 0.033) < 0.001 else f"원천징수({tax_pct})"
+        
+        # 부대비용 행 생성
+        extra_rows = ""
+        if meal > 0:
+            extra_rows += f"""
+            <tr>
+                <td style="padding:8px; border:1px solid #ddd;">🍽️ 식비</td>
+                <td style="padding:8px; border:1px solid #ddd;">식대 지급</td>
+                <td style="padding:8px; border:1px solid #ddd; text-align:right;">{meal:,}원</td>
+            </tr>"""
+        if transport > 0:
+            extra_rows += f"""
+            <tr>
+                <td style="padding:8px; border:1px solid #ddd;">🚗 교통비</td>
+                <td style="padding:8px; border:1px solid #ddd;">교통비 지급</td>
+                <td style="padding:8px; border:1px solid #ddd; text-align:right;">{transport:,}원</td>
+            </tr>"""
+        # 부대비용 있으면 소계 행 추가
+        subtotal_row = ""
+        if extra_rows:
+            subtotal_row = f"""
+            <tr style="background:#f8fafc; font-weight:bold;">
+                <td style="padding:8px; border:1px solid #ddd;" colspan="2">소계</td>
+                <td style="padding:8px; border:1px solid #ddd; text-align:right;">{gross:,}원</td>
+            </tr>"""
+        
         return f"""<html><body style="font-family:'맑은 고딕',sans-serif; padding:16px;">
         <div style="border:2px solid #333; padding:20px;">
         <h2 style="text-align:center; border-bottom:2px solid #333; padding-bottom:8px;">급여명세서</h2>
@@ -239,9 +269,11 @@ class SettlementBrain:
             </tr>
             <tr>
                 <td style="padding:8px; border:1px solid #ddd;">기본급</td>
-                <td style="padding:8px; border:1px solid #ddd;">{pay:,}원 × {days}일</td>
-                <td style="padding:8px; border:1px solid #ddd; text-align:right;">{total:,}원</td>
+                <td style="padding:8px; border:1px solid #ddd;">{int(pay):,}원 × {int(days)}일</td>
+                <td style="padding:8px; border:1px solid #ddd; text-align:right;">{base_pay:,}원</td>
             </tr>
+            {extra_rows}
+            {subtotal_row}
             <tr style="color:#dc2626;">
                 <td style="padding:8px; border:1px solid #ddd;">공제</td>
                 <td style="padding:8px; border:1px solid #ddd;">{tax_label}</td>

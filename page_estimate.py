@@ -13,7 +13,7 @@ import pandas as pd
 import utils_estimate as ue
 import data_loader as db
 import status_config as sc
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import time as _time
 import base64
 import os
@@ -33,8 +33,35 @@ def apply_styles():
         .history-card { background:white; border:1px solid #e5e7eb; padding:14px; border-radius:8px; margin-bottom:8px; border-left:4px solid #6366f1; }
         .recommend-box { background:#eff6ff; border:2px solid #3b82f6; padding:12px 16px; border-radius:10px; margin-bottom:8px; }
         .saved-banner { background:#dcfce7; border:2px solid #22c55e; padding:12px 16px; border-radius:8px; margin-bottom:10px; text-align:center; font-weight:bold; color:#166534; }
+        /* data_editor 스크롤바 겹침 해소 */
+        [data-testid="stDataFrame"] > div { padding-bottom: 12px; }
+        div[data-testid="stDataEditor"] iframe { min-height: 200px; }
     </style>
     """, unsafe_allow_html=True)
+
+
+def _safe_str(val, default=''):
+    """NaN/None/nan 문자열 안전 변환"""
+    if val is None:
+        return default
+    s = str(val).strip()
+    if s in ('nan', 'None', 'NaN', ''):
+        return default
+    return s
+
+
+def _safe_int(val, default=0):
+    """NaN/None 안전 정수 변환"""
+    if val is None:
+        return default
+    try:
+        import math
+        f = float(val)
+        if math.isnan(f):
+            return default
+        return int(f)
+    except (ValueError, TypeError):
+        return default
 
 
 def load_local_banner():
@@ -54,14 +81,14 @@ def image_to_base64(uploaded_file):
 
 
 def get_default_terms_top():
-    return """<span style="color:#000080; font-weight:bold;">1. 결제사항</span> | 행사시작전 2주이내 선금 50% | 행사 종료 후 1주이내 잔금 50%
-<span style="font-size:11px; color:#666;">※ 견적은 상황에 따라 변동될 수 있습니다.</span>
-<span style="color:#000080; font-weight:bold;">2. 계약 확정 안내</span> | 우수한 인력 확보 및 행사 품질 유지를 위해 행사일 기준 3주 전 계약을 권장합니다.
-<span style="font-size:11px; color:#666;">※ 부득이한 경우라도 최소 2주 전까지는 확정해 주시기 바랍니다.</span>"""
+    return """1. 결제사항 | 행사시작전 2주이내 선금 50% | 행사 종료 후 1주이내 잔금 50%
+※ 견적은 상황에 따라 변동될 수 있습니다.
+2. 계약 확정 안내 | 우수한 인력 확보 및 행사 품질 유지를 위해 행사일 기준 3주 전 계약을 권장합니다.
+※ 부득이한 경우라도 최소 2주 전까지는 확정해 주시기 바랍니다."""
 
 
 def get_default_terms_side():
-    return """<span style="color:#000080; font-weight:bold;">3. 근무 및 비용 기준</span>
+    return """3. 근무 및 비용 기준
 - 계약시간 근무 기준 | 계약시간 이후 추가시간 발생 시 시간당 추가 금액
   • 경호원 & 경비지도사 : 30,000원 (VAT 별도) • STAFF : 20,000원 (VAT 별도)
 - 복리후생비, 일반관리비, 직책수당 단가 포함"""
@@ -71,7 +98,7 @@ def _load_existing_items(inquiry_id):
     """기존 견적품목을 est_items 형식 DataFrame으로 로드"""
     raw = db.load_estimate_items(inquiry_id)
     if raw.empty:
-        return pd.DataFrame(columns=['품목','규격','수량','일수','매출단가','매입단가','매출합계','매입합계','비고'])
+        return pd.DataFrame(columns=['품목','규격','수량','일수','매출단가','매입단가','할인액','매출합계','매입합계','비고'])
     rows = []
     for _, r in raw.iterrows():
         name = str(r.get('직군명', ''))
@@ -88,7 +115,7 @@ def _load_existing_items(inquiry_id):
             '매출합계': sell * qty * days, '매입합계': buy * qty * days,
             '비고': str(r.get('비고', ''))
         })
-    return pd.DataFrame(rows) if rows else pd.DataFrame(columns=['품목','규격','수량','일수','매출단가','매입단가','매출합계','매입합계','비고'])
+    return pd.DataFrame(rows) if rows else pd.DataFrame(columns=['품목','규격','수량','일수','매출단가','매입단가','할인액','매출합계','매입합계','비고'])
 
 
 # ==============================================================================
@@ -122,13 +149,17 @@ def show(data):
             st.rerun()
 
     # ================================================================
-    # 프로젝트 대기열 (접수 + 견적수정)
+    # 프로젝트 대기열 (접수 + 견적수정 + 체결수정)
     # ================================================================
     pending_new = pd.DataFrame()
     pending_edit = pd.DataFrame()
+    pending_contracted = pd.DataFrame()
     if not df_inq.empty and '상태' in df_inq.columns:
         pending_new = df_inq[df_inq['상태'] == sc.STATUS_FLOW[0]].sort_values('작성일', ascending=False).copy()
         pending_edit = df_inq[df_inq['상태'] == sc.STATUS_FLOW[1]].sort_values('작성일', ascending=False).copy()
+        # 체결 이후 상태도 견적 수정 가능 (체결, 배정완료, 진행중)
+        _edit_statuses = [sc.STATUS_FLOW[i] for i in range(2, min(5, len(sc.STATUS_FLOW)))]
+        pending_contracted = df_inq[df_inq['상태'].isin(_edit_statuses)].sort_values('작성일', ascending=False).copy()
 
     p_list = ["(신규작성)"]
     if not pending_new.empty:
@@ -137,25 +168,32 @@ def show(data):
     if not pending_edit.empty:
         pending_edit['label'] = "[수정] " + pending_edit['업체명'].astype(str) + " (" + pending_edit['행사명'].astype(str) + ")"
         p_list += pending_edit['label'].tolist()
+    if not pending_contracted.empty:
+        pending_contracted['label'] = "[체결수정] " + pending_contracted['업체명'].astype(str) + " (" + pending_contracted['행사명'].astype(str) + ")"
+        p_list += pending_contracted['label'].tolist()
 
-    all_pending = pd.concat([pending_new, pending_edit], ignore_index=True) if (not pending_new.empty or not pending_edit.empty) else pd.DataFrame()
+    _frames = [df for df in [pending_new, pending_edit, pending_contracted] if not df.empty]
+    all_pending = pd.concat(_frames, ignore_index=True) if _frames else pd.DataFrame()
 
     c_load, c_info = st.columns([1.5, 2.5])
     with c_load:
         sel_p = st.selectbox("📂 프로젝트 선택", p_list, key="est_project_sel")
     with c_info:
-        if sel_p.startswith("[수정]"):
+        if sel_p.startswith("[체결수정]"):
+            st.warning("⚠️ 체결된 견적을 수정합니다. 저장 시 기존 데이터를 덮어씁니다.")
+        elif sel_p.startswith("[수정]"):
             st.info("📝 기존 견적을 수정합니다. 저장 시 기존 데이터를 덮어씁니다.")
         elif sel_p.startswith("[접수]"):
             st.success("🆕 새 견적을 작성합니다.")
 
     # ── 세션 초기화 ──
     if 'est_items' not in st.session_state:
-        st.session_state['est_items'] = pd.DataFrame(columns=['품목','규격','수량','일수','매출단가','매입단가','매출합계','매입합계','비고'])
+        st.session_state['est_items'] = pd.DataFrame(columns=['품목','규격','수량','일수','매출단가','매입단가','할인액','매출합계','매입합계','비고'])
     if 'w_client' not in st.session_state:
         st.session_state.update({
             'w_client': '', 'w_event': '', 'w_loc': '', 'w_manager': '', 'w_contact': '',
-            'w_qty': 1, 'w_sdate': datetime.now().date(), 'w_edate': datetime.now().date(),
+            'w_qty': 1, 'w_sdate': None, 'w_edate': None,
+            'w_date_periods': [],
             'w_time_in': datetime.strptime("09:00", "%H:%M").time(),
             'w_time_out': datetime.strptime("18:00", "%H:%M").time(),
             'w_terms_top': get_default_terms_top(),
@@ -188,14 +226,31 @@ def show(data):
                     else:
                         start_raw = raw_ilsi
                         end_raw = raw_ilsi
-            if start_raw and end_raw and start_raw not in ('nan', 'None', ''):
-                raw_dates = f"{start_raw}~{end_raw}"
-            elif start_raw and start_raw not in ('nan', 'None', ''):
-                raw_dates = start_raw
+
+            # 다중 기간 처리: / 구분자가 있으면 각각 파싱
+            _has_multi = '/' in start_raw or '/' in end_raw
+            if _has_multi:
+                _starts = [s.strip() for s in start_raw.split('/')]
+                _ends = [e.strip() for e in end_raw.split('/')]
+                _raw_segments = []
+                for _i in range(max(len(_starts), len(_ends))):
+                    _s = _starts[_i] if _i < len(_starts) else _starts[-1]
+                    _e = _ends[_i] if _i < len(_ends) else _ends[-1]
+                    if _s and _s not in ('nan', 'None', ''):
+                        _raw_segments.append(f"{_s}~{_e}")
+                raw_dates = " / ".join(_raw_segments)
             else:
-                raw_dates = ''
+                if start_raw and end_raw and start_raw not in ('nan', 'None', ''):
+                    raw_dates = f"{start_raw}~{end_raw}"
+                elif start_raw and start_raw not in ('nan', 'None', ''):
+                    raw_dates = start_raw
+                else:
+                    raw_dates = ''
 
             s_d, e_d, _ = ue.smart_parse_date(raw_dates)
+            # 다중 기간 파싱
+            _multi_periods = ue.smart_parse_dates_multi(raw_dates)
+            _date_periods = [(p[0], p[1]) for p in _multi_periods]
             s_t, e_t, _ = ue.smart_parse_time(target.get('행사시간', str(target.get('시간', ''))))
             qty = ue.safe_int(str(target.get('필요인력', target.get('요청인원', target.get('인원', '1')))).replace('명', ''))
 
@@ -206,26 +261,45 @@ def show(data):
                 if not _matched_est.empty:
                     _est_meta = _matched_est.iloc[0].to_dict()
 
-            # ▶ 문의 특이사항에서 복장/식사/주차 파싱 (견적에 없을 때 fallback)
+            # ▶ 문의에서 복장/식사/주차 읽기 (개별 컬럼 우선, 특이사항 regex fallback)
             _inq_note = str(target.get('특이사항', '')).strip()
-            _inq_dress = ''
-            _inq_meal = ''
-            _inq_parking = ''
+            _inq_dress = str(target.get('복장', '')).strip()
+            _inq_meal = str(target.get('식사', '')).strip()
+            _inq_parking = str(target.get('주차', '')).strip()
             _inq_note_clean = _inq_note
             
+            # 개별 컬럼에 값이 없으면 (기존 데이터 호환) 특이사항에서 regex 파싱
             import re as _re
-            _dress_m = _re.search(r'\[복장:([^\]]+)\]', _inq_note)
-            if _dress_m:
-                _inq_dress = _dress_m.group(1).strip()
-                _inq_note_clean = _inq_note_clean.replace(_dress_m.group(0), '').strip()
-            _meal_m = _re.search(r'\[식사:([^\]]+)\]', _inq_note)
-            if _meal_m:
-                _inq_meal = _meal_m.group(1).strip()
-                _inq_note_clean = _inq_note_clean.replace(_meal_m.group(0), '').strip()
-            _parking_m = _re.search(r'\[주차:([^\]]+)\]', _inq_note)
-            if _parking_m:
-                _inq_parking = _parking_m.group(1).strip()
-                _inq_note_clean = _inq_note_clean.replace(_parking_m.group(0), '').strip()
+            if not _inq_dress or _inq_dress in ('nan', 'None'):
+                _dress_m = _re.search(r'\[복장:([^\]]+)\]', _inq_note)
+                if _dress_m:
+                    _inq_dress = _dress_m.group(1).strip()
+                    _inq_note_clean = _inq_note_clean.replace(_dress_m.group(0), '').strip()
+            else:
+                # 개별 컬럼에 있으면 특이사항에서도 [복장:...] 제거
+                _dress_m = _re.search(r'\[복장:[^\]]+\]', _inq_note_clean)
+                if _dress_m:
+                    _inq_note_clean = _inq_note_clean.replace(_dress_m.group(0), '').strip()
+            
+            if not _inq_meal or _inq_meal in ('nan', 'None'):
+                _meal_m = _re.search(r'\[식사:([^\]]+)\]', _inq_note)
+                if _meal_m:
+                    _inq_meal = _meal_m.group(1).strip()
+                    _inq_note_clean = _inq_note_clean.replace(_meal_m.group(0), '').strip()
+            else:
+                _meal_m = _re.search(r'\[식사:[^\]]+\]', _inq_note_clean)
+                if _meal_m:
+                    _inq_note_clean = _inq_note_clean.replace(_meal_m.group(0), '').strip()
+            
+            if not _inq_parking or _inq_parking in ('nan', 'None'):
+                _parking_m = _re.search(r'\[주차:([^\]]+)\]', _inq_note)
+                if _parking_m:
+                    _inq_parking = _parking_m.group(1).strip()
+                    _inq_note_clean = _inq_note_clean.replace(_parking_m.group(0), '').strip()
+            else:
+                _parking_m = _re.search(r'\[주차:[^\]]+\]', _inq_note_clean)
+                if _parking_m:
+                    _inq_note_clean = _inq_note_clean.replace(_parking_m.group(0), '').strip()
             
             # 견적 메타 > 문의 파싱 순으로 결정
             def _pick(est_key, inq_val):
@@ -234,35 +308,52 @@ def show(data):
                 return inq_val
 
             st.session_state.update({
-                'w_client': target.get('업체명', ''),
-                'w_event': target.get('행사명', ''),
-                'w_loc': target.get('장소', ''),
-                'w_manager': target.get('담당자', ''),
-                'w_contact': target.get('연락처', str(target.get('담당자연락처', ''))),
+                'w_client': _safe_str(target.get('업체명', '')),
+                'w_event': _safe_str(target.get('행사명', '')),
+                'w_loc': _safe_str(target.get('장소', '')),
+                'w_manager': _safe_str(target.get('담당자', '')),
+                'w_contact': _safe_str(target.get('연락처', target.get('담당자연락처', ''))),
                 'w_sdate': s_d, 'w_edate': e_d,
+                'w_date_periods': _date_periods,
                 'w_qty': qty,
                 'last_project': sel_p,
                 '_current_inq_id': target_id,
-                'w_dress': _pick('복장', _inq_dress),
-                'w_meal': _pick('식사', _inq_meal),
-                'w_parking': _pick('주차', _inq_parking),
-                'w_note': _pick('특이사항', _inq_note_clean),
+                'w_dress': _safe_str(_pick('복장', _inq_dress)),
+                'w_meal': _safe_str(_pick('식사', _inq_meal)),
+                'w_parking': _safe_str(_pick('주차', _inq_parking)),
+                'w_note': _safe_str(_pick('특이사항', _inq_note_clean)),
             })
 
-            # ▶ 견적수정 시 기존 품목 로드
-            if sel_p.startswith("[수정]"):
+            # ▶ 견적수정/체결수정 시 기존 품목 로드
+            if sel_p.startswith("[수정]") or sel_p.startswith("[체결수정]"):
                 st.session_state['est_items'] = _load_existing_items(target_id)
             else:
-                st.session_state['est_items'] = pd.DataFrame(columns=['품목','규격','수량','일수','매출단가','매입단가','매출합계','매입합계','비고'])
+                st.session_state['est_items'] = pd.DataFrame(columns=['품목','규격','수량','일수','매출단가','매입단가','할인액','매출합계','매입합계','비고'])
 
-            # ▶ 모든 위젯 키 강제 삭제 (Streamlit key→value 우선 문제 해소)
-            for k in ['final_client', 'final_manager', 'final_contact', 'final_loc',
-                       'w_date_range', 'w_time_in', 'w_time_out',
-                       'est_items_editor', 'final_edit_table', 'additional_costs_editor']:
+            # ▶ 세대 카운터 증가 → TAB2 위젯을 완전히 새로 생성 (Streamlit 위젯 상태 복원 문제 회피)
+            st.session_state['_tab2_gen'] = st.session_state.get('_tab2_gen', 0) + 1
+            _keys_to_del = ['w_date_range', 'discount_amt']
+            # 이전 세대 위젯 키 정리
+            for _sk in list(st.session_state.keys()):
+                if any(_sk.startswith(p) for p in ['final_client_', 'final_manager_', 'final_contact_', 'final_loc_',
+                                                     'final_edit_table_', 'est_items_editor_', 'additional_costs_editor_']):
+                    _keys_to_del.append(_sk)
+            # 견적안 캐시 무효화 (프로젝트 전환 시)
+            for _ck in list(st.session_state.keys()):
+                if _ck.startswith('_loaded_versions_'):
+                    _keys_to_del.append(_ck)
+            # 날짜 위젯 키는 올바른 값으로 설정
+            for _ki in range(20):
+                if _ki < len(_date_periods):
+                    st.session_state[f'dp_s_{_ki}'] = _date_periods[_ki][0]
+                    st.session_state[f'dp_e_{_ki}'] = _date_periods[_ki][1]
+                else:
+                    _keys_to_del.extend([f"dp_s_{_ki}", f"dp_e_{_ki}"])
+            for k in _keys_to_del:
                 if k in st.session_state:
                     del st.session_state[k]
 
-            st.session_state['additional_costs'] = pd.DataFrame(columns=['항목', '금액', '비고'])
+            st.session_state['additional_costs'] = pd.DataFrame(columns=['항목', '수량', '일수', '단가', '금액', '비고'])
             if '_est_saved' in st.session_state:
                 del st.session_state['_est_saved']
 
@@ -276,58 +367,317 @@ def show(data):
     # ================================================================
     # 탭 구성
     # ================================================================
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "🛠️ 견적 산출", "📄 견적서 발행", "📋 견적 히스토리 & 비교", "📊 상세 수익 리포트"
+    # ── 복수 견적안 관리 (시트 영구 저장) ──
+    _cur_inq = st.session_state.get('_current_inq_id', '')
+
+    # ── 메타데이터 수집 헬퍼 ──
+    def _collect_metadata():
+        """현재 session_state에서 프로젝트 메타데이터를 수집"""
+        _periods = st.session_state.get('w_date_periods', [])
+        _period_strs = []
+        for _ps, _pe in _periods:
+            _period_strs.append([str(_ps), str(_pe)])
+        # 부대비용 DataFrame → 리스트
+        _add_costs = []
+        _add_df = st.session_state.get('additional_costs', pd.DataFrame())
+        if not _add_df.empty:
+            for _, _ar in _add_df.iterrows():
+                _add_costs.append({
+                    '항목': str(_ar.get('항목', '') or ''),
+                    '수량': _safe_int(_ar.get('수량', 1)),
+                    '일수': _safe_int(_ar.get('일수', 1)),
+                    '단가': _safe_int(_ar.get('단가', 0)),
+                    '금액': _safe_int(_ar.get('금액', 0)),
+                    '비고': str(_ar.get('비고', '') or ''),
+                })
+        return {
+            'w_client': _safe_str(st.session_state.get('w_client')),
+            'w_event': _safe_str(st.session_state.get('w_event')),
+            'w_loc': _safe_str(st.session_state.get('w_loc')),
+            'w_manager': _safe_str(st.session_state.get('w_manager')),
+            'w_contact': _safe_str(st.session_state.get('w_contact')),
+            'w_sdate': str(st.session_state.get('w_sdate', '')),
+            'w_edate': str(st.session_state.get('w_edate', '')),
+            'w_date_periods': _period_strs,
+            'w_qty': int(st.session_state.get('w_qty', 1)),
+            'w_dress': _safe_str(st.session_state.get('w_dress')),
+            'w_meal': _safe_str(st.session_state.get('w_meal')),
+            'w_parking': _safe_str(st.session_state.get('w_parking')),
+            'w_note': _safe_str(st.session_state.get('w_note')),
+            'additional_costs': _add_costs,
+        }
+
+    def _restore_metadata(meta):
+        """메타데이터 딕셔너리 → session_state 복원"""
+        if not meta:
+            return
+        for _k in ['w_client', 'w_event', 'w_loc', 'w_manager', 'w_contact',
+                    'w_dress', 'w_meal', 'w_parking', 'w_note']:
+            if _k in meta:
+                st.session_state[_k] = _safe_str(meta[_k])
+        if 'w_qty' in meta:
+            st.session_state['w_qty'] = int(meta.get('w_qty', 1))
+        # 날짜 복원
+        _periods = meta.get('w_date_periods', [])
+        _restored = []
+        for _pair in _periods:
+            if isinstance(_pair, (list, tuple)) and len(_pair) == 2:
+                try:
+                    from datetime import date as _d
+                    _s = _d.fromisoformat(str(_pair[0])) if str(_pair[0]) not in ('None','') else None
+                    _e = _d.fromisoformat(str(_pair[1])) if str(_pair[1]) not in ('None','') else None
+                    if _s and _e:
+                        _restored.append((_s, _e))
+                except:
+                    pass
+        if _restored:
+            st.session_state['w_date_periods'] = _restored
+        # 부대비용 복원
+        _add_costs = meta.get('additional_costs', [])
+        if _add_costs:
+            st.session_state['additional_costs'] = pd.DataFrame(_add_costs)
+        elif 'additional_costs' in meta:
+            # 메타에 키가 있지만 비어있으면 초기화
+            st.session_state['additional_costs'] = pd.DataFrame(columns=['항목', '수량', '일수', '단가', '금액', '비고'])
+        # 날짜 위젯 키 설정
+        if _restored:
+            st.session_state['w_sdate'] = _restored[0][0]
+            st.session_state['w_edate'] = _restored[-1][1]
+            for _ri, (_rs, _re) in enumerate(_restored):
+                st.session_state[f'dp_s_{_ri}'] = _rs
+                st.session_state[f'dp_e_{_ri}'] = _re
+
+    with st.expander("📋 복수 견적안 관리 (하나의 문의에 여러 견적)", expanded=False):
+        if not _cur_inq:
+            st.info("💡 프로젝트를 먼저 선택하세요. 선택 후 견적안을 저장/불러올 수 있습니다.")
+        else:
+            st.caption(f"💡 문의 **{_cur_inq}** — 같은 문의에서 여러 견적안을 만들어 비교하세요.")
+            
+            # 저장된 견적안 로드
+            if f'_loaded_versions_{_cur_inq}' not in st.session_state:
+                st.session_state[f'_loaded_versions_{_cur_inq}'] = db.load_estimate_versions(_cur_inq)
+            _versions = st.session_state[f'_loaded_versions_{_cur_inq}']
+            
+            _ver_c1, _ver_c2 = st.columns([1.5, 1])
+            with _ver_c1:
+                _ver_name = st.text_input("견적안 이름", placeholder="예: A안, B안, 경량안", key="ver_name_input")
+            with _ver_c2:
+                st.write("")  # 간격
+                if st.button("💾 현재 견적 → 저장 (품목+프로젝트정보)", key="save_ver"):
+                    if _ver_name.strip():
+                        with st.spinner("저장 중..."):
+                            _meta = _collect_metadata()
+                            if db.save_estimate_version(_cur_inq, _ver_name.strip(), st.session_state['est_items'], metadata=_meta):
+                                # 캐시 갱신
+                                st.session_state[f'_loaded_versions_{_cur_inq}'] = db.load_estimate_versions(_cur_inq)
+                                st.session_state['_ver_saved_msg'] = f"✅ '{_ver_name.strip()}' 저장 완료! (품목 {len(st.session_state['est_items'])}건 + 프로젝트정보)"
+                                st.rerun()
+                            else:
+                                st.error("저장 실패")
+                    else:
+                        st.warning("견적안 이름을 입력해주세요")
+
+            # 저장 완료 메시지 표시
+            if '_ver_saved_msg' in st.session_state:
+                st.success(st.session_state.pop('_ver_saved_msg'))
+            
+            # 저장된 견적안 목록
+            if _versions:
+                _ver_summary = []
+                for _vn, _vdata in _versions.items():
+                    _vdf = _vdata['items'] if isinstance(_vdata, dict) else _vdata
+                    _v_supply = int(_vdf['매출합계'].sum()) if not _vdf.empty and '매출합계' in _vdf.columns else 0
+                    _v_cost = int(_vdf['매입합계'].sum()) if not _vdf.empty and '매입합계' in _vdf.columns else 0
+                    _has_meta = '✅' if (isinstance(_vdata, dict) and _vdata.get('meta')) else '❌'
+                    _ver_summary.append({"견적안": _vn, "품목수": len(_vdf), "공급가액": f"{_v_supply:,}원", "매입원가": f"{_v_cost:,}원", "정보": _has_meta})
+                st.dataframe(pd.DataFrame(_ver_summary), use_container_width=True, hide_index=True)
+                
+                _load_c1, _load_c2 = st.columns([2, 1])
+                with _load_c1:
+                    _load_ver = st.selectbox("견적안 불러오기", ["선택"] + list(_versions.keys()), key="load_ver_select")
+                with _load_c2:
+                    st.write("")
+                    _btn_c1, _btn_c2 = st.columns(2)
+                    with _btn_c1:
+                        if _load_ver != "선택" and st.button("📂 불러오기", key="load_ver_btn"):
+                            _vdata = _versions[_load_ver]
+                            _loaded_df = (_vdata['items'] if isinstance(_vdata, dict) else _vdata).copy()
+                            # JSON에서 로드 시 숫자 컬럼 타입 보정
+                            _num_cols = ['수량','일수','매출단가','매입단가','할인액','매출합계','매입합계']
+                            for _nc in _num_cols:
+                                if _nc in _loaded_df.columns:
+                                    _loaded_df[_nc] = pd.to_numeric(_loaded_df[_nc], errors='coerce').fillna(0).astype(int)
+                            # 필수 컬럼 보장
+                            for _rc in ['품목','규격','수량','일수','매출단가','매입단가','할인액','매출합계','매입합계','비고']:
+                                if _rc not in _loaded_df.columns:
+                                    _loaded_df[_rc] = 0 if _rc in _num_cols else ''
+                            st.session_state['est_items'] = _loaded_df
+                            # ★ 메타데이터 복원 (수신인, 행사명, 장소, 날짜 등)
+                            _meta = _vdata.get('meta', {}) if isinstance(_vdata, dict) else {}
+                            if _meta:
+                                _restore_metadata(_meta)
+                            # 세대 카운터 증가 → data_editor 위젯 완전 재생성
+                            st.session_state['_tab2_gen'] = st.session_state.get('_tab2_gen', 0) + 1
+                            st.session_state['_ver_loaded_msg'] = f"✅ '{_load_ver}' 불러옴! (품목 {len(_loaded_df)}건" + (" + 프로젝트정보 복원)" if _meta else ")")
+                            st.rerun()
+                    with _btn_c2:
+                        if _load_ver != "선택" and st.button("🗑️ 삭제", key="del_ver_btn"):
+                            db.delete_estimate_version(_cur_inq, _load_ver)
+                            st.session_state[f'_loaded_versions_{_cur_inq}'] = db.load_estimate_versions(_cur_inq)
+                            st.rerun()
+
+                # 불러오기 완료 메시지 표시
+                if '_ver_loaded_msg' in st.session_state:
+                    st.success(st.session_state.pop('_ver_loaded_msg'))
+            else:
+                st.info("저장된 견적안이 없습니다. 위에서 이름을 입력하고 저장하세요.")
+
+    tab1, tab2, tab3 = st.tabs([
+        "🛠️ 견적 산출", "📄 견적서 발행", "📋 히스토리 & 리포트"
     ])
 
+    # 세대 카운터 (프로젝트 전환/견적안 불러오기 시 위젯 재생성용)
+    _g = st.session_state.get('_tab2_gen', 0)
+
     # ==================================================================
-    # TAB 1: 견적 산출
+    # TAB 1: 견적 산출 (좌=입력 / 우=결과 장바구니 레이아웃)
     # ==================================================================
     with tab1:
-        col_L, col_R = st.columns([1, 1.2])
+        # ── 상단: 프로젝트 정보 (접을 수 있게) ──
+        with st.expander("📋 프로젝트 정보", expanded=True):
+            pi1, pi2, pi3 = st.columns([1.2, 1.2, 1])
+            pi1.text_input("수신인 (업체명)", key="w_client")
+            pi2.text_input("행사명", key="w_event")
+            pi3.text_input("장소 (현장주소)", key="w_loc")
 
-        with col_L:
-            with st.container(border=True):
-                st.markdown('<div class="sub-header">1️⃣ 기본 정보</div>', unsafe_allow_html=True)
-                st.text_input("수신인 (업체명)", key="w_client")
-                st.text_input("행사명", key="w_event")
-                st.text_input("장소 (현장주소)", key="w_loc")
-                dates = st.date_input("기간", value=(st.session_state['w_sdate'], st.session_state['w_edate']), key="w_date_range")
-                calc_days = (dates[1] - dates[0]).days + 1 if isinstance(dates, tuple) and len(dates) == 2 else 1
+            # ── 다중 기간 입력 ──
+            if 'w_date_periods' not in st.session_state:
+                _init_s = st.session_state.get('w_sdate')
+                _init_e = st.session_state.get('w_edate')
+                if _init_s and _init_e:
+                    st.session_state['w_date_periods'] = [(_init_s, _init_e)]
+                else:
+                    st.session_state['w_date_periods'] = []
+            
+            # 날짜 미설정 시 안내
+            if not st.session_state['w_date_periods']:
+                st.info("📅 프로젝트를 선택하면 날짜가 자동으로 설정됩니다. 직접 추가하려면 아래 버튼을 클릭하세요.")
+            
+            calc_days = 0
+            periods_to_keep = []
+            for _pi, (_ps, _pe) in enumerate(st.session_state['w_date_periods']):
+                # 세션에 위젯 키가 없을 때만 초기값 설정 (value와 key 동시 사용 경고 방지)
+                if f'dp_s_{_pi}' not in st.session_state:
+                    st.session_state[f'dp_s_{_pi}'] = _ps
+                if f'dp_e_{_pi}' not in st.session_state:
+                    st.session_state[f'dp_e_{_pi}'] = _pe
+                _dc1, _dc2, _dc3, _dc4 = st.columns([1, 1, 0.5, 0.3])
+                with _dc1:
+                    _new_s = st.date_input(f"시작일" if _pi == 0 else f"시작일 {_pi+1}", key=f"dp_s_{_pi}")
+                with _dc2:
+                    _new_e = st.date_input(f"종료일" if _pi == 0 else f"종료일 {_pi+1}", key=f"dp_e_{_pi}")
+                # None 방어
+                if _new_s is None: _new_s = _ps
+                if _new_e is None: _new_e = _pe
+                with _dc3:
+                    try:
+                        _p_days = max(1, (_new_e - _new_s).days + 1)
+                    except (TypeError, AttributeError):
+                        _p_days = 1
+                    st.markdown(f"<div style='padding-top:28px;font-size:14px;font-weight:bold;'>{_p_days}일</div>", unsafe_allow_html=True)
+                with _dc4:
+                    if _pi > 0:
+                        if st.button("🗑️", key=f"dp_del_{_pi}", help="이 기간 삭제"):
+                            st.session_state['w_date_periods'] = [p for j, p in enumerate(st.session_state['w_date_periods']) if j != _pi]
+                            st.rerun()
+                calc_days += _p_days
+                periods_to_keep.append((_new_s, _new_e))
+            
+            st.session_state['w_date_periods'] = periods_to_keep
+            # 첫 기간 값을 w_sdate/w_edate에도 동기화
+            if periods_to_keep:
+                st.session_state['w_sdate'] = periods_to_keep[0][0]
+                st.session_state['w_edate'] = periods_to_keep[-1][1]
+            
+            _add_col1, _add_col2, _add_col3 = st.columns([0.3, 1, 2])
+            with _add_col1:
+                st.write("")  # 사이드바와 간격
+            with _add_col2:
+                if st.button("➕ 기간 추가", key="add_period_btn"):
+                    if st.session_state['w_date_periods']:
+                        last_end = st.session_state['w_date_periods'][-1][1]
+                        new_start = last_end + timedelta(days=2) if last_end else date.today()
+                        new_end = new_start
+                    else:
+                        new_start = date.today() + timedelta(days=7)
+                        new_end = new_start
+                    st.session_state['w_date_periods'].append((new_start, new_end))
+                    st.rerun()
+            with _add_col3:
+                if len(st.session_state['w_date_periods']) > 1:
+                    st.caption(f"📅 전체 {len(st.session_state['w_date_periods'])}개 기간, 총 **{calc_days}일**")
+                else:
+                    st.caption(f"📅 총 **{calc_days}일** (비연속 기간이면 '기간 추가' 버튼 클릭)")
 
-            with st.container(border=True):
-                st.markdown('<div class="sub-header">📋 현장 추가정보</div>', unsafe_allow_html=True)
-                wc1, wc2 = st.columns(2)
-                wc1.text_input("👔 복장", key="w_dress", placeholder="예: 정장, 캐주얼, 유니폼")
-                wc2.text_input("🍽️ 식사", key="w_meal", placeholder="예: 제공, 각자, 도시락")
-                wc3, wc4 = st.columns(2)
-                wc3.text_input("🅿️ 주차", key="w_parking", placeholder="예: 가능, 불가, 인근 유료")
-                wc4.text_input("📝 특이사항", key="w_note", placeholder="유의사항 입력")
+            xi1, xi2, xi3, xi4 = st.columns(4)
+            xi1.text_input("👔 복장", key="w_dress", placeholder="예: 정장, 캐주얼, 유니폼")
+            xi2.text_input("🍽️ 식사", key="w_meal", placeholder="예: 제공, 각자, 도시락")
+            xi3.text_input("🅿️ 주차", key="w_parking", placeholder="예: 가능, 불가, 인근 유료")
+            xi4.text_input("📝 특이사항", key="w_note", placeholder="유의사항 입력")
 
+        # ── 좌우 2컬럼 (입력 | 결과) ──
+        col_input, col_result = st.columns([1, 1.3])
+
+        # ────────────────────────────────────
+        # 좌측: 인력추가 → AI분석 → 부대비용입력
+        # ────────────────────────────────────
+        with col_input:
+            # ▶ 인력 품목 추가
             with st.container(border=True):
-                st.markdown('<div class="sub-header">2️⃣ 인력 품목 추가</div>', unsafe_allow_html=True)
-                roles = ["선택"] + (df_roles['직군명'].unique().tolist() if not df_roles.empty else [])
-                role_kr = st.selectbox("직군", roles)
+                st.markdown('<div class="sub-header">➕ 인력 품목 추가</div>', unsafe_allow_html=True)
+
+                # 직군 선택 + 직접 입력
+                roles_list = df_roles['직군명'].unique().tolist() if not df_roles.empty else []
+                # 경비지도사가 목록에 없으면 추가
+                if '경비지도사' not in roles_list:
+                    roles_list.append('경비지도사')
+                role_options = ["선택"] + roles_list + ["✏️ 직접 입력"]
+                role_kr = st.selectbox("직군", role_options, key="role_select")
+
+                custom_role = ""
+                if role_kr == "✏️ 직접 입력":
+                    custom_role = st.text_input("직군명 직접 입력", placeholder="예: 포토그래퍼, MC, 통역사", key="custom_role_input")
+                    role_kr = custom_role if custom_role.strip() else "선택"
+
                 r_info = brain.get_role_info(role_kr)
                 role_id, base_p, cost_p = r_info['role_id'], r_info['base_price'], r_info['cost_price']
 
-                # ▶ 고객별 자동 추천 단가
+                if custom_role and base_p == 0:
+                    st.info("💡 새 직군입니다. 아래에서 청구/지급 단가를 직접 입력해주세요.")
+
+                # 고객별 자동 추천 단가
                 if role_kr != "선택" and st.session_state.get('w_client'):
                     _show_auto_recommend(df_est, st.session_state['w_client'], role_kr)
 
+                # 할증/팀장 (접이식)
                 factors = brain.get_factors(role_id)
                 f_map = {f"{f['name']} (+{f['price']:,})": f for f in factors}
-                picks = st.multiselect("할증 옵션", list(f_map.keys()))
+                picks = []
+                is_leader = False
+                pay_type = "일급"
+                with st.expander("⚙️ 할증/팀장/시급 옵션", expanded=False):
+                    picks = st.multiselect("할증 옵션", list(f_map.keys()))
+                    opt1, opt2 = st.columns(2)
+                    is_leader = opt1.checkbox("팀장 수당")
+                    pay_type = opt2.radio("지급기준", ["일급", "시급"], horizontal=True, label_visibility="collapsed")
+
                 add_p = sum([f_map[p]['price'] for p in picks])
                 add_c = sum([f_map[p]['cost_add'] for p in picks])
-
-                c1, c2 = st.columns([1, 1.5])
-                is_leader = c1.checkbox("팀장 수당")
-                pay_type = c2.radio("지급기준", ["일급", "시급"], horizontal=True, label_visibility="collapsed")
                 if is_leader:
                     base_p += 10000; cost_p += 10000
 
-                t1, t2, t3 = st.columns([1.1, 1.1, 0.8])
+                # 핵심 입력: 시간/인원/단가 (컴팩트)
+                t1, t2, t3 = st.columns([1, 1, 0.7])
                 ti = t1.time_input("출근", key="w_time_in")
                 to_ = t2.time_input("퇴근", key="w_time_out")
                 iq = t3.number_input("인원", min_value=1, key="w_qty")
@@ -338,10 +688,103 @@ def show(data):
                 fb = cc1.number_input("청구단가", value=base_p + add_p, step=5000)
                 fp = cc2.number_input("지급단가", value=cost_p + add_c, step=5000)
 
-                if st.button("⬇️ 리스트 추가", type="primary", use_container_width=True):
-                    if role_kr == "선택":
-                        st.warning("직군 선택")
+                # ── 일자별 상세 입력 (특수 케이스) ──
+                use_daily_detail = st.checkbox(
+                    "📅 일자별 상세 입력 (날짜마다 인원/시간이 다를 때)",
+                    key="use_daily_detail",
+                    help="비연속 일정에서 날짜마다 투입인원이나 근무시간이 다른 경우 체크"
+                )
+
+                daily_detail_df = None
+                if use_daily_detail:
+                    # 기간 정보에서 날짜 목록 생성
+                    all_dates = []
+                    for _ps, _pe in st.session_state.get('w_date_periods', []):
+                        _cur = _ps
+                        while _cur <= _pe:
+                            all_dates.append(_cur)
+                            _cur += timedelta(days=1)
+
+                    if not all_dates:
+                        st.warning("기간 정보가 없습니다. 위에서 날짜를 먼저 설정해주세요.")
                     else:
+                        st.caption(f"📅 전체 {len(all_dates)}일 — 날짜별 인원·시간을 수정하세요")
+                        # 기본값: 위에서 설정한 인원/시간으로 초기화
+                        _KR_DAYS = {'Mon':'월','Tue':'화','Wed':'수','Thu':'목','Fri':'금','Sat':'토','Sun':'일'}
+                        _daily_rows = []
+                        for _d in all_dates:
+                            _eng_day = _d.strftime('%a')
+                            _kr_day = _KR_DAYS.get(_eng_day, _eng_day)
+                            _daily_rows.append({
+                                '날짜': f"{_d.strftime('%m/%d')} ({_kr_day})",
+                                '_date_raw': _d.strftime('%Y-%m-%d'),
+                                '인원': iq,
+                                '출근시간': ti.strftime('%H:%M'),
+                                '퇴근시간': to_.strftime('%H:%M'),
+                            })
+                        _daily_init = pd.DataFrame(_daily_rows)
+
+                        daily_detail_df = st.data_editor(
+                            _daily_init[['날짜', '인원', '출근시간', '퇴근시간']],
+                            column_config={
+                                '날짜': st.column_config.TextColumn('날짜', disabled=True),
+                                '인원': st.column_config.NumberColumn('인원', min_value=0, step=1),
+                                '출근시간': st.column_config.TextColumn('출근', help="HH:MM 형식"),
+                                '퇴근시간': st.column_config.TextColumn('퇴근', help="HH:MM 형식"),
+                            },
+                            use_container_width=True, hide_index=True,
+                            num_rows="fixed", key="daily_detail_editor",
+                        )
+                        # _date_raw 컬럼 복원 (편집 결과에 합침)
+                        daily_detail_df['_date_raw'] = _daily_init['_date_raw'].values
+
+                        # 요약 표시
+                        total_person_days = int(daily_detail_df['인원'].sum())
+                        st.caption(f"👥 총 투입: **{total_person_days}명·일** (0명인 날은 건너뜀)")
+
+                if st.button("⬇️ 리스트에 추가", type="primary", use_container_width=True):
+                    if role_kr == "선택":
+                        st.warning("직군을 선택하거나 직접 입력해주세요")
+                    elif use_daily_detail and daily_detail_df is not None:
+                        # ── B방식: 일자별 행 생성 ──
+                        nm_base = f"{role_kr} {'[팀장]' if is_leader else ''}".strip()
+                        note = ", ".join([f_map[p]['name'] for p in picks])
+                        new_rows = []
+                        for _, drow in daily_detail_df.iterrows():
+                            d_qty = int(drow['인원'])
+                            if d_qty <= 0:
+                                continue  # 0명인 날 스킵
+                            d_date = str(drow['_date_raw'])
+                            d_date_short = str(drow['날짜'])
+                            # 시간 파싱
+                            try:
+                                d_dur = ue.smart_parse_time(f"{drow['출근시간']}~{drow['퇴근시간']}")[2]
+                            except Exception:
+                                d_dur = dur  # 파싱 실패 시 기본값
+                            d_spec = f"{drow['출근시간']}~{drow['퇴근시간']} ({d_dur}H)"
+                            d_mult = d_dur if pay_type == "시급" else 1
+                            d_bill = int(fb * d_mult * d_qty)
+                            d_cost = int(fp * d_mult * d_qty)
+                            new_rows.append({
+                                "품목": f"{nm_base}\n({d_date_short})",
+                                "규격": d_spec,
+                                "수량": d_qty,
+                                "일수": 1,
+                                "매출단가": int(fb * d_mult),
+                                "매입단가": int(fp * d_mult),
+                                "할인액": 0,
+                                "매출합계": d_bill,
+                                "매입합계": d_cost,
+                                "비고": note,
+                            })
+                        if new_rows:
+                            st.session_state['est_items'] = pd.concat(
+                                [st.session_state['est_items'], pd.DataFrame(new_rows)], ignore_index=True)
+                            st.rerun()
+                        else:
+                            st.warning("인원이 0인 날만 있습니다. 인원을 입력해주세요.")
+                    else:
+                        # ── 기존 방식: 총합 1행 ──
                         qty_calc = iq * calc_days
                         mult = dur if pay_type == "시급" else 1
                         tot_bill = int(fb * mult * qty_calc)
@@ -349,126 +792,158 @@ def show(data):
                         nm = f"{role_kr} {'[팀장]' if is_leader else ''}"
                         note = ", ".join([f_map[p]['name'] for p in picks])
                         new_row = {"품목": nm, "규격": spec_txt, "수량": iq, "일수": calc_days,
-                                   "매출단가": fb, "매입단가": fp, "매출합계": tot_bill, "매입합계": tot_cost, "비고": note}
+                                   "매출단가": fb, "매입단가": fp, "할인액": 0, "매출합계": tot_bill, "매입합계": tot_cost, "비고": note}
                         st.session_state['est_items'] = pd.concat(
                             [st.session_state['est_items'], pd.DataFrame([new_row])], ignore_index=True)
                         st.rerun()
 
-        with col_R:
-            # ── AI 분석 ──
-            st.markdown('<div class="sub-header">📊 AI 분석</div>', unsafe_allow_html=True)
-            analysis = brain.get_analysis(role_id)
-            g_txt = "<br>".join([f"• {g}" for g in analysis['guide']]) if analysis['guide'] else "직군 선택 시 가이드 표시"
-            st.markdown(f"""
-                <div class="analysis-box">
-                    <b>📘 {role_kr if role_kr != '선택' else '직군'} 가이드</b><br>{g_txt}<br>
-                    <hr style="margin:8px 0; border-color:#fdba74;">
-                    <div style="font-size:12px; display:flex; justify-content:space-between;">
-                        <span>💰 시장가: {analysis['market']}</span><span>🏢 타사: {analysis['comp']}</span>
+            # ▶ AI 분석 가이드 (접기 가능)
+            with st.expander("📊 AI 분석 가이드", expanded=True):
+                analysis = brain.get_analysis(role_id)
+                g_txt = "<br>".join([f"• {g}" for g in analysis['guide']]) if analysis['guide'] else "직군 선택 시 가이드 표시"
+                st.markdown(f"""
+                    <div class="analysis-box">
+                        <b>📘 {role_kr if role_kr != '선택' else '직군'} 가이드</b><br>{g_txt}<br>
+                        <hr style="margin:8px 0; border-color:#fdba74;">
+                        <div style="font-size:12px; display:flex; justify-content:space-between;">
+                            <span>💰 시장가: {analysis['market']}</span><span>🏢 타사: {analysis['comp']}</span>
+                        </div>
+                        <div style="font-size:12px; margin-top:5px; color:#c2410c;">🏆 <b>자사 체결:</b> {analysis['my_best']}</div>
                     </div>
-                    <div style="font-size:12px; margin-top:5px; color:#c2410c;">🏆 <b>자사 체결:</b> {analysis['my_best']}</div>
-                </div>
-            """, unsafe_allow_html=True)
+                """, unsafe_allow_html=True)
 
-            # ── 품목 테이블 ──
-            st.data_editor(
-                st.session_state['est_items'], width='stretch', hide_index=True,
-                num_rows="dynamic", key="est_items_editor",
-                column_config={
-                    "매출단가": st.column_config.NumberColumn("청구단가", format="%d"),
-                    "매입단가": st.column_config.NumberColumn("지급단가", format="%d"),
-                    "매출합계": st.column_config.NumberColumn("청구합계", format="%d"),
-                    "매입합계": st.column_config.NumberColumn("지출합계", format="%d"),
-                })
+                # AI 견적가 추천
+                try:
+                    import ai_helper as ai
+                    num_items = len(st.session_state['est_items']) if not st.session_state['est_items'].empty else 0
+                    if num_items > 0:
+                        df_est_all = data.get('estimate', pd.DataFrame())
+                        suggestion = ai.suggest_estimate_price(df_est_all, num_staff=num_items, num_days=1)
+                        if suggestion['recommended_supply'] > 0 and suggestion['similar_count'] >= 2:
+                            st.markdown(f"""
+                            <div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:8px;padding:8px;font-size:12px;">
+                                🤖 <b>AI 추천가:</b> ₩{suggestion['recommended_supply']:,}
+                                (과거 {suggestion['similar_count']}건, 평균 마진 {suggestion['avg_margin']}%)
+                            </div>
+                            """, unsafe_allow_html=True)
+                except Exception:
+                    pass
 
-            # 삭제 버튼
-            if not st.session_state['est_items'].empty:
-                n_items = len(st.session_state['est_items'])
-                del_cols = st.columns(min(n_items, 8) + 1)
-                for idx in range(min(n_items, 8)):
-                    r = st.session_state['est_items'].iloc[idx]
-                    with del_cols[idx]:
-                        if st.button(f"🗑️{idx+1}", key=f"del_item_{idx}", help=f"{r['품목']} 삭제"):
-                            st.session_state['est_items'] = st.session_state['est_items'].drop(idx).reset_index(drop=True)
-                            st.rerun()
-                with del_cols[-1]:
-                    if st.button("🗑️전체", key="del_all_items"):
-                        st.session_state['est_items'] = pd.DataFrame(columns=['품목','규격','수량','일수','매출단가','매입단가','매출합계','매입합계','비고'])
-                        st.rerun()
+                # 고객별 자동 추천 단가 (AI 영역 내로 이동)
+                if role_kr != "선택" and st.session_state.get('w_client'):
+                    _show_auto_recommend(df_est, st.session_state['w_client'], role_kr)
 
-            # ── 단가 일괄 조정 ──
-            st.markdown("---")
-            st.markdown('<div class="sub-header">⚡ 단가 일괄 조정</div>', unsafe_allow_html=True)
-            adj1, adj2, adj3 = st.columns([1, 1, 1])
-            with adj1:
-                adj_target = st.selectbox("대상", ["청구단가", "지급단가", "양쪽 모두"], key="adj_target")
-            with adj2:
-                adj_mode = st.selectbox("방식", ["% 증감", "원 증감"], key="adj_mode")
-            with adj3:
-                adj_val = st.number_input("값", value=0, step=5 if adj_mode == "% 증감" else 5000,
-                                          key="adj_val", help="예: +10(10%인상), -5000(5천원 할인)")
+            # ▶ 부대비용 & 지원품목 (통합)
+            with st.container(border=True):
+                st.markdown('<div class="sub-header">🛒 부대비용 & 지원품목</div>', unsafe_allow_html=True)
+                if 'additional_costs' not in st.session_state:
+                    st.session_state['additional_costs'] = pd.DataFrame(columns=['항목', '수량', '일수', '단가', '금액', '비고'])
 
-            if st.button("🔄 일괄 적용", key="apply_adj", use_container_width=True):
-                if not st.session_state['est_items'].empty and adj_val != 0:
-                    df_adj = st.session_state['est_items'].copy()
-                    targets = []
-                    if adj_target in ["청구단가", "양쪽 모두"]:
-                        targets.append(('매출단가', '매출합계'))
-                    if adj_target in ["지급단가", "양쪽 모두"]:
-                        targets.append(('매입단가', '매입합계'))
-                    for ucol, tcol in targets:
-                        if adj_mode == "% 증감":
-                            df_adj[ucol] = (df_adj[ucol] * (1 + adj_val / 100)).astype(int)
-                        else:
-                            df_adj[ucol] = (df_adj[ucol] + adj_val).astype(int)
-                        df_adj[tcol] = (df_adj[ucol] * df_adj['수량'] * df_adj['일수']).astype(int)
-                    st.session_state['est_items'] = df_adj
-                    st.success(f"✅ {adj_target} {adj_val}{'%' if adj_mode == '% 증감' else '원'} 적용 완료!")
-                    st.rerun()
+                # 빠른 추가 — 부대비용
+                st.caption("💰 부대비용")
 
-            # ── 부대비용 ──
-            st.markdown("---")
-            st.markdown('<div class="sub-header">🛒 부대비용</div>', unsafe_allow_html=True)
-            if 'additional_costs' not in st.session_state:
-                st.session_state['additional_costs'] = pd.DataFrame(columns=['항목', '금액', '비고'])
-
-            cost_c1, cost_c2, cost_c3, cost_c4 = st.columns([1.5, 0.8, 1, 0.8])
-            with cost_c1:
-                cost_item = st.selectbox("항목", ["식비","숙박비","교통비","용역료","기타"], label_visibility="collapsed", key="cost_item_select")
-            with cost_c2:
-                cost_amt = st.number_input("금액", min_value=0, step=10000, label_visibility="collapsed", key="cost_amount_input")
-            with cost_c3:
-                cost_note = st.text_input("설명", label_visibility="collapsed", placeholder="예: 1인당 50,000원 x 10명", key="cost_note_input")
-            with cost_c4:
-                if st.button("➕", key="add_cost_btn", use_container_width=True):
-                    if cost_amt > 0:
+                # 의뢰사제공(식비) 빠른 추가 버튼 (1식 / 2식)
+                _meal_c1, _meal_c2 = st.columns(2)
+                with _meal_c1:
+                    if st.button("🍽️ 식비 의뢰사제공 (1식)", key="tpl_client_meal_1", use_container_width=True,
+                                 help="1인 1식 의뢰사 제공. 미제공 시 1식당 1만원 추가청구"):
                         st.session_state['additional_costs'] = pd.concat([
                             st.session_state['additional_costs'],
-                            pd.DataFrame([{"항목": cost_item, "금액": cost_amt, "비고": cost_note}])
+                            pd.DataFrame([{"항목": "식비", "수량": st.session_state.get('w_qty', 1),
+                                           "일수": max(1, calc_days), "단가": 0, "금액": 0,
+                                           "비고": "의뢰사제공|1인 1식|미제공시 1식당 1만원 추가청구"}])
                         ], ignore_index=True)
-
-            total_additional = 0
-            if not st.session_state['additional_costs'].empty:
-                edited_costs = st.data_editor(
-                    st.session_state['additional_costs'], width='stretch', hide_index=True,
-                    num_rows="dynamic", key="additional_costs_editor",
-                    column_config={"금액": st.column_config.NumberColumn("금액", format="%d")}
-                )
-                st.session_state['additional_costs'] = edited_costs
-                total_additional = int(edited_costs['금액'].sum())
-                dc1, dc2 = st.columns([3, 1])
-                with dc1:
-                    st.caption(f"💰 부대비용 합계: {total_additional:,}원")
-                with dc2:
-                    if st.button("🗑️ 초기화", key="del_all_costs"):
-                        st.session_state['additional_costs'] = pd.DataFrame(columns=['항목', '금액', '비고'])
+                        st.rerun()
+                with _meal_c2:
+                    if st.button("🍽️ 식비 의뢰사제공 (2식)", key="tpl_client_meal_2", use_container_width=True,
+                                 help="1인 2식 의뢰사 제공. 미제공 시 1식당 1만원 추가청구"):
+                        st.session_state['additional_costs'] = pd.concat([
+                            st.session_state['additional_costs'],
+                            pd.DataFrame([{"항목": "식비", "수량": st.session_state.get('w_qty', 1),
+                                           "일수": max(1, calc_days), "단가": 0, "금액": 0,
+                                           "비고": "의뢰사제공|1인 2식|미제공시 1식당 1만원 추가청구"}])
+                        ], ignore_index=True)
                         st.rerun()
 
-            # ── 결과 박스 ──
+                # 입력란: 항목 / 수량 / 일수 / 단가 / 추가 버튼
+                _sel_idx = st.session_state.pop('_cost_sel_idx', 0)
+                _price_def = st.session_state.pop('_cost_price_default', 0)
+                _qty_def = st.session_state.pop('_cost_qty_default', 1)
+                _days_def = st.session_state.pop('_cost_days_default', max(1, calc_days))
+                cc1, cc2, cc3, cc4, cc5 = st.columns([1.4, 0.5, 0.5, 0.8, 0.4])
+                with cc1:
+                    cost_item = st.selectbox("항목", ["식비","숙박비","교통비","용역료","장비","기타"], index=_sel_idx, label_visibility="collapsed", key="cost_item_select")
+                with cc2:
+                    cost_qty = st.number_input("수량", min_value=1, value=_qty_def, label_visibility="collapsed", key="cost_qty_input")
+                with cc3:
+                    cost_days = st.number_input("일수", min_value=1, value=_days_def, label_visibility="collapsed", key="cost_days_input")
+                with cc4:
+                    cost_unit = st.number_input("단가", min_value=0, step=1000, value=_price_def, label_visibility="collapsed", key="cost_unit_input")
+                with cc5:
+                    if st.button("➕", key="add_cost_btn", use_container_width=True):
+                        cost_amt = cost_qty * cost_days * cost_unit
+                        if cost_amt > 0:
+                            st.session_state['additional_costs'] = pd.concat([
+                                st.session_state['additional_costs'],
+                                pd.DataFrame([{"항목": cost_item, "수량": cost_qty, "일수": cost_days, "단가": cost_unit, "금액": cost_amt, "비고": ""}])
+                            ], ignore_index=True)
+                            st.rerun()
+                        else:
+                            st.warning("수량·일수·단가를 입력하세요")
+                # 입력란 라벨 안내
+                st.markdown('<div style="display:flex;gap:4px;font-size:10px;color:#999;margin-top:-8px;"><span style="flex:1.4">항목</span><span style="flex:0.5">수량</span><span style="flex:0.5">일수</span><span style="flex:0.8">단가</span><span style="flex:0.4"></span></div>', unsafe_allow_html=True)
+
+                # 빠른 추가 — 지원품목 (본사 무료 제공)
+                st.divider()
+                st.caption("📦 지원품목 (본사 무료 제공 → 견적서 표시, 금액 0원)")
+                _sup_templates = [
+                    ("📻 무전기", "무전기"), ("🦺 안전조끼", "안전조끼"),
+                    ("🚨 경광봉", "경광봉"), ("📷 바디캠", "바디캠"), ("✏️ 직접입력", ""),
+                ]
+                _sup_cols = st.columns(len(_sup_templates))
+                for _si, (_slbl, _sname) in enumerate(_sup_templates):
+                    with _sup_cols[_si]:
+                        if _sname:
+                            if st.button(_slbl, key=f"sup_tpl_{_si}", use_container_width=True):
+                                st.session_state['est_items'] = pd.concat([
+                                    st.session_state['est_items'],
+                                    pd.DataFrame([{"품목": f"[지원] {_sname}", "규격": "본사 제공", "수량": iq,
+                                                   "일수": calc_days, "매출단가": 0, "매입단가": 0,
+                                                   "매출합계": 0, "매입합계": 0, "비고": "무료 지원"}])
+                                ], ignore_index=True)
+                                st.rerun()
+                # 지원품목 직접 입력
+                with st.expander("✏️ 지원품목 직접 입력", expanded=False):
+                    _sc1, _sc2, _sc3 = st.columns([2, 1, 1])
+                    with _sc1:
+                        _sup_name = st.text_input("품목명", placeholder="예: 확성기, 텐트", key="sup_custom_name")
+                    with _sc2:
+                        _sup_qty = st.number_input("수량", min_value=1, value=1, key="sup_custom_qty")
+                    with _sc3:
+                        _sup_days = st.number_input("일수", min_value=1, value=max(1, calc_days), key="sup_custom_days")
+                    if st.button("⬇️ 지원품목 추가", key="add_support_item", use_container_width=True):
+                        if _sup_name.strip():
+                            st.session_state['est_items'] = pd.concat([
+                                st.session_state['est_items'],
+                                pd.DataFrame([{"품목": f"[지원] {_sup_name.strip()}", "규격": "본사 제공",
+                                               "수량": _sup_qty, "일수": _sup_days,
+                                               "매출단가": 0, "매입단가": 0,
+                                               "매출합계": 0, "매입합계": 0, "비고": "무료 지원"}])
+                            ], ignore_index=True)
+                            st.rerun()
+                        else:
+                            st.warning("품목명을 입력해주세요")
+
+        # ────────────────────────────────────
+        # 우측: 합계 → 품목리스트 → 단가조정 → 부대비용리스트
+        # ────────────────────────────────────
+        with col_result:
+            # ▶ 합계 요약 박스 (항상 최상단)
             supply_sum = int(st.session_state['est_items']['매출합계'].sum()) if not st.session_state['est_items'].empty else 0
             cost_sum = int(st.session_state['est_items']['매입합계'].sum()) if not st.session_state['est_items'].empty else 0
-            vat_val = int(supply_sum * 0.1)
-            profit_val = supply_sum - cost_sum - total_additional
+            total_additional = int(st.session_state['additional_costs']['금액'].sum()) if not st.session_state.get('additional_costs', pd.DataFrame()).empty and '금액' in st.session_state.get('additional_costs', pd.DataFrame()).columns else 0
+            vat_val = int((supply_sum + total_additional) * 0.1)
+            profit_val = supply_sum - cost_sum
             margin_pct = (profit_val / supply_sum * 100) if supply_sum > 0 else 0
 
             st.markdown(f"""
@@ -478,41 +953,140 @@ def show(data):
                         <span>지출금액: {cost_sum:,}원</span>
                     </div>
                     <div style="display:flex; justify-content:space-between; font-size:13px; color:#c2410c; margin-top:2px;">
-                        <span>부가세(10%): {vat_val:,}원</span>
                         <span>부대비용: {total_additional:,}원</span>
+                        <span>부가세(10%): {vat_val:,}원 <span style="font-size:11px;color:#999;">(공급가+부대비용)</span></span>
                     </div>
                     <hr style="margin:8px 0;">
-                    <div style="display:flex; justify-content:space-between; font-size:16px; color:#064e3b; margin-bottom:5px;">
-                        <span>예상수익:</span>
-                        <span><b>{profit_val:,}원 ({margin_pct:.1f}%)</b></span>
+                    <div style="display:flex; justify-content:space-between; font-size:14px; color:#064e3b; margin-bottom:5px;">
+                        <span>인력 수익: <b>{profit_val:,}원 ({margin_pct:.1f}%)</b></span>
+                        <span style="font-size:11px;color:#888;">부대비용은 실비 정산</span>
                     </div>
                     <div style="font-size:24px;font-weight:900;color:#064e3b;">
-                        합계 {supply_sum + vat_val:,}원
+                        합계 {supply_sum + total_additional + vat_val:,}원
                         <span style="font-size:13px;color:#666;">(VAT {vat_val:,}원 포함)</span>
                     </div>
                 </div>
             """, unsafe_allow_html=True)
 
-            # AI 견적가 추천
-            try:
-                import ai_helper as ai
-                num_items = len(st.session_state['est_items']) if not st.session_state['est_items'].empty else 0
-                if num_items > 0:
-                    df_est_all = data.get('estimate', pd.DataFrame())
-                    suggestion = ai.suggest_estimate_price(df_est_all, num_staff=num_items, num_days=1)
-                    if suggestion['recommended_supply'] > 0 and suggestion['similar_count'] >= 2:
-                        diff = supply_sum - suggestion['recommended_supply']
-                        diff_pct = (diff / suggestion['recommended_supply'] * 100) if suggestion['recommended_supply'] > 0 else 0
-                        diff_icon = "📈" if diff > 0 else "📉" if diff < 0 else "✅"
-                        st.markdown(f"""
-                        <div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:8px;padding:10px;margin-top:8px;font-size:12px;">
-                            🤖 <b>AI 추천가:</b> ₩{suggestion['recommended_supply']:,} 
-                            (과거 {suggestion['similar_count']}건 기준, 평균 마진 {suggestion['avg_margin']}%)
-                            {diff_icon} 현재 견적 대비 {'+' if diff > 0 else ''}{diff_pct:.0f}%
-                        </div>
-                        """, unsafe_allow_html=True)
-            except Exception:
-                pass
+            # ▶ 견적 품목 리스트
+            st.markdown('<div class="sub-header">📦 견적 품목 리스트</div>', unsafe_allow_html=True)
+            st.caption("💡 수량·일수·단가·합계 모두 직접 수정 가능합니다. 할인액: 품목별 할인 금액(원) 입력 시 청구합계에서 차감됩니다.")
+            # 할인액 컬럼 호환 (기존 '할인율' → '할인액' 마이그레이션)
+            if '할인율' in st.session_state['est_items'].columns and '할인액' not in st.session_state['est_items'].columns:
+                st.session_state['est_items'] = st.session_state['est_items'].rename(columns={'할인율': '할인액'})
+            if '할인액' not in st.session_state['est_items'].columns:
+                _idx = st.session_state['est_items'].columns.tolist().index('매출합계') if '매출합계' in st.session_state['est_items'].columns else len(st.session_state['est_items'].columns)
+                st.session_state['est_items'].insert(_idx, '할인액', 0)
+            edited_items = st.data_editor(
+                st.session_state['est_items'], use_container_width=True, hide_index=True,
+                num_rows="dynamic", key=f"est_items_editor_{_g}",
+                disabled=["매출합계", "매입합계"],
+                column_config={
+                    "품목": st.column_config.TextColumn("품목"),
+                    "규격": st.column_config.TextColumn("규격/상세"),
+                    "수량": st.column_config.NumberColumn("수량", min_value=0, step=1, format="%d"),
+                    "일수": st.column_config.NumberColumn("일수", min_value=0, step=1, format="%d"),
+                    "매출단가": st.column_config.NumberColumn("청구단가", min_value=0, step=5000, format="%d"),
+                    "매입단가": st.column_config.NumberColumn("지급단가", min_value=0, step=5000, format="%d"),
+                    "할인액": st.column_config.NumberColumn("할인액(원)", min_value=0, step=10000, format="%d", help="품목별 할인 금액. 예: 10000 = 1만원 할인"),
+                    "매출합계": st.column_config.NumberColumn("청구합계", format="%d"),
+                    "매입합계": st.column_config.NumberColumn("지출합계", format="%d"),
+                    "비고": st.column_config.TextColumn("비고"),
+                })
+            # 편집 결과를 세션에 반영 (항상 수식 기반 재계산)
+            if not edited_items.empty:
+                _recalc = edited_items.copy()
+                if '할인액' not in _recalc.columns:
+                    _recalc['할인액'] = 0
+                _needs_rerun = False
+                for _ci in _recalc.index:
+                    _q = int(_recalc.loc[_ci, '수량']) if pd.notna(_recalc.loc[_ci, '수량']) else 0
+                    _d = int(_recalc.loc[_ci, '일수']) if pd.notna(_recalc.loc[_ci, '일수']) else 1
+                    _up = int(_recalc.loc[_ci, '매출단가']) if pd.notna(_recalc.loc[_ci, '매출단가']) else 0
+                    _uc = int(_recalc.loc[_ci, '매입단가']) if pd.notna(_recalc.loc[_ci, '매입단가']) else 0
+                    _disc_amt = _safe_int(_recalc.loc[_ci, '할인액']) if pd.notna(_recalc.loc[_ci, '할인액']) else 0
+                    _discounted_up = max(0, _up - _disc_amt)
+                    _new_sale = _q * _d * _discounted_up
+                    _new_cost = _q * _d * _uc
+                    _old_sale = _safe_int(_recalc.loc[_ci, '매출합계'])
+                    _old_cost = _safe_int(_recalc.loc[_ci, '매입합계'])
+                    if _new_sale != _old_sale or _new_cost != _old_cost:
+                        _needs_rerun = True
+                    _recalc.loc[_ci, '매출합계'] = _new_sale
+                    _recalc.loc[_ci, '매입합계'] = _new_cost
+                st.session_state['est_items'] = _recalc
+                if _needs_rerun:
+                    st.rerun()
+
+            # 삭제 버튼 (체크박스 선택 방식)
+            if not st.session_state['est_items'].empty:
+                n_items = len(st.session_state['est_items'])
+                del_cols = st.columns(min(n_items, 10) + 1)
+                for idx in range(min(n_items, 10)):
+                    r = st.session_state['est_items'].iloc[idx]
+                    with del_cols[idx]:
+                        if st.button(f"🗑️{idx+1}", key=f"del_item_{idx}", help=f"{r['품목']} 삭제"):
+                            st.session_state['est_items'] = st.session_state['est_items'].drop(idx).reset_index(drop=True)
+                            st.rerun()
+                with del_cols[-1]:
+                    if st.button("🗑️전체", key="del_all_items"):
+                        st.session_state['est_items'] = pd.DataFrame(columns=['품목','규격','수량','일수','매출단가','매입단가','할인액','매출합계','매입합계','비고'])
+                        st.rerun()
+
+            # ▶ 단가 일괄 조정
+            with st.expander("⚡ 단가 일괄 조정", expanded=False):
+                adj1, adj2, adj3 = st.columns([1, 1, 1])
+                with adj1:
+                    adj_target = st.selectbox("대상", ["청구단가", "지급단가", "양쪽 모두"], key="adj_target")
+                with adj2:
+                    adj_mode = st.selectbox("방식", ["% 증감", "원 증감"], key="adj_mode")
+                with adj3:
+                    adj_val = st.number_input("값", value=0, step=5 if adj_mode == "% 증감" else 5000,
+                                              key="adj_val", help="예: +10(10%인상), -5000(5천원 할인)")
+
+                if st.button("🔄 일괄 적용", key="apply_adj", use_container_width=True):
+                    if not st.session_state['est_items'].empty and adj_val != 0:
+                        df_adj = st.session_state['est_items'].copy()
+                        targets = []
+                        if adj_target in ["청구단가", "양쪽 모두"]:
+                            targets.append(('매출단가', '매출합계'))
+                        if adj_target in ["지급단가", "양쪽 모두"]:
+                            targets.append(('매입단가', '매입합계'))
+                        for ucol, tcol in targets:
+                            if adj_mode == "% 증감":
+                                df_adj[ucol] = (df_adj[ucol] * (1 + adj_val / 100)).astype(int)
+                            else:
+                                df_adj[ucol] = (df_adj[ucol] + adj_val).astype(int)
+                            df_adj[tcol] = (df_adj[ucol] * df_adj['수량'] * df_adj['일수']).astype(int)
+                        st.session_state['est_items'] = df_adj
+                        st.success(f"✅ {adj_target} {adj_val}{'%' if adj_mode == '% 증감' else '원'} 적용 완료!")
+                        st.rerun()
+
+            # ▶ 부대비용 리스트
+            if not st.session_state['additional_costs'].empty:
+                st.markdown('<div class="sub-header">🛒 부대비용 내역</div>', unsafe_allow_html=True)
+                edited_costs = st.data_editor(
+                    st.session_state['additional_costs'], use_container_width=True, hide_index=True,
+                    num_rows="dynamic", key=f"additional_costs_editor_{_g}",
+                    column_config={
+                        "수량": st.column_config.NumberColumn("수량", format="%d", width="small"),
+                        "일수": st.column_config.NumberColumn("일수", format="%d", width="small"),
+                        "단가": st.column_config.NumberColumn("단가", format="%d"),
+                        "금액": st.column_config.NumberColumn("금액", format="%d"),
+                    }
+                )
+                # 금액 재계산 (수량 x 일수 x 단가)
+                if '수량' in edited_costs.columns and '일수' in edited_costs.columns and '단가' in edited_costs.columns:
+                    edited_costs['금액'] = (edited_costs['수량'].fillna(1) * edited_costs['일수'].fillna(1) * edited_costs['단가'].fillna(0)).astype(int)
+                st.session_state['additional_costs'] = edited_costs
+                total_additional = int(edited_costs['금액'].sum())
+                dc1, dc2 = st.columns([3, 1])
+                with dc1:
+                    st.caption(f"💰 부대비용 합계: {total_additional:,}원")
+                with dc2:
+                    if st.button("🗑️ 초기화", key="del_all_costs"):
+                        st.session_state['additional_costs'] = pd.DataFrame(columns=['항목', '수량', '일수', '단가', '금액', '비고'])
+                        st.rerun()
 
     # ==================================================================
     # TAB 2: 견적서 발행
@@ -523,18 +1097,79 @@ def show(data):
             st.markdown("### ✏️ 편집")
             with st.container(border=True):
                 st.caption("📌 수신자 정보")
-                f_client = st.text_input("상호", value=st.session_state.get('w_client', ''), key="final_client")
+                # 항상 w_*에서 안전하게 읽어서 초기화 (세대 키 기반)
+                _ck_client = f"final_client_{_g}"
+                _ck_manager = f"final_manager_{_g}"
+                _ck_contact = f"final_contact_{_g}"
+                _ck_loc = f"final_loc_{_g}"
+                if _ck_client not in st.session_state:
+                    st.session_state[_ck_client] = _safe_str(st.session_state.get('w_client'))
+                if _ck_manager not in st.session_state:
+                    st.session_state[_ck_manager] = _safe_str(st.session_state.get('w_manager'))
+                if _ck_contact not in st.session_state:
+                    st.session_state[_ck_contact] = _safe_str(st.session_state.get('w_contact'))
+                if _ck_loc not in st.session_state:
+                    st.session_state[_ck_loc] = _safe_str(st.session_state.get('w_loc'))
+                f_client = st.text_input("상호", key=_ck_client)
                 c_1, c_2 = st.columns(2)
-                f_ref = c_1.text_input("참조 (담당자)", value=st.session_state.get('w_manager', ''), key="final_manager")
-                f_tel = c_2.text_input("연락처", value=st.session_state.get('w_contact', ''), key="final_contact")
-                f_addr = st.text_input("주소 (현장)", value=st.session_state.get('w_loc', ''), key="final_loc")
+                f_ref = c_1.text_input("참조 (담당자)", key=_ck_manager)
+                f_tel = c_2.text_input("연락처", key=_ck_contact)
+                f_addr = st.text_input("주소 (현장)", key=_ck_loc)
 
             st.caption("📋 리스트 수정")
+            # 할인액 컬럼 호환
+            if '할인율' in st.session_state['est_items'].columns and '할인액' not in st.session_state['est_items'].columns:
+                st.session_state['est_items'] = st.session_state['est_items'].rename(columns={'할인율': '할인액'})
+            if '할인액' not in st.session_state['est_items'].columns:
+                st.session_state['est_items']['할인액'] = 0
             edited_df = st.data_editor(
                 st.session_state['est_items'], width='stretch', num_rows="dynamic",
-                column_config={"매출합계": st.column_config.NumberColumn("금액", format="%d")},
-                hide_index=True, key="final_edit_table"
+                disabled=["매출합계", "매입합계"],
+                column_config={
+                    "품목": st.column_config.TextColumn("품목", width="medium"),
+                    "수량": st.column_config.NumberColumn("수량", min_value=0, step=1, format="%d"),
+                    "일수": st.column_config.NumberColumn("일수", min_value=0, step=1, format="%d"),
+                    "매출단가": st.column_config.NumberColumn("단가", min_value=0, step=5000, format="%d"),
+                    "할인액": st.column_config.NumberColumn("할인액", min_value=0, step=10000, format="%d"),
+                    "매출합계": st.column_config.NumberColumn("금액", format="%d"),
+                },
+                hide_index=True, key=f"final_edit_table_{_g}"
             )
+
+            # ── TAB2 편집 결과도 항상 수식 기반 재계산 ──
+            if not edited_df.empty:
+                _t2_recalc = edited_df.copy()
+                if '할인액' not in _t2_recalc.columns:
+                    _t2_recalc['할인액'] = 0
+                _t2_needs_rerun = False
+                for _ci in _t2_recalc.index:
+                    _q = int(_t2_recalc.loc[_ci, '수량']) if pd.notna(_t2_recalc.loc[_ci, '수량']) else 0
+                    _d = int(_t2_recalc.loc[_ci, '일수']) if pd.notna(_t2_recalc.loc[_ci, '일수']) else 1
+                    _up = int(_t2_recalc.loc[_ci, '매출단가']) if pd.notna(_t2_recalc.loc[_ci, '매출단가']) else 0
+                    _uc = int(_t2_recalc.loc[_ci, '매입단가']) if pd.notna(_t2_recalc.loc[_ci, '매입단가']) else 0
+                    _disc_amt = _safe_int(_t2_recalc.loc[_ci, '할인액']) if pd.notna(_t2_recalc.loc[_ci, '할인액']) else 0
+                    _discounted_up = max(0, _up - _disc_amt)
+                    _new_sale = _q * _d * _discounted_up
+                    _new_cost = _q * _d * _uc
+                    _old_sale = _safe_int(_t2_recalc.loc[_ci, '매출합계'])
+                    _old_cost = _safe_int(_t2_recalc.loc[_ci, '매입합계'])
+                    if _new_sale != _old_sale or _new_cost != _old_cost:
+                        _t2_needs_rerun = True
+                    _t2_recalc.loc[_ci, '매출합계'] = _new_sale
+                    _t2_recalc.loc[_ci, '매입합계'] = _new_cost
+                edited_df = _t2_recalc
+                st.session_state['est_items'] = _t2_recalc
+                if _t2_needs_rerun:
+                    st.rerun()
+
+            # 빈 행 삭제 버튼
+            _empty_mask = edited_df['품목'].fillna('').astype(str).str.strip() == ''
+            _empty_count = _empty_mask.sum()
+            if _empty_count > 0:
+                if st.button(f"🗑️ 빈 행 삭제 ({_empty_count}개)", key="remove_empty_rows"):
+                    st.session_state['est_items'] = edited_df[~_empty_mask].reset_index(drop=True)
+                    st.session_state['_tab2_gen'] = _g + 1  # data_editor 재생성
+                    st.rerun()
 
             t_top = st.text_area("상단 약관", value=st.session_state['w_terms_top'], height=120)
             t_side = st.text_area("측면 약관", value=st.session_state['w_terms_side'], height=120)
@@ -543,6 +1178,7 @@ def show(data):
             b1, b2, b3 = st.columns([0.8, 1.2, 1])
             with b1:
                 vat_yn = st.checkbox("VAT 포함", value=True)
+                discount_amt = st.number_input("💸 할인금액", min_value=0, step=10000, value=0, key="discount_amt", help="견적 총액에서 차감할 할인 금액")
             with b2:
                 banner_b64 = load_local_banner()
                 if not banner_b64:
@@ -561,7 +1197,8 @@ def show(data):
 
                             s_amt = int(edited_df['매출합계'].sum()) if not edited_df.empty else 0
                             c_amt = int(edited_df['매입합계'].sum()) if not edited_df.empty else 0
-                            add_total = int(st.session_state.get('additional_costs', pd.DataFrame()).get('금액', pd.Series([0])).sum())
+                            _add_costs_df = st.session_state.get('additional_costs', pd.DataFrame())
+                            add_total = int(_add_costs_df['금액'].sum()) if not _add_costs_df.empty and '금액' in _add_costs_df.columns else 0
                             total_supply = s_amt + add_total
                             v_amt = int(total_supply * 0.1) if vat_yn else 0
 
@@ -601,7 +1238,7 @@ def show(data):
                                     # 직접 수정하면 오류 발생. 위젯 값은 자동 유지됨.
                                     st.balloons()
                                     st.success(f"✅ {final_save_name} 견적 저장 완료!")
-                                    st.cache_data.clear()
+                                    db.invalidate_data()
                                 else:
                                     st.error("❌ 시트 저장 실패.")
                         except Exception as e:
@@ -609,8 +1246,17 @@ def show(data):
 
         with col_view:
             st.markdown("### 📄 미리보기 (Preview)")
-            final_supply = edited_df['매출합계'].sum() if not edited_df.empty else 0
-            date_range_txt = f"{st.session_state['w_sdate']} ~ {st.session_state['w_edate']}"
+            # 빈 행 필터링 (미리보기에도 적용)
+            _preview_df = edited_df.copy()
+            _preview_mask = _preview_df['품목'].fillna('').astype(str).str.strip() != ''
+            _preview_df = _preview_df[_preview_mask].reset_index(drop=True)
+            final_supply = _preview_df['매출합계'].sum() if not _preview_df.empty else 0
+            # 다중 기간이면 / 구분자로 표시
+            _periods = st.session_state.get('w_date_periods', [])
+            if _periods:
+                date_range_txt = " / ".join([f"{p[0]} ~ {p[1]}" for p in _periods if p[0] and p[1]])
+            else:
+                date_range_txt = "날짜 미설정"
 
             additional_costs_df = st.session_state.get('additional_costs', pd.DataFrame())
             if not additional_costs_df.empty:
@@ -622,34 +1268,56 @@ def show(data):
                 total_additional_v = 0
 
             client_dict = {
-                "name": f_client if f_client else st.session_state.get('w_client', ''),
-                "ref": f_ref, "tel": f_tel, "addr": f_addr,
+                "name": f_client if f_client else _safe_str(st.session_state.get('w_client')),
+                "ref": f_ref if f_ref else _safe_str(st.session_state.get('w_manager')),
+                "tel": f_tel if f_tel else _safe_str(st.session_state.get('w_contact')),
+                "addr": f_addr if f_addr else _safe_str(st.session_state.get('w_loc')),
                 "date_range": date_range_txt, "date": datetime.now().strftime("%Y-%m-%d")
             }
             supplier_dict = {"reg_no": "429-88-01469", "name": "(주)가디어스", "ceo": "최규성", "tel": "1600-2944", "addr": "서울시 종로구 동망산1길 2, 1층"}
-            html_quote = ue.get_customer_quote_html(edited_df, client_dict, supplier_dict, final_supply, vat_yn, t_top, t_side, banner_b64, additional_costs_df, total_additional_v)
+            html_quote = ue.get_customer_quote_html(_preview_df, client_dict, supplier_dict, final_supply, vat_yn, t_top, t_side, banner_b64, additional_costs_df, total_additional_v, discount_amt)
             st.components.v1.html(html_quote, height=950, scrolling=True)
 
+            # ── 디버그 (값 추적) ──
+            with st.expander("🔧 값 디버그 (문제 발생 시 펼쳐서 확인)", expanded=False):
+                st.json({
+                    "_tab2_gen": _g,
+                    "w_client": repr(st.session_state.get('w_client')),
+                    "w_manager": repr(st.session_state.get('w_manager')),
+                    "w_contact": repr(st.session_state.get('w_contact')),
+                    "w_loc": repr(st.session_state.get('w_loc')),
+                    "w_date_periods_len": len(st.session_state.get('w_date_periods', [])),
+                    "last_project": repr(st.session_state.get('last_project')),
+                    "_current_inq_id": repr(st.session_state.get('_current_inq_id')),
+                    "f_client_key": _ck_client,
+                    "f_client_val": repr(f_client),
+                    "f_ref_val": repr(f_ref),
+                    "f_tel_val": repr(f_tel),
+                    "f_addr_val": repr(f_addr),
+                    "preview_name": repr(client_dict.get('name')),
+                    "preview_ref": repr(client_dict.get('ref')),
+                })
+
     # ==================================================================
-    # TAB 3: 견적 히스토리 & 비교
+    # TAB 3: 히스토리 & 리포트 (통합)
     # ==================================================================
     with tab3:
         _show_history_tab(df_est, df_inq, st.session_state.get('w_client', ''))
 
-    # ==================================================================
-    # TAB 4: 상세 수익 리포트
-    # ==================================================================
-    with tab4:
-        c1, c2 = st.columns([1, 2.5])
-        with c1:
-            st.info("📝 결재 메모 작성")
-            n1 = st.text_area("1. 전략", height=80)
-            n2 = st.text_area("2. 인력", height=80)
-            n3 = st.text_area("3. 리스크", height=80)
-            n4 = st.text_area("4. 결론", height=80)
-        with c2:
-            html_rep = ue.get_detailed_report_html(st.session_state['est_items'], st.session_state.get('w_client', ''), [n1, n2, n3, n4])
-            st.components.v1.html(html_rep, height=1000, scrolling=True)
+        st.markdown("---")
+
+        # ── 상세 수익 리포트 ──
+        with st.expander("📊 상세 수익 리포트 & 결재 메모", expanded=False):
+            c1, c2 = st.columns([1, 2.5])
+            with c1:
+                st.info("📝 결재 메모 작성")
+                n1 = st.text_area("1. 전략", height=80)
+                n2 = st.text_area("2. 인력", height=80)
+                n3 = st.text_area("3. 리스크", height=80)
+                n4 = st.text_area("4. 결론", height=80)
+            with c2:
+                html_rep = ue.get_detailed_report_html(st.session_state['est_items'], st.session_state.get('w_client', ''), [n1, n2, n3, n4])
+                st.components.v1.html(html_rep, height=1000, scrolling=True)
 
 
 # ==============================================================================

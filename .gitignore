@@ -51,3 +51,4 @@ htmlcov/
 # 제외 폴더
 gradius-erp/
 page_staff_new.py.bak
+_home_backup/

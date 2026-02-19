@@ -72,6 +72,19 @@ def save_inquiry():
     # 13.페이 | 14.상태 | 15.특이사항 | 16.비고 | 17.만족도 | 18.관계 |
     # 19.구분 | 20.진행여부 | 21.진행상태 | 22.인력세팅현황 | 23.상담내용및 고객성향
     
+    # 다중 기간 처리: 추가 기간이 있으면 / 구분자로 합침
+    _main_start = st.session_state.get('form_date_start', '')
+    _main_end = st.session_state.get('form_date_end', '')
+    _extra_periods = st.session_state.get('form_extra_periods', [])
+    if _extra_periods:
+        _all_starts = [_main_start] + [p[0] for p in _extra_periods if p[0]]
+        _all_ends = [_main_end] + [p[1] for p in _extra_periods if p[1]]
+        _save_start = " / ".join(_all_starts)
+        _save_end = " / ".join(_all_ends)
+    else:
+        _save_start = _main_start
+        _save_end = _main_end
+
     inq_row = [
         new_id,                                      # 1. 문의ID
         now_str,                                     # 2. 작성일
@@ -80,8 +93,8 @@ def save_inquiry():
         st.session_state.get('form_contact', ''),    # 5. 연락처
         st.session_state.get('form_evt_name', ''),   # 6. 행사명
         st.session_state.get('form_evt_place', ''),  # 7. 장소
-        st.session_state.get('form_date_start', ''), # 8. 행사시작일
-        st.session_state.get('form_date_end', ''),   # 9. 행사종료일
+        _save_start,                                 # 8. 행사시작일 (다중기간 시 / 구분)
+        _save_end,                                   # 9. 행사종료일 (다중기간 시 / 구분)
         st.session_state.get('form_evt_time', ''),   # 10. 행사시간
         st.session_state.get('form_service', ''),    # 11. 서비스종류
         st.session_state.get('form_headcount', ''),  # 12. 필요인력
@@ -258,10 +271,32 @@ def show(data):
         r1_c2.text_input("장소", key="form_evt_place")
         
         st.markdown('<div class="label-text">일시 / 시간</div>', unsafe_allow_html=True)
+        
+        # 다중 기간 입력 지원
+        if 'form_extra_periods' not in st.session_state:
+            st.session_state['form_extra_periods'] = []
+        
         r2_c1, r2_c2, r2_c3 = st.columns([1, 1, 1.5])
         r2_c1.text_input("시작일", key="form_date_start", placeholder="2025-02-16")
         r2_c2.text_input("종료일", key="form_date_end", placeholder="2025-03-02")
         r2_c3.text_input("시간", key="form_evt_time", placeholder="10:30~20:30")
+        
+        # 추가 기간 표시
+        _periods_to_keep = []
+        for _epi, (_ep_s, _ep_e) in enumerate(st.session_state['form_extra_periods']):
+            _ep_c1, _ep_c2, _ep_c3 = st.columns([1, 1, 1.5])
+            _new_ep_s = _ep_c1.text_input(f"시작일 {_epi+2}", value=_ep_s, key=f"form_extra_s_{_epi}", placeholder="2025-02-20")
+            _new_ep_e = _ep_c2.text_input(f"종료일 {_epi+2}", value=_ep_e, key=f"form_extra_e_{_epi}", placeholder="2025-02-25")
+            with _ep_c3:
+                if st.button("🗑️", key=f"del_extra_period_{_epi}"):
+                    st.session_state['form_extra_periods'] = [p for j, p in enumerate(st.session_state['form_extra_periods']) if j != _epi]
+                    st.rerun()
+            _periods_to_keep.append((_new_ep_s, _new_ep_e))
+        st.session_state['form_extra_periods'] = _periods_to_keep
+        
+        if st.button("➕ 기간 추가 (비연속 일정)", key="add_extra_period"):
+            st.session_state['form_extra_periods'].append(("", ""))
+            st.rerun()
         
         st.markdown('<div class="label-text">세부 조건</div>', unsafe_allow_html=True)
         r3_c1, r3_c2, r3_c3 = st.columns([1, 1, 1])

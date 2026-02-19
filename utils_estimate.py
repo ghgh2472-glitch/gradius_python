@@ -15,7 +15,12 @@ class EstimateBrain:
 
     def get_role_info(self, role_name_kr):
         info = {"role_id": None, "base_price": 0, "cost_price": 0, "leader_add": 0}
-        if self.df_roles.empty or not role_name_kr or role_name_kr == "선택": return info
+        if not role_name_kr or role_name_kr == "선택": return info
+        # 경비지도사 기본값 (시트에 없는 경우)
+        if role_name_kr == '경비지도사':
+            info['base_price'] = 250000
+            info['cost_price'] = 150000
+        if self.df_roles.empty: return info
         try:
             row = self.df_roles[self.df_roles['직군명'] == role_name_kr]
             if not row.empty:
@@ -81,7 +86,16 @@ def safe_int(val):
     except: return 0
 
 def smart_parse_date(date_str):
-    """날짜 문자열 파싱. '2026-02-20~2026-02-22' 또는 단일 날짜 지원"""
+    """날짜 문자열 파싱. 단일 기간 또는 다중 기간 지원
+    
+    지원 형식:
+    - 단일: '2026-02-20~2026-02-22'
+    - 다중: '2026-02-15~2026-02-18 / 2026-02-20~2026-02-25'
+    - 다중: '2/15~18, 2/20~25'
+    
+    반환: (시작일, 종료일, 총일수)
+    - 다중 기간인 경우: 첫 시작일, 마지막 종료일, 합산 일수
+    """
     txt = str(date_str).strip()
     now = datetime.now().date()
     if not txt: return (now, now, 1)
@@ -99,20 +113,82 @@ def smart_parse_date(date_str):
         return None
     
     try:
-        # 1) ~ 구분자 우선 (YYYY-MM-DD~YYYY-MM-DD)
-        if '~' in txt:
-            parts = txt.split('~', 1)
-            dt1 = to_d(parts[0])
-            dt2 = to_d(parts[1]) if len(parts) > 1 else dt1
-        else:
-            # 단일 날짜
-            dt1 = to_d(txt)
-            dt2 = dt1
+        # 다중 기간 분리: ' / ' 또는 ', ' 구분 (MM/DD 형식 보호)
+        segments = re.split(r'\s+/\s+|\s*,\s+', txt)
+        segments = [s.strip() for s in segments if s.strip()]
         
-        if dt1 is None: return (now, now, 1)
-        if dt2 is None: dt2 = dt1
-        return (dt1, dt2, max(1, (dt2-dt1).days+1))
+        all_periods = []
+        for seg in segments:
+            if '~' in seg:
+                parts = seg.split('~', 1)
+                dt1 = to_d(parts[0])
+                dt2 = to_d(parts[1]) if len(parts) > 1 else dt1
+                # MM-DD~DD 형식 (종료일에 월이 없는 경우)
+                if dt2 is None and dt1 is not None and parts[1].strip().isdigit():
+                    day_only = int(parts[1].strip())
+                    dt2 = dt1.replace(day=day_only)
+            else:
+                dt1 = to_d(seg)
+                dt2 = dt1
+            
+            if dt1 is not None:
+                if dt2 is None: dt2 = dt1
+                all_periods.append((dt1, dt2))
+        
+        if not all_periods:
+            return (now, now, 1)
+        
+        first_start = all_periods[0][0]
+        last_end = all_periods[-1][1]
+        total_days = sum(max(1, (e - s).days + 1) for s, e in all_periods)
+        
+        return (first_start, last_end, total_days)
     except: return (now, now, 1)
+
+
+def smart_parse_dates_multi(date_str):
+    """다중 기간을 개별 기간 리스트로 반환
+    
+    반환: [(시작일1, 종료일1, 일수1), (시작일2, 종료일2, 일수2), ...]
+    """
+    txt = str(date_str).strip()
+    now = datetime.now().date()
+    if not txt: return [(now, now, 1)]
+    
+    y = datetime.now().year
+    def to_d(s):
+        s = s.strip().replace('.', '-').replace('/', '-')
+        if not s: return None
+        if len(s) >= 8 and s.count('-') == 2:
+            return datetime.strptime(s[:10], "%Y-%m-%d").date()
+        if s.count('-') == 1:
+            return datetime.strptime(f"{y}-{s}", "%Y-%m-%d").date()
+        return None
+    
+    try:
+        segments = re.split(r'\s+/\s+|\s*,\s+', txt)
+        segments = [s.strip() for s in segments if s.strip()]
+        
+        results = []
+        for seg in segments:
+            if '~' in seg:
+                parts = seg.split('~', 1)
+                dt1 = to_d(parts[0])
+                dt2 = to_d(parts[1]) if len(parts) > 1 else dt1
+                if dt2 is None and dt1 is not None and parts[1].strip().isdigit():
+                    day_only = int(parts[1].strip())
+                    dt2 = dt1.replace(day=day_only)
+            else:
+                dt1 = to_d(seg)
+                dt2 = dt1
+            
+            if dt1 is not None:
+                if dt2 is None: dt2 = dt1
+                days = max(1, (dt2 - dt1).days + 1)
+                results.append((dt1, dt2, days))
+        
+        return results if results else [(now, now, 1)]
+    except: return [(now, now, 1)]
 
 def smart_parse_time(time_str):
     txt = str(time_str).strip()
@@ -152,51 +228,100 @@ def num_to_hangul(num):
 # 3. HTML 생성 엔진 (합계표 너비 최적화)
 # ==============================================================================
 
-def get_customer_quote_html(df, client_info, supplier_info, supply_amt, vat_yn, terms_top, terms_side, footer_img_base64=None, additional_costs_df=None, additional_costs_total=0):
+def get_customer_quote_html(df, client_info, supplier_info, supply_amt, vat_yn, terms_top, terms_side, footer_img_base64=None, additional_costs_df=None, additional_costs_total=0, discount_amount=0):
     total = safe_int(supply_amt)
     additional_total = safe_int(additional_costs_total)
+    discount = safe_int(discount_amount)
     total_with_additional = total + additional_total
-    vat = int(total_with_additional * 0.1) if vat_yn else 0
-    grand_total = total_with_additional + vat
+    total_after_discount = total_with_additional - discount
+    vat = int(total_after_discount * 0.1) if vat_yn else 0
+    grand_total = total_after_discount + vat
         
     rows = ""
     for _, r in df.iterrows():
+        # 빈 행 자동 스킵 (품목명이 없으면 표시 안 함)
+        _item_name = str(r.get('품목', '')).strip()
+        if not _item_name or _item_name in ('nan', 'None'):
+            continue
         qty = safe_int(r.get('수량', 0))
         days = safe_int(r.get('일수', 1))
         price = safe_int(r.get('매출단가', 0))
         amt = safe_int(r.get('매출합계', 0))
         spec = r.get('규격', '')
         note = r.get('비고', '')
+        # 품목별 할인액 표시 (단가 기준 할인)
+        _disc_amt = safe_int(r.get('할인액', r.get('할인율', 0)))
+        # 할인 시 단가에 빗금 + 할인된 단가 표시
+        if _disc_amt > 0 and price > 0:
+            _discounted_price = max(0, price - _disc_amt)
+            _price_html = f'<del style="color:#999;font-size:11px;">{price:,}</del><br><span style="color:#c2410c;font-weight:bold;">{_discounted_price:,}</span>'
+            _amt_html = f'{amt:,}'
+        elif price == 0:
+            _price_html = '무료'
+            _amt_html = '무료'
+        else:
+            _price_html = f'{price:,}'
+            _amt_html = f'{amt:,}'
 
         rows += f"""
         <tr>
-            <td style="text-align:left; padding-left:10px;">{r['품목']}</td>
+            <td style="text-align:center; padding:4px 6px; white-space:pre-line;">{_item_name.replace(chr(10), '<br>')}</td>
             <td style="text-align:center; color:#555; font-size:12px;">{spec}</td>
             <td style="text-align:center;">{qty}</td>
             <td style="text-align:center;">{days}</td>
-            <td style="text-align:right; padding-right:10px;">{price:,}</td>
-            <td style="text-align:right; padding-right:10px;">{amt:,}</td>
-            <td style="text-align:left; padding-left:5px; font-size:11px;">{note}</td>
+            <td style="text-align:right; padding-right:10px;">{_price_html}</td>
+            <td style="text-align:right; padding-right:10px;">{_amt_html}</td>
+            <td style="text-align:center; padding:4px 5px; font-size:11px;">{note}</td>
         </tr>
         """
     
-    # 부대비용 행 추가
+    # 부대비용 행 추가 (품목과 동일한 컬럼 구조로 표시)
     additional_rows = ""
     if additional_costs_df is not None and not additional_costs_df.empty:
         for _, r in additional_costs_df.iterrows():
             item = r.get('항목', '')
             cost = safe_int(r.get('금액', 0))
-            note = r.get('비고', '')
+            note = str(r.get('비고', ''))
+            _c_qty = safe_int(r.get('수량', 1))
+            _c_days = safe_int(r.get('일수', 1))
+            _c_unit = safe_int(r.get('단가', 0))
+            _spec_disp = ''
+            # 의뢰사제공 특수 표시 (비고에 '의뢰사제공|1인 N식|안내문구' 형식)
+            if '의뢰사제공' in note:
+                _parts = note.split('|')
+                _meal_info = _parts[1] if len(_parts) > 1 else '1인 1식'
+                _meal_note = _parts[2] if len(_parts) > 2 else '미제공시 1식당\n1만원 추가청구'
+                _spec_disp = '의뢰사제공'
+                _qty_disp = _meal_info
+                _days_disp = str(_c_days)
+                _unit_disp = '-'
+                _cost_disp = '-'
+                _note_disp = _meal_note.replace('\n', '<br>')
+            elif _c_unit == 0:
+                _qty_disp = str(_c_qty)
+                _days_disp = str(_c_days)
+                _unit_disp = '무료'
+                _cost_disp = '무료'
+                _note_disp = note
+            else:
+                _qty_disp = str(_c_qty)
+                _days_disp = str(_c_days)
+                _unit_disp = f'{_c_unit:,}'
+                _cost_disp = f'{cost:,}'
+                _note_disp = note
             additional_rows += f"""
         <tr style="background:#fef3c7;">
-            <td style="text-align:left; padding-left:10px;">[부대비용] {item}</td>
-            <td colspan="4" style="text-align:center; color:#c2410c; font-size:12px;">{note}</td>
-            <td style="text-align:right; padding-right:10px; font-weight:bold;">{cost:,}</td>
-            <td></td>
+            <td style="text-align:center; padding:4px 6px;">[부대] {item}</td>
+            <td style="text-align:center; color:#555; font-size:12px;">{_spec_disp}</td>
+            <td style="text-align:center;">{_qty_disp}</td>
+            <td style="text-align:center;">{_days_disp}</td>
+            <td style="text-align:right; padding-right:10px;">{_unit_disp}</td>
+            <td style="text-align:right; padding-right:10px; font-weight:bold;">{_cost_disp}</td>
+            <td style="text-align:center; padding:4px 5px; font-size:11px;">{note}</td>
         </tr>
         """
     
-    for _ in range(max(0, 10 - len(df))): rows += "<tr><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td><td></td></tr>"
+    # 빈 행 패딩 제거 — 실제 품목만 표시
     
     # 행 합계
     rows += f"""
@@ -228,15 +353,42 @@ def get_customer_quote_html(df, client_info, supplier_info, supply_amt, vat_yn, 
     if footer_img_base64:
         footer_img_tag = f'<div style="text-align:center; margin-top:20px;"><img src="data:image/png;base64,{footer_img_base64}" style="width:100%; max-width:800px;"></div>'
 
-    fmt_top = terms_top.replace('\n', '<br>')
-    fmt_side = terms_side.replace('\n', '<br>')
+    def _terms_to_html(text):
+        """약관 텍스트를 HTML로 변환. 이미 HTML 태그가 있으면 그대로, 순수 텍스트면 자동 스타일링"""
+        import re as _re
+        if '<span' in text or '<b>' in text or '<div' in text:
+            # 이미 HTML 포함 — 줄바꿈만 처리
+            return text.replace('\n', '<br>')
+        # 순수 텍스트 → 자동 스타일링
+        lines = text.split('\n')
+        result = []
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            # "1." "2." 등 번호로 시작하는 제목
+            if _re.match(r'^\d+\.', line):
+                parts = line.split('|')
+                title = parts[0].strip()
+                rest = ' | '.join(parts[1:]).strip() if len(parts) > 1 else ''
+                result.append(f'<span style="color:#000080; font-weight:bold;">{title}</span>')
+                if rest:
+                    result.append(f'{rest}')
+            elif line.startswith('※'):
+                result.append(f'<span style="font-size:11px; color:#666;">{line}</span>')
+            else:
+                result.append(line)
+        return '<br>'.join(result)
+
+    fmt_top = _terms_to_html(terms_top)
+    fmt_side = _terms_to_html(terms_side)
 
     return f"""
-    <html><head><script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script><script>function saveImage(){{const e=document.getElementById("print_area");html2canvas(e,{{scale:2}}).then(c=>{{var l=document.createElement('a');l.download='견적서_{client_info["name"]}.png';l.href=c.toDataURL("image/png");l.click();}});}}</script>
+    <html><head><script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script><script>function saveImage(){{const e=document.getElementById("print_area");html2canvas(e,{{scale:2,useCORS:true,allowTaint:true,scrollY:0,windowHeight:e.scrollHeight+100}}).then(c=>{{var l=document.createElement('a');l.download='견적서_{client_info["name"]}.png';l.href=c.toDataURL("image/png");l.click();}});}}</script>
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;700&display=swap');
     body{{font-family:'Noto Sans KR',sans-serif;background:#525659;padding:20px;display:flex;justify-content:center;}}
-    .paper{{width:210mm;min-height:297mm;background:white;padding:10mm;box-shadow:0 0 10px rgba(0,0,0,0.5);box-sizing:border-box;position:relative;}}
+    .paper{{width:210mm;background:white;padding:10mm;box-shadow:0 0 10px rgba(0,0,0,0.5);box-sizing:border-box;position:relative;overflow:visible;}}
     .title{{text-align:center;font-size:42px;font-weight:900;letter-spacing:10px;margin-bottom:30px;border-bottom:3px solid black;padding-bottom:15px;}}
     
     .header-box {{display:flex; border:2px solid black; margin-bottom:10px; height: 160px;}}
@@ -316,7 +468,8 @@ def get_customer_quote_html(df, client_info, supplier_info, supply_amt, vat_yn, 
         <div class="bottom-left">{fmt_side}</div>
         <div class="bottom-right">
             <table class="summary-table">
-                <tr><td width="30%" style="border:none; background:white;"></td><td width="35%">공급가액</td><td width="35%">{total:,}</td></tr>
+                <tr><td width="30%" style="border:none; background:white;"></td><td width="35%">공급가액</td><td width="35%">{total_with_additional:,}</td></tr>
+                {"" if discount == 0 else f'<tr><td style="border:none; background:white;"></td><td style="color:#c2410c;">할 인</td><td style="color:#c2410c;">-{discount:,}</td></tr>'}
                 <tr><td style="border:none; background:white;"></td><td>부 가 세</td><td>{vat:,}</td></tr>
                 <tr><td style="border:none; background:white;"></td><td style="background:#e5e7eb;">합 계</td><td style="background:#e5e7eb; color:#c00;">{grand_total:,}</td></tr>
             </table>

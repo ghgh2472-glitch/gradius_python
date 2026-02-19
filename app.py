@@ -7,6 +7,7 @@ import page_inquiry   # 1단계: 문의
 import page_estimate  # 2단계: 견적
 import page_contract  # 3단계: 계약
 import page_staff_new as page_staff     # 4단계: 인원배정 (고도화 버전)
+import data_management                   # 데이터 관리 도구
 import page_attendance # 5단계: 출석부
 import page_settlement  # 6단계: 정산
 import page_project_detail  # 프로젝트 상세확인
@@ -24,7 +25,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
 # ==============================================================================
 # 2. 스타일링 (전체 공통)
 # ==============================================================================
@@ -72,11 +72,16 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# 3. 데이터 로드 (캐싱 적용)
+# 3. 데이터 로드 (세션 기반 캐싱 — 메뉴 전환 시 즉시 응답)
 # ==============================================================================
-@st.cache_data(ttl=60) # 60초마다 만료 (자동 갱신 효과)
-def load_all_data():
-    return db.load_all_data()
+
+# ==============================================================================
+# 4. 사이드바 (메뉴 및 컨트롤)
+# ==============================================================================
+with st.sidebar:
+    st.title("🦅 Gradius ERP")
+    st.caption("Integrated Management System")
+    st.markdown("---")
 
 # ==============================================================================
 # 4. 사이드바 (메뉴 및 컨트롤)
@@ -99,7 +104,7 @@ with st.sidebar:
             "💰 정산 및 급여 관리",
             "🔍 프로젝트 상세확인",
             "📘 사용 가이드",
-            "🚌 기타 (준비중)"
+            "🛠️ 데이터 관리"
         ],
         index=0
     )
@@ -107,19 +112,29 @@ with st.sidebar:
     st.markdown("---")
     
     # 데이터 새로고침 버튼
-    if st.button("🔄 데이터 동기화", use_container_width=True, help="클릭 시 최신 데이터 즉시 반영"):
-        st.cache_data.clear() # 캐시 삭제
-        st.rerun() # 앱 재실행
+    if st.button("🔄 데이터 동기화", use_container_width=True, help="클릭 시 구글 시트에서 최신 데이터를 다시 불러옵니다"):
+        db.invalidate_data()
+        st.rerun()
     
-    # 메뉴 변경 시 자동 데이터 갱신
-    if 'last_menu' not in st.session_state:
-        st.session_state['last_menu'] = menu
-    elif st.session_state['last_menu'] != menu:
-        st.session_state['last_menu'] = menu
-        st.cache_data.clear()
-        
-    st.caption("💡 페이지 전환 시 자동 동기화됩니다")
-        
+    # 마지막 동기화 시각 표시
+    _loaded_at = st.session_state.get('_data_loaded_at', '')
+    if _loaded_at:
+        st.caption(f"📡 마지막 동기화: {_loaded_at}")
+    st.caption("💡 저장 시 자동 동기화 | 버튼으로 수동 동기화")
+
+    # 시트 서식 정리 버튼
+    if st.button("🎨 시트 서식 정리", use_container_width=True, help="구글 시트의 서식(헤더, 열 너비, 색상 등)을 보기 좋게 정리합니다"):
+        with st.spinner("시트 서식 적용 중..."):
+            try:
+                from format_sheets import format_all_sheets
+                success = format_all_sheets()
+                if success:
+                    st.success("✅ 시트 서식이 정리되었습니다!")
+                else:
+                    st.error("❌ 서식 적용 실패")
+            except Exception as e:
+                st.error(f"❌ 서식 적용 오류: {e}")
+
     st.markdown("""
     <div style='position: fixed; bottom: 20px; font-size: 12px; color: #94a3b8;'>
         v 1.0.0 | Powered by Streamlit
@@ -129,9 +144,9 @@ with st.sidebar:
 # ==============================================================================
 # 5. 페이지 라우팅
 # ==============================================================================
-# 데이터 로드
+# 데이터 로드 (세션 캐시 활용 — 최초 1회만 구글시트 호출)
 try:
-    data = load_all_data()
+    data = db.get_data()
 except Exception as e:
     st.error(f"데이터 로드 중 오류 발생: {e}")
     st.stop()
@@ -163,6 +178,9 @@ elif "상세확인" in menu:
 
 elif "가이드" in menu:
     page_guide.show(data)
+
+elif "데이터 관리" in menu:
+    data_management.show_data_management()
 
 else:
     st.info("🚧 추가 기능은 현재 개발 중입니다. (Coming Soon)")
