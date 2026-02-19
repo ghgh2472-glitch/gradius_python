@@ -358,11 +358,17 @@ def load_all_data_with_progress(progress_bar=None):
 def get_dispatch():
     """
     세션에 캐시된 배정/정산 데이터를 반환합니다.
+    최초 호출 시 배정기록 시트 컨텍스트도 함께 워밍업하여 이후 작업 속도를 높임.
     """
     if '_dispatch_data' not in st.session_state or st.session_state['_dispatch_data'] is None:
         with st.spinner("📡 배정 데이터를 불러오는 중..."):
             st.session_state['_dispatch_data'] = load_dispatch_data()
-            print("[SESSION] Dispatch data loaded")
+            # 배정기록 시트 컨텍스트 프리-워밍 (이후 배정/취소 작업에서 API 절약)
+            try:
+                _get_assign_sheet_ctx()
+                print("[SESSION] Dispatch data loaded + assign ctx warmed")
+            except Exception as e:
+                print(f"[SESSION] Dispatch data loaded (assign ctx warm failed: {e})")
     return st.session_state['_dispatch_data']
 
 
@@ -384,6 +390,35 @@ def invalidate_data():
     except Exception:
         pass
     print("[SESSION] Data cache invalidated")
+
+
+def invalidate_dispatch_only():
+    """배정/정산 관련 캐시만 선택적으로 초기화 (메인 7시트는 보존).
+    인력 배정/취소/확정 등 배정기록만 변경하는 작업 후 사용.
+    메인 데이터(문의, STAFF, 고객 등)는 그대로 유지 → rerun 시 재로드 불필요.
+    """
+    # 배정/정산 세션 캐시만 제거
+    st.session_state.pop('_dispatch_data', None)
+    # st.cache_data 기반 함수 캐시 초기화
+    try:
+        load_dispatch_data.clear()
+    except Exception:
+        pass
+    try:
+        load_dispatch_sheet.clear()
+    except Exception:
+        pass
+    try:
+        get_assignments_by_inquiry.clear()
+    except Exception:
+        pass
+    try:
+        get_candidates_by_inquiry.clear()
+    except Exception:
+        pass
+    # 배정 시트 컨텍스트 캐시도 무효화
+    _invalidate_assign_ctx()
+    print("[SESSION] Dispatch-only cache invalidated (main data preserved)")
 
 
 # ---------------------------------------------------------
@@ -833,6 +868,76 @@ ASSIGN_STATUS_CONFIRMED = '확정'
 ASSIGN_STATUS_CANCELLED = '취소'
 
 
+# ── 배정기록 시트 컨텍스트 캐싱 (API 호출 최소화) ──
+_assign_ctx_cache = {}  # {wks, headers, id_col, col_map, ts}
+
+def _get_assign_sheet_ctx(force=False):
+    """배정기록 시트의 워크시트 객체 + 헤더 + ID열을 캐싱하여 반환.
+    60초 TTL. 매 함수 호출마다 open_by_key/worksheet/row_values/col_values를 반복 안 하도록.
+    Returns: (wks, headers_clean, id_col_clean, col_map)
+      col_map: {논리명: 1-based 컬럼 인덱스}
+    """
+    import time as _time
+    cache = _assign_ctx_cache
+    now = _time.time()
+    if not force and cache.get('ts') and (now - cache['ts']) < 60:
+        return cache['wks'], cache['headers'], cache['id_col'], cache['col_map']
+
+    client = get_connection()
+    if not client:
+        raise ConnectionError("Google Sheets 연결 실패")
+    sh = client.open_by_key(SHEET_ID)
+    wks = sh.worksheet("배정기록")
+    headers = [str(h).strip() for h in wks.row_values(1)]
+
+    # 근무일자 컬럼 자동 추가 (16번째 — 최초 1회)
+    if '근무일자' not in headers:
+        try:
+            next_col = len(headers) + 1
+            wks.update_cell(1, next_col, '근무일자')
+            headers.append('근무일자')
+            print(f"[Migration] '근무일자' 헤더 추가 (Col {next_col})")
+        except Exception as e:
+            print(f"[Migration] 근무일자 헤더 추가 실패: {e}")
+
+    id_col = [str(v).strip() for v in wks.col_values(1)]
+
+    # 자주 쓰는 컬럼 위치 사전 계산
+    def _fc(*names):
+        for n in names:
+            if n in headers:
+                return headers.index(n) + 1
+        return None
+
+    col_map = {
+        '직무': _fc('직무', '역할'),
+        '지급상태': _fc('지급상태', '상태'),
+        '지급단가': _fc('지급단가', '단가'),
+        '근무일수': _fc('근무일수', '일수'),
+        '총지급액': _fc('총지급액'),
+        '근무일자': _fc('근무일자'),
+        '구분': _fc('구분'),
+        '인력명': _fc('인력명', '이름'),
+    }
+
+    cache.update(wks=wks, headers=headers, id_col=id_col, col_map=col_map, ts=now)
+    return wks, headers, id_col, col_map
+
+
+def _find_row(id_col, assign_id):
+    """id_col 리스트에서 assign_id의 1-based 행 번호를 반환. 없으면 None."""
+    aid = str(assign_id).strip()
+    for i, v in enumerate(id_col):
+        if v == aid:
+            return i + 1
+    return None
+
+
+def _invalidate_assign_ctx():
+    """캐시된 컨텍스트 무효화 (행 추가/삭제 후 호출)"""
+    _assign_ctx_cache.clear()
+
+
 def save_candidates_batch(inquiry_id: str, event_name: str, candidates: list):
     """후보 인력 일괄 등록 (배정기록 시트에 '후보' 상태로 저장)
     
@@ -844,7 +949,7 @@ def save_candidates_batch(inquiry_id: str, event_name: str, candidates: list):
     if not client:
         return 0, len(candidates)
     try:
-        invalidate_data()
+        invalidate_dispatch_only()
         sh = client.open_by_key(SHEET_ID)
         wks = sh.worksheet("배정기록")
         
@@ -890,11 +995,13 @@ def save_candidates_batch(inquiry_id: str, event_name: str, candidates: list):
                 c.get('총지급액', ''),              # 총지급액
                 ASSIGN_STATUS_CANDIDATE,            # 지급상태 = '후보'
                 now_str,                            # 배정일시
+                '',                                 # 근무일자 (후보 단계에서는 빈칸)
             ])
         
         # 한 번의 API 호출로 배치 저장
         if batch_rows:
-            cell_range = f'A{next_row}:O{next_row + len(batch_rows) - 1}'
+            cell_range = f'A{next_row}:P{next_row + len(batch_rows) - 1}'
+            _invalidate_assign_ctx()
             wks.update(cell_range, batch_rows, value_input_option='RAW')
             print(f"[Batch] Saved {len(batch_rows)} candidates for {inquiry_id}")
             return len(batch_rows), 0
@@ -920,14 +1027,23 @@ def get_candidates_by_inquiry(inquiry_id: str, include_assigned=True):
         else:
             return pd.DataFrame()
         
-        # 후보 + 배정중만 필터
-        status_col = '지급상태' if '지급상태' in df.columns else '상태' if '상태' in df.columns else None
+        # 후보 + 배정중만 필터 (정규화된 컬럼명 고려)
+        status_col = None
+        for sc in ['지급상태', '상태']:
+            if sc in df.columns:
+                status_col = sc
+                break
+        
         if status_col:
             valid_statuses = [ASSIGN_STATUS_CANDIDATE]
             if include_assigned:
                 valid_statuses.append(ASSIGN_STATUS_ASSIGNED)
             df = df[df[status_col].astype(str).str.strip().isin(valid_statuses)]
+        else:
+            print(f"[get_candidates] Warning: no status column found. Columns: {list(df.columns)}")
+            return pd.DataFrame()
         
+        print(f"[get_candidates] Found {len(df)} candidates for {inquiry_id} (status_col={status_col})")
         return df.reset_index(drop=True)
     except Exception as e:
         print(f"get_candidates_by_inquiry error: {e}")
@@ -935,74 +1051,29 @@ def get_candidates_by_inquiry(inquiry_id: str, include_assigned=True):
 
 
 def assign_candidate_to_role(assign_id: str, role: str, pay_rate=None, work_days=None):
-    """후보를 특정 직군에 배정 (후보 → 배정중)
-    
-    assign_id: 배정ID
-    role: 배정할 직군명
-    pay_rate: 지급단가 (변경할 경우)
-    work_days: 근무일수 (변경할 경우)
+    """후보를 특정 직군에 배정 (후보 → 배정중) — 캐싱 컨텍스트 사용
     """
-    client = get_connection()
-    if not client:
-        return False
     try:
-        sh = client.open_by_key(SHEET_ID)
-        wks = sh.worksheet("배정기록")
-        headers = wks.row_values(1)
-        headers_clean = [str(h).strip() for h in headers]
-        
-        # 배정ID로 행 찾기
-        id_col = wks.col_values(1)
-        target_row = None
-        for i, v in enumerate(id_col):
-            if str(v).strip() == str(assign_id).strip():
-                target_row = i + 1
-                break
+        wks, headers, id_col, cm = _get_assign_sheet_ctx()
+        target_row = _find_row(id_col, assign_id)
         if not target_row:
             return False
         
-        # 업데이트할 셀 준비
         updates = []
-        
-        # 직무 컬럼 업데이트
-        if '직무' in headers_clean:
-            col_idx = headers_clean.index('직무') + 1
-            updates.append(gspread.Cell(target_row, col_idx, role))
-        
-        # 상태 → 배정중
-        for sc_name in ['지급상태', '상태']:
-            if sc_name in headers_clean:
-                col_idx = headers_clean.index(sc_name) + 1
-                updates.append(gspread.Cell(target_row, col_idx, ASSIGN_STATUS_ASSIGNED))
-                break
-        
-        # 단가 변경
-        if pay_rate is not None:
-            for rate_name in ['지급단가', '단가']:
-                if rate_name in headers_clean:
-                    col_idx = headers_clean.index(rate_name) + 1
-                    updates.append(gspread.Cell(target_row, col_idx, pay_rate))
-                    break
-        
-        # 일수 변경
-        if work_days is not None:
-            for days_name in ['근무일수', '일수']:
-                if days_name in headers_clean:
-                    col_idx = headers_clean.index(days_name) + 1
-                    updates.append(gspread.Cell(target_row, col_idx, work_days))
-                    break
-            # 총지급액 재계산
-            if pay_rate and work_days:
-                total = int(pay_rate) * int(work_days)
-                for total_name in ['총지급액']:
-                    if total_name in headers_clean:
-                        col_idx = headers_clean.index(total_name) + 1
-                        updates.append(gspread.Cell(target_row, col_idx, total))
-                        break
+        if cm.get('직무'):
+            updates.append(gspread.Cell(target_row, cm['직무'], role))
+        if cm.get('지급상태'):
+            updates.append(gspread.Cell(target_row, cm['지급상태'], ASSIGN_STATUS_ASSIGNED))
+        if pay_rate is not None and cm.get('지급단가'):
+            updates.append(gspread.Cell(target_row, cm['지급단가'], pay_rate))
+        if work_days is not None and cm.get('근무일수'):
+            updates.append(gspread.Cell(target_row, cm['근무일수'], work_days))
+        if pay_rate and work_days and cm.get('총지급액'):
+            updates.append(gspread.Cell(target_row, cm['총지급액'], int(pay_rate) * int(work_days)))
         
         if updates:
             wks.update_cells(updates, value_input_option='RAW')
-            invalidate_data()
+            invalidate_dispatch_only()
             print(f"[Assign] {assign_id} → role={role}, status=배정중")
             return True
         return False
@@ -1012,48 +1083,28 @@ def assign_candidate_to_role(assign_id: str, role: str, pay_rate=None, work_days
 
 
 def batch_confirm_assignments(assign_ids: list, long_term=False):
-    """배정 일괄 확정 (배정중 → 확정)
-    
-    assign_ids: 확정할 배정ID 리스트
-    long_term: True면 장기건 (일정 추후입력 가능 표시)
-    Returns: (성공수, 실패수)
+    """배정 일괄 확정 (배정중 → 확정) — 캐싱 컨텍스트 사용
     """
-    client = get_connection()
-    if not client:
-        return 0, len(assign_ids)
     try:
-        sh = client.open_by_key(SHEET_ID)
-        wks = sh.worksheet("배정기록")
-        headers = wks.row_values(1)
-        headers_clean = [str(h).strip() for h in headers]
-        
-        # 상태 컬럼 위치
-        status_col = None
-        for sc_name in ['지급상태', '상태']:
-            if sc_name in headers_clean:
-                status_col = headers_clean.index(sc_name) + 1
-                break
-        if not status_col:
+        wks, headers, id_col, cm = _get_assign_sheet_ctx()
+        sc = cm.get('지급상태')
+        if not sc:
             return 0, len(assign_ids)
-        
-        # 배정ID → 행번호 매핑
-        id_col = wks.col_values(1)
         
         updates = []
         success = 0
         for aid in assign_ids:
-            for i, v in enumerate(id_col):
-                if str(v).strip() == str(aid).strip():
-                    target_row = i + 1
-                    new_status = '확정(일정미입력)' if long_term else ASSIGN_STATUS_CONFIRMED
-                    updates.append(gspread.Cell(target_row, status_col, new_status))
-                    success += 1
-                    break
+            target_row = _find_row(id_col, aid)
+            if target_row:
+                new_status = '확정(일정미입력)' if long_term else ASSIGN_STATUS_CONFIRMED
+                updates.append(gspread.Cell(target_row, sc, new_status))
+                success += 1
         
         if updates:
             wks.update_cells(updates, value_input_option='RAW')
-            invalidate_data()
-            print(f"[Confirm] {success}/{len(assign_ids)} assignments confirmed (long_term={long_term})")
+            _invalidate_assign_ctx()
+            invalidate_dispatch_only()
+            print(f"[Confirm] {success}/{len(assign_ids)} confirmed (long_term={long_term})")
         
         return success, len(assign_ids) - success
     except Exception as e:
@@ -1062,69 +1113,38 @@ def batch_confirm_assignments(assign_ids: list, long_term=False):
 
 
 def batch_update_schedule(schedule_records: list):
-    """장기건 일정 일괄 입력/수정 (확정된 배정의 근무일수/단가/일정 업데이트)
+    """장기건 일정 일괄 입력/수정 — 캐싱 컨텍스트 사용
     
     schedule_records: list of dict with keys:
         배정ID, 근무일수, 지급단가, 총지급액, 근무시작일, 근무종료일
     Returns: (성공수, 실패수)
     """
-    client = get_connection()
-    if not client:
-        return 0, len(schedule_records)
     try:
-        sh = client.open_by_key(SHEET_ID)
-        wks = sh.worksheet("배정기록")
-        headers = wks.row_values(1)
-        headers_clean = [str(h).strip() for h in headers]
-        
-        id_col = wks.col_values(1)
+        wks, headers, id_col, cm = _get_assign_sheet_ctx()
         
         updates = []
         success = 0
         
-        # 상태 컬럼
-        status_col = None
-        for sc_name in ['지급상태', '상태']:
-            if sc_name in headers_clean:
-                status_col = headers_clean.index(sc_name) + 1
-                break
-        
         for rec in schedule_records:
-            aid = str(rec.get('배정ID', '')).strip()
-            target_row = None
-            for i, v in enumerate(id_col):
-                if str(v).strip() == aid:
-                    target_row = i + 1
-                    break
+            target_row = _find_row(id_col, rec.get('배정ID', ''))
             if not target_row:
                 continue
             
-            # 근무일수
-            if rec.get('근무일수') is not None:
-                for name in ['근무일수', '일수']:
-                    if name in headers_clean:
-                        updates.append(gspread.Cell(target_row, headers_clean.index(name) + 1, rec['근무일수']))
-                        break
-            # 지급단가
-            if rec.get('지급단가') is not None:
-                for name in ['지급단가', '단가']:
-                    if name in headers_clean:
-                        updates.append(gspread.Cell(target_row, headers_clean.index(name) + 1, rec['지급단가']))
-                        break
-            # 총지급액
-            if rec.get('총지급액') is not None:
-                if '총지급액' in headers_clean:
-                    updates.append(gspread.Cell(target_row, headers_clean.index('총지급액') + 1, rec['총지급액']))
-            
-            # 상태를 '확정'으로 변경 (일정입력 완료)
-            if status_col:
-                updates.append(gspread.Cell(target_row, status_col, ASSIGN_STATUS_CONFIRMED))
+            if rec.get('근무일수') is not None and cm.get('근무일수'):
+                updates.append(gspread.Cell(target_row, cm['근무일수'], rec['근무일수']))
+            if rec.get('지급단가') is not None and cm.get('지급단가'):
+                updates.append(gspread.Cell(target_row, cm['지급단가'], rec['지급단가']))
+            if rec.get('총지급액') is not None and cm.get('총지급액'):
+                updates.append(gspread.Cell(target_row, cm['총지급액'], rec['총지급액']))
+            if cm.get('지급상태'):
+                updates.append(gspread.Cell(target_row, cm['지급상태'], ASSIGN_STATUS_CONFIRMED))
             
             success += 1
         
         if updates:
             wks.update_cells(updates, value_input_option='RAW')
-            invalidate_data()
+            _invalidate_assign_ctx()
+            invalidate_dispatch_only()
             print(f"[Schedule] {success}/{len(schedule_records)} schedules updated")
         
         return success, len(schedule_records) - success
@@ -1135,7 +1155,163 @@ def batch_update_schedule(schedule_records: list):
 
 def remove_candidate(assign_id: str):
     """후보 인력 삭제 (후보 상태인 경우만 — 실제 행 삭제 대신 '취소' 처리)"""
-    return update_assignment_status(assign_id, ASSIGN_STATUS_CANCELLED)
+    try:
+        wks, headers, id_col, cm = _get_assign_sheet_ctx()
+        target_row = _find_row(id_col, assign_id)
+        if not target_row:
+            return False
+        sc = cm.get('지급상태')
+        if not sc:
+            return False
+        wks.update_cell(target_row, sc, ASSIGN_STATUS_CANCELLED)
+        _invalidate_assign_ctx()
+        invalidate_dispatch_only()
+        print(f"[Remove] {assign_id} → 취소")
+        return True
+    except Exception as e:
+        print(f"remove_candidate error: {e}")
+        return False
+
+
+def update_assignment(assign_id: str, **kwargs):
+    """배정기록의 임의 필드를 수정 (인라인 편집용) — 캐싱 컨텍스트 사용
+    
+    사용 예: update_assignment('A001', 직무='안내', 지급단가=150000, 근무일수=3)
+    
+    지원 키: 직무, 지급단가, 근무일수, 구분, 인력명, 근무일자
+    총지급액은 단가×일수로 자동 재계산됨
+    """
+    try:
+        wks, headers, id_col, cm = _get_assign_sheet_ctx()
+        target_row = _find_row(id_col, assign_id)
+        if not target_row:
+            return False
+
+        updates = []
+        new_pay = None
+        new_days = None
+        for key, val in kwargs.items():
+            ci = cm.get(key)
+            if ci:
+                updates.append(gspread.Cell(target_row, ci, val))
+            else:
+                # col_map에 없으면 헤더에서 직접 검색
+                if key in headers:
+                    updates.append(gspread.Cell(target_row, headers.index(key) + 1, val))
+            if key in ('지급단가', '단가'):
+                new_pay = int(val)
+            if key in ('근무일수', '일수'):
+                new_days = int(val)
+
+        # 총지급액 재계산
+        if (new_pay is not None or new_days is not None) and cm.get('총지급액'):
+            if new_pay is None and cm.get('지급단가'):
+                cur = wks.cell(target_row, cm['지급단가']).value
+                new_pay = int(cur or 0)
+            if new_days is None and cm.get('근무일수'):
+                cur = wks.cell(target_row, cm['근무일수']).value
+                new_days = int(cur or 0)
+            if new_pay and new_days:
+                updates.append(gspread.Cell(target_row, cm['총지급액'], new_pay * new_days))
+
+        if updates:
+            wks.update_cells(updates, value_input_option='RAW')
+            invalidate_dispatch_only()
+            print(f"[Update] {assign_id} → {kwargs}")
+            return True
+        return False
+    except Exception as e:
+        print(f"update_assignment error: {e}")
+        return False
+
+
+def batch_assign_to_role(assignments: list):
+    """후보 일괄 직군 배정 (N건 → 1 API call) — 캐싱 컨텍스트 사용
+    
+    assignments: list of dict, each:
+        assign_id, role, pay_rate, work_days, work_dates(optional: 'YYYY-MM-DD,...')
+    Returns: (성공수, 실패수)
+    """
+    try:
+        wks, headers, id_col, cm = _get_assign_sheet_ctx()
+
+        role_ci = cm.get('직무')
+        status_ci = cm.get('지급상태')
+        pay_ci = cm.get('지급단가')
+        days_ci = cm.get('근무일수')
+        total_ci = cm.get('총지급액')
+        dates_ci = cm.get('근무일자')  # 16번째 컬럼
+
+        updates = []
+        success = 0
+
+        for a in assignments:
+            target_row = _find_row(id_col, a.get('assign_id', ''))
+            if not target_row:
+                continue
+
+            if role_ci:
+                updates.append(gspread.Cell(target_row, role_ci, a.get('role', '')))
+            if status_ci:
+                updates.append(gspread.Cell(target_row, status_ci, ASSIGN_STATUS_ASSIGNED))
+            pay = a.get('pay_rate')
+            day = a.get('work_days')
+            if pay is not None and pay_ci:
+                updates.append(gspread.Cell(target_row, pay_ci, pay))
+            if day is not None and days_ci:
+                updates.append(gspread.Cell(target_row, days_ci, day))
+            if pay and day and total_ci:
+                updates.append(gspread.Cell(target_row, total_ci, int(pay) * int(day)))
+            # 근무일자 저장 (쉼표구분 ISO)
+            work_dates_str = a.get('work_dates', '')
+            if work_dates_str and dates_ci:
+                updates.append(gspread.Cell(target_row, dates_ci, work_dates_str))
+            success += 1
+
+        if updates:
+            wks.update_cells(updates, value_input_option='RAW')
+            _invalidate_assign_ctx()
+            invalidate_dispatch_only()
+            print(f"[BatchAssign] {success}/{len(assignments)} assigned in 1 API call")
+
+        return success, len(assignments) - success
+    except Exception as e:
+        print(f"batch_assign_to_role error: {e}")
+        return 0, len(assignments)
+
+
+def unassign_from_role(assign_id: str):
+    """배정 취소: 배정중 → 후보 (직무/일자 초기화) — 캐싱 컨텍스트 사용"""
+    try:
+        wks, headers, id_col, cm = _get_assign_sheet_ctx()
+        target_row = _find_row(id_col, assign_id)
+        if not target_row:
+            return False
+
+        updates = []
+        if cm.get('지급상태'):
+            updates.append(gspread.Cell(target_row, cm['지급상태'], ASSIGN_STATUS_CANDIDATE))
+        if cm.get('직무'):
+            updates.append(gspread.Cell(target_row, cm['직무'], ''))
+        if cm.get('근무일수'):
+            updates.append(gspread.Cell(target_row, cm['근무일수'], 0))
+        if cm.get('지급단가'):
+            updates.append(gspread.Cell(target_row, cm['지급단가'], 0))
+        if cm.get('총지급액'):
+            updates.append(gspread.Cell(target_row, cm['총지급액'], 0))
+        if cm.get('근무일자'):
+            updates.append(gspread.Cell(target_row, cm['근무일자'], ''))
+
+        if updates:
+            wks.update_cells(updates, value_input_option='RAW')
+            _invalidate_assign_ctx()
+            invalidate_dispatch_only()
+            print(f"[Unassign] {assign_id} → 후보로 되돌림")
+            return True
+        return False
+    except Exception as e:
+        print(f"unassign_from_role error: {e}")
+        return False
 
 
 def save_assignment_record(assignment):
@@ -1154,7 +1330,7 @@ def save_assignment_record(assignment):
 
     try:
         # 배정기록 캐시 무효화 (저장 후 목록이 업데이트되도록)
-        invalidate_data()
+        invalidate_dispatch_only()
         
         sh = client.open_by_key(SHEET_ID)
         wks = sh.worksheet("배정기록")
@@ -1202,54 +1378,45 @@ def save_assignment_record(assignment):
             except Exception as e:
                 print(f"Failed to add rows before write: {e}")
 
-        # 배정기록 시트 21컬럼 구조 (팀 배정 지원)
-        # Col A: 배정ID
-        # Col B: 문의ID
-        # Col C: 행사명
-        # Col D: 인력명
-        # Col E: 구분 (본사/외부/팀장/팀원)
-        # Col F: 직무
-        # Col G: 연락처
-        # Col H: 주민등록번호
-        # Col I: 은행명
-        # Col J: 계좌번호
-        # Col K: 지급단가
-        # Col L: 근무일수
-        # Col M: 총지급액
-        # Col N: 지급상태
-        # Col O: 배정일시
-        # Col P: 투입시작일
-        # Col Q: 투입종료일
-        # Col R: 메모
-        # Col S: 근무일자
-        # Col T: 팀코드
-        # Col U: 결제대상 (Y/N)
+        # 배정기록 시트 16컬럼 구조 (근무일자 컬럼 추가)
+        # Col 1: 배정ID
+        # Col 2: 문의ID
+        # Col 3: 행사명
+        # Col 4: 인력명
+        # Col 5: 구분 (본사/외부)
+        # Col 6: 직무
+        # Col 7: 연락처
+        # Col 8: 주민등록번호
+        # Col 9: 은행명
+        # Col 10: 계좌번호
+        # Col 11: 지급단가
+        # Col 12: 근무일수
+        # Col 13: 총지급액
+        # Col 14: 지급상태
+        # Col 15: 배정일시
+        # Col 16: 근무일자 (쉼표구분 ISO: '2026-02-18,2026-02-20')
         
         row_values = [
-            assign_id,  # Col A: 배정ID
-            merged_assignment.get('문의ID', ''),  # Col B: 문의ID
-            merged_assignment.get('행사명', ''),  # Col C: 행사명
-            merged_assignment.get('인력명', ''),  # Col D: 인력명
-            merged_assignment.get('구분', '외부'),  # Col E: 구분 (본사/외부/팀장/팀원)
-            merged_assignment.get('직무', ''),  # Col F: 직무
-            merged_assignment.get('연락처', ''),  # Col G: 연락처
-            merged_assignment.get('주민등록번호', ''),  # Col H: 주민등록번호
-            merged_assignment.get('은행명', ''),  # Col I: 은행명
-            merged_assignment.get('계좌번호', ''),  # Col J: 계좌번호
-            merged_assignment.get('지급단가', ''),  # Col K: 지급단가
-            merged_assignment.get('근무일수', ''),  # Col L: 근무일수
-            merged_assignment.get('총지급액', ''),  # Col M: 총지급액
-            merged_assignment.get('지급상태', '배정중'),  # Col N: 지급상태
-            merged_assignment.get('배정일시', datetime.now().strftime('%Y-%m-%d %H:%M:%S')),  # Col O: 배정일시
-            merged_assignment.get('투입시작일', ''),  # Col P: 투입시작일
-            merged_assignment.get('투입종료일', ''),  # Col Q: 투입종료일
-            merged_assignment.get('메모', ''),  # Col R: 메모
-            merged_assignment.get('근무일자', ''),  # Col S: 근무일자
-            merged_assignment.get('팀코드', ''),  # Col T: 팀코드
-            merged_assignment.get('결제대상', 'Y'),  # Col U: 결제대상 (기본값 Y - 개별 배정)
+            assign_id,  # Col 1: 배정ID
+            merged_assignment.get('문의ID', ''),  # Col 2: 문의ID
+            merged_assignment.get('행사명', ''),  # Col 3: 행사명
+            merged_assignment.get('인력명', ''),  # Col 4: 인력명
+            merged_assignment.get('구분', '외부'),  # Col 5: 구분 (본사/외부)
+            merged_assignment.get('직무', ''),  # Col 6: 직무
+            merged_assignment.get('연락처', ''),  # Col 7: 연락처
+            merged_assignment.get('주민등록번호', ''),  # Col 8: 주민등록번호
+            merged_assignment.get('은행명', ''),  # Col 9: 은행명
+            merged_assignment.get('계좌번호', ''),  # Col 10: 계좌번호
+            merged_assignment.get('지급단가', ''),  # Col 11: 지급단가
+            merged_assignment.get('근무일수', ''),  # Col 12: 근무일수
+            merged_assignment.get('총지급액', ''),  # Col 13: 총지급액
+            merged_assignment.get('지급상태', '배정중'),  # Col 14: 지급상태
+            merged_assignment.get('배정일시', datetime.now().strftime('%Y-%m-%d %H:%M:%S')),  # Col 15: 배정일시
+            merged_assignment.get('근무일자', ''),  # Col 16: 근무일자
         ]
 
         # A{next_row} 위치에 한 줄로 업데이트
+        _invalidate_assign_ctx()
         try:
             wks.update(f'A{next_row}', [row_values], value_input_option='RAW')
             name = merged_assignment.get('이름', '')
@@ -1270,73 +1437,24 @@ def save_assignment_record(assignment):
 
 
 def update_assignment_status(assign_id, new_status):
-    """배정기록의 상태를 변경 (예: '취소')"""
-    client = get_connection()
-    if not client:
-        print("❌ Google Sheets 클라이언트 연결 실패")
-        return False
+    """배정기록의 상태를 변경 — 캐싱 컨텍스트 사용"""
     try:
-        # Note: 호출한 쪽에서 cache_data.clear()를 호출하므로 여기서는 호출하지 않음
-        
-        sh = client.open_by_key(SHEET_ID)
-        wks = sh.worksheet("배정기록")
-        print(f"📝 배정기록 시트 연결 성공")
-
-        headers = wks.row_values(1)
-        headers_clean = [str(h).strip() for h in headers]
-        print(f"📋 헤더: {headers_clean}")
-
-        # 배정ID는 첫 열에 없을 수도 있으므로 전체 컬럼 검색
-        id_col = wks.col_values(1)
-        id_col_clean = [str(x).strip() for x in id_col]
-        print(f"🔍 첫 번째 컬럼 내용 (첫 5개): {id_col_clean[:5]}")
-
-        target_row = None
-        for i, v in enumerate(id_col_clean):
-            if v == str(assign_id).strip():
-                target_row = i + 1
-                break
-
-        # 만약 첫 열에 없다면 '배정ID' 컬럼 위치를 찾아 검색
-        if target_row is None and '배정ID' in headers_clean:
-            col_idx = headers_clean.index('배정ID') + 1
-            col_vals = wks.col_values(col_idx)
-            print(f"🔍 배정ID 컬럼에서 검색 중... (컬럼 {col_idx})")
-            for i, v in enumerate(col_vals):
-                if str(v).strip() == str(assign_id).strip():
-                    target_row = i + 1
-                    break
-
-        if target_row is None:
-            print(f"❌ 배정ID '{assign_id}' not found in any column")
+        wks, headers, id_col, cm = _get_assign_sheet_ctx()
+        target_row = _find_row(id_col, assign_id)
+        if not target_row:
+            print(f"❌ 배정ID '{assign_id}' not found")
             return False
-        
-        print(f"✅ 배정 찾음: {assign_id} at row {target_row}")
-
-        # 상태 컬럼 위치 찾기 (지급상태 또는 상태)
-        status_col = None
-        if '지급상태' in headers_clean:
-            status_col = headers_clean.index('지급상태') + 1
-            print(f"✅ 지급상태 컬럼 위치: {status_col}")
-        elif '상태' in headers_clean:
-            status_col = headers_clean.index('상태') + 1
-            print(f"✅ 상태 컬럼 위치: {status_col}")
-        else:
-            print(f"❌ '지급상태' 또는 '상태' 컬럼을 찾을 수 없음. 사용 가능한 컬럼: {headers_clean}")
-
-        if status_col:
-            print(f"💾 {target_row}행 {status_col}열에 '{new_status}' 업데이트 중...")
-            wks.update_cell(target_row, status_col, new_status)
-            print(f"✅ 배정 {assign_id} 상태 변경 완료: {new_status}")
-            return True
-        else:
-            print(f"❌ 상태 컬럼이 없어서 업데이트 불가")
+        sc = cm.get('지급상태')
+        if not sc:
+            print(f"❌ 지급상태 컬럼 없음")
             return False
-
+        wks.update_cell(target_row, sc, new_status)
+        _invalidate_assign_ctx()
+        invalidate_dispatch_only()
+        print(f"✅ {assign_id} → {new_status}")
+        return True
     except Exception as e:
-        print(f"❌ update_assignment_status 오류: {str(e)}")
-        import traceback
-        traceback.print_exc()
+        print(f"❌ update_assignment_status 오류: {e}")
         return False
 
 
@@ -1362,16 +1480,126 @@ def get_assignments_by_inquiry(inquiry_id):
         
         # 상태 필터 (취소/후보 제외 — 후보는 get_candidates_by_inquiry에서 조회)
         exclude_statuses = ['취소', ASSIGN_STATUS_CANDIDATE]
-        if '지급상태' in df.columns:
-            df = df[~df['지급상태'].astype(str).str.strip().isin(exclude_statuses)]
-        elif '상태' in df.columns:
-            df = df[~df['상태'].astype(str).str.strip().isin(exclude_statuses)]
+        status_col = None
+        for sc in ['지급상태', '상태']:
+            if sc in df.columns:
+                status_col = sc
+                break
+        if status_col:
+            df = df[~df[status_col].astype(str).str.strip().isin(exclude_statuses)]
         
         return df.reset_index(drop=True)
     
     except Exception as e:
         print(f"get_assignments_by_inquiry error: {e}")
         return pd.DataFrame()
+
+
+def get_confirmed_assignments(inquiry_id):
+    """확정 인력만 조회 (출석부/평가/지급용) — '확정' 또는 '확정(일정미입력)' 상태만"""
+    try:
+        df = load_dispatch_sheet()
+        if df is None or df.empty:
+            return pd.DataFrame()
+        df = df.copy()
+        if '문의ID' in df.columns:
+            df = df[df['문의ID'].astype(str).str.strip() == str(inquiry_id).strip()]
+        else:
+            return pd.DataFrame()
+        status_col = None
+        for sc in ['지급상태', '상태']:
+            if sc in df.columns:
+                status_col = sc
+                break
+        if status_col:
+            df = df[df[status_col].astype(str).str.strip().str.startswith(ASSIGN_STATUS_CONFIRMED)]
+        return df.reset_index(drop=True)
+    except Exception as e:
+        print(f"get_confirmed_assignments error: {e}")
+        return pd.DataFrame()
+
+
+def batch_save_attendance(records: list):
+    """출석 기록 일괄 저장 (1 API call) — 동일 날짜 기존 기록은 덮어쓰기
+    
+    records: list of dict {배정ID, 문의ID, 인력명, 출석날짜, 출근시간, 퇴근시간, 
+             근무시간, 일급여, 출석상태, 사유, 비고, 기록일시}
+    Returns: (성공수, 실패수)
+    """
+    client = get_connection()
+    if not client:
+        return 0, len(records)
+    try:
+        sh = client.open_by_key(SHEET_ID)
+        wks = sh.worksheet("출석부")
+        
+        # 기존 데이터 로드 — 중복 체크용
+        all_vals = wks.get_all_values()
+        headers = [str(h).strip() for h in all_vals[0]] if all_vals else []
+        
+        # 배정ID + 출석날짜로 기존 행 찾기
+        bid_ci = headers.index('배정ID') + 1 if '배정ID' in headers else 2
+        date_ci = headers.index('출석날짜') + 1 if '출석날짜' in headers else 5
+        
+        existing_map = {}  # (배정ID, 출석날짜) → row_number
+        for i, row in enumerate(all_vals[1:], 2):
+            if len(row) >= max(bid_ci, date_ci):
+                key = (str(row[bid_ci - 1]).strip(), str(row[date_ci - 1]).strip())
+                existing_map[key] = i
+        
+        next_row = len(all_vals) + 1
+        new_rows = []
+        update_cells = []
+        success = 0
+        
+        for rec in records:
+            bid = str(rec.get('배정ID', '')).strip()
+            att_date = str(rec.get('출석날짜', '')).strip()
+            key = (bid, att_date)
+            
+            record_id = f"R-{datetime.now().strftime('%y%m%d')}-{str(uuid4())[:6]}"
+            row_values = [
+                record_id,
+                rec.get('배정ID', ''),
+                rec.get('문의ID', ''),
+                rec.get('인력명', ''),
+                rec.get('출석날짜', ''),
+                rec.get('출근시간', ''),
+                rec.get('퇴근시간', ''),
+                rec.get('근무시간', 0),
+                rec.get('일급여', 0),
+                rec.get('출석상태', ''),
+                rec.get('사유', ''),
+                rec.get('비고', ''),
+                rec.get('기록일시', datetime.now().strftime('%Y-%m-%d %H:%M:%S')),
+            ]
+            
+            if key in existing_map:
+                # 기존 행 업데이트
+                target = existing_map[key]
+                for ci, val in enumerate(row_values):
+                    update_cells.append(gspread.Cell(target, ci + 1, val))
+            else:
+                new_rows.append(row_values)
+            success += 1
+        
+        # 기존 행 업데이트
+        if update_cells:
+            wks.update_cells(update_cells, value_input_option='RAW')
+        
+        # 신규 행 추가
+        if new_rows:
+            if next_row + len(new_rows) > wks.row_count:
+                wks.add_rows(max(100, len(new_rows)))
+            cell_range = f'A{next_row}:M{next_row + len(new_rows) - 1}'
+            wks.update(cell_range, new_rows, value_input_option='RAW')
+        
+        print(f"[Attendance] Saved {success} records ({len(update_cells)//13} updated, {len(new_rows)} new)")
+        return success, len(records) - success
+    except Exception as e:
+        print(f"batch_save_attendance error: {e}")
+        import traceback; traceback.print_exc()
+        return 0, len(records)
 
 
 @st.cache_data(ttl=120)  # 배정기록 120초 캐시 (TTL 증가)
@@ -1397,22 +1625,38 @@ def load_dispatch_sheet():
                     # lowercase safe check
                     k = c.replace(' ', '')
                     # exact/contains matches for expected fields
+                    # 구체적(longer) 매칭을 먼저 체크하여 짧은 패턴에 잘못 매칭되지 않도록
                     if any(x in k for x in ['배정id', '배정아이디', '배정ID'.lower()]):
                         return '배정ID'
                     if any(x in k for x in ['문의id', '문의아이디', '문의ID'.lower()]):
                         return '문의ID'
+                    # 인력명은 원본 유지 (이름/성명보다 구체적)
+                    if k == '인력명':
+                        return '인력명'
                     if any(x in k for x in ['이름', '성명', 'name']):
                         return '이름'
-                    if any(x in k for x in ['역할', '직무', 'role']):
+                    # 직무는 원본 유지 (역할과 구분)
+                    if k == '직무':
+                        return '직무'
+                    if k == '역할' or k == 'role':
                         return '역할'
-                    if any(x in k for x in ['일수', '근무일수']):
-                        return '일수'
+                    # 지급단가는 원본 유지
+                    if k == '지급단가':
+                        return '지급단가'
                     if any(x in k for x in ['단가', '단가(원)', 'rate']):
                         return '단가'
+                    # 근무일수는 원본 유지
+                    if k == '근무일수':
+                        return '근무일수'
+                    if any(x in k for x in ['일수']):
+                        return '일수'
                     if any(x in k for x in ['총지급액', '총지급', '지급액']):
                         return '총지급액'
                     if any(x in k for x in ['배정일시', '배정일', 'date']):
                         return '배정일시'
+                    # 지급상태는 원본 유지
+                    if k == '지급상태':
+                        return '지급상태'
                     if any(x in k for x in ['상태', 'status']):
                         return '상태'
                     if any(x in k for x in ['연락처', '전화', 'phone']):
