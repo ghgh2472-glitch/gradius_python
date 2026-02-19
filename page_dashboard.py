@@ -69,6 +69,11 @@ def apply_styles():
                         border: 1px dashed #D1D5DB; min-height: 70px; }
         .pipeline-exit-count { font-size: 22px; font-weight: 700; margin: 2px 0; }
         .pipeline-exit-label { font-size: 11px; font-weight: 600; }
+        /* 캘린더 컴포넌트 탭 내부 렌더링 수정 */
+        iframe[title="streamlit_calendar.calendar"] {
+            min-height: 700px !important;
+            height: 700px !important;
+        }
     </style>
     """, unsafe_allow_html=True)
 
@@ -82,8 +87,8 @@ def show(data):
     
     df_inq = data['inq']
     
-    # 배정 데이터와 정산 데이터 로드 (캐시됨)
-    dispatch_data = db.load_dispatch_data()
+    # 배정 데이터와 정산 데이터 로드 (세션 캐시)
+    dispatch_data = db.get_dispatch()
     df_dispatch = dispatch_data.get('dispatch', pd.DataFrame())
     df_settlement = dispatch_data.get('settlement', pd.DataFrame())
     
@@ -528,7 +533,7 @@ def show(data):
                                         try:
                                             db.update_status(sel_id, new_status)
                                             st.success(f"'{sel_id}' → {sc.get_status_icon(new_status)} {new_status} 변경 완료!")
-                                            st.cache_data.clear()
+                                            db.invalidate_data()
                                             st.rerun()
                                         except Exception as e:
                                             st.error(f"변경 실패: {e}")
@@ -641,9 +646,9 @@ def show(data):
     
     # [Tab 2] 긴급 현장
     with tab2:
-        st.markdown('<div class="section-title">🚨 D-7 이내 투입 현장 (상세정보)</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-title">🚨 D-14 이내 투입 현장 (상세정보)</div>', unsafe_allow_html=True)
         
-        upcoming_detail = ud.get_upcoming_dispatch_info(df_dispatch, df_inq, days=7)
+        upcoming_detail = ud.get_upcoming_dispatch_info(df_dispatch, df_inq, days=14)
         if not upcoming_detail.empty:
             for _, row in upcoming_detail.iterrows():
                 d_day = int(row['D-Day'])
@@ -651,13 +656,17 @@ def show(data):
                     badge = "🔴 당일"
                     badge_color = "#DC2626"
                     priority = "가장 긴급"
-                elif d_day <= 2:
+                elif d_day <= 3:
                     badge = f"🟠 D-{d_day}"
                     badge_color = "#F97316"
                     priority = "긴급"
-                else:
+                elif d_day <= 7:
                     badge = f"🟡 D-{d_day}"
                     badge_color = "#EAB308"
+                    priority = "주의"
+                else:
+                    badge = f"🔵 D-{d_day}"
+                    badge_color = "#3B82F6"
                     priority = "확인필요"
                 
                 location = row['장소'] if pd.notna(row['장소']) and str(row['장소']).strip() else "장소정보없음"
@@ -714,7 +723,7 @@ def show(data):
                 </div>
                 """, unsafe_allow_html=True)
         else:
-            st.success("✅ 급한 현장 없음 (앞으로 7일)")
+            st.success("✅ 급한 현장 없음 (앞으로 2주)")
         
         st.markdown("---")
         
@@ -820,8 +829,16 @@ def show(data):
                     
                     if need_count > 0:
                         fill_pct = min(100, int(staff_count / need_count * 100))
-                        fill_color = "#10B981" if fill_pct >= 100 else "#F59E0B" if fill_pct >= 50 else "#EF4444"
-                        fill_text = f"{staff_count}/{need_count}명 ({fill_pct}%)"
+                        if fill_pct >= 100:
+                            fill_color = "#10B981"
+                            fill_label = "배정완료"
+                        elif staff_count == 0:
+                            fill_color = "#EF4444"
+                            fill_label = "배정필요"
+                        else:
+                            fill_color = "#F59E0B"
+                            fill_label = "배정중"
+                        fill_text = f"{staff_count}/{need_count}명 {fill_label}"
                     else:
                         fill_pct = 100
                         fill_color = "#6B7280"
@@ -1007,7 +1024,18 @@ def show(data):
     
     # [Tab 6] 캘린더
     with tab6:
-        st.markdown('<div class="section-title">📆 전체 행사 일정표</div>', unsafe_allow_html=True)
+        # 불필요한 여백 제거 (radio/caption 위 여백 + iframe 주변 여백)
+        st.markdown("""
+        <style>
+            /* 캘린더 탭 내부 여백 최소화 */
+            [data-testid="stVerticalBlock"] > [data-testid="stVerticalBlockBorderWrapper"]:has(iframe[title="streamlit_calendar.calendar"]) {
+                margin-top: -0.5rem;
+                padding-top: 0;
+            }
+            /* radio 버튼 아래 여백 */
+            [data-testid="stRadio"] { margin-bottom: -0.5rem; }
+        </style>
+        """, unsafe_allow_html=True)
         
         # 캘린더 필터 옵션
         cal_filter = st.radio("표시 범위", ["체결 건만", "전체"], horizontal=True, key="cal_range_filter")
@@ -1023,19 +1051,13 @@ def show(data):
             st.caption("📌 전체 문의 건이 달력에 표시됩니다.")
             cal_df = df_inq
 
-        events = ud.get_calendar_events(cal_df)
+        events = ud.get_calendar_events(cal_df, df_dispatch)
         
-        # 이벤트 데이터 디버그 정보
+        # 이벤트 건수 표시
         if events:
-            st.caption(f"📅 {len(events)}개 일정이 캘린더에 표시됩니다.")
+            st.caption(f"📅 {len(events)}개 일정")
         else:
-            # 날짜 컬럼 존재 여부 확인
-            _date_col = ud.find_col(cal_df, ["행사시작일", "시작일", "행사일시", "일시", "투입일"])
-            if _date_col and _date_col in cal_df.columns:
-                _has_date = cal_df[_date_col].astype(str).str.strip().replace(['', 'nan', 'None'], pd.NA).dropna()
-                st.caption(f"📅 날짜 데이터: {len(_has_date)}건 (컬럼: {_date_col})")
-            else:
-                st.caption("📅 날짜 컬럼을 찾을 수 없습니다.")
+            st.caption("📅 표시할 일정이 없습니다.")
         
         cal_options = {
             "headerToolbar": {
@@ -1046,25 +1068,34 @@ def show(data):
             "initialView": "dayGridMonth",
             "navLinks": True,
             "selectable": True,
-            "height": 650,
+            "contentHeight": 600,
             "locale": "ko",
             "dayMaxEvents": 3,
             "eventDisplay": "block",
         }
         
-        # 범례 표시
+        # 범례 (한 줄 압축)
         st.markdown("""
-        <div style="display:flex;gap:15px;margin-bottom:8px;font-size:12px;">
-            <span>🟦 <span style="color:#2563EB;">체결/배정/진행</span></span>
-            <span>🟩 <span style="color:#059669;">완료/정산</span></span>
-            <span>🟧 <span style="color:#D97706;">접수/미정</span></span>
-            <span>🟥 <span style="color:#DC2626;">취소/미체결</span></span>
+        <div style="display:flex;gap:12px;margin:0 0 4px 0;font-size:11px;color:#6B7280;">
+            <span>🟦체결/배정</span> <span>🟩완료/정산</span> <span>🟧접수/미정</span> <span>🟥취소</span>
         </div>
         """, unsafe_allow_html=True)
         
         try:
             calendar_css = """
-                .fc { min-height: 600px; }
+                .fc {
+                    min-height: 600px !important;
+                    height: auto !important;
+                }
+                .fc .fc-scrollgrid {
+                    min-height: 500px !important;
+                }
+                .fc .fc-scrollgrid-section-body > td {
+                    height: 500px !important;
+                }
+                .fc .fc-daygrid-body {
+                    min-height: 480px !important;
+                }
                 .fc .fc-toolbar { font-size: 14px; }
                 .fc .fc-button { font-size: 13px; }
                 .fc-h-event { cursor: pointer; }

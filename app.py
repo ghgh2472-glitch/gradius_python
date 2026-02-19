@@ -82,14 +82,6 @@ with st.sidebar:
     st.title("🦅 Gradius ERP")
     st.caption("Integrated Management System")
     st.markdown("---")
-
-# ==============================================================================
-# 4. 사이드바 (메뉴 및 컨트롤)
-# ==============================================================================
-with st.sidebar:
-    st.title("🦅 Gradius ERP")
-    st.caption("Integrated Management System")
-    st.markdown("---")
     
     # 메뉴 선택
     menu = st.radio(

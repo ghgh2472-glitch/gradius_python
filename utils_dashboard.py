@@ -29,7 +29,7 @@ def safe_int(val):
     try:
         if pd.isna(val) or val == "": return 0
         if isinstance(val, str):
-            clean_val = val.replace(',', '').replace('원', '').strip()
+            clean_val = val.replace(',', '').replace('원', '').replace('명', '').replace('건', '').replace('개', '').strip()
             if not clean_val: return 0
             return int(float(clean_val))
         return int(float(val))
@@ -259,7 +259,7 @@ def get_pending_list(df_inq):
 # ---------------------------------------------------------
 # 5. 캘린더 데이터
 # ---------------------------------------------------------
-def get_calendar_events(df_inq):
+def get_calendar_events(df_inq, df_dispatch=None):
     if df_inq.empty: return []
     
     # 시작일/종료일 별도 컬럼 우선 탐색
@@ -268,6 +268,21 @@ def get_calendar_events(df_inq):
     col_client = find_col(df_inq, ["업체명"]) or "업체명"
     col_event = find_col(df_inq, ["행사명"]) or "행사명"
     col_status = find_col(df_inq, ["상태", "체결"])
+    col_time = find_col(df_inq, ["행사시간", "시간"])
+    col_headcount = find_col(df_inq, ["필요인력", "요청인원", "인원"])
+    
+    # 배정기록에서 행사별 인원수 미리 집계
+    dispatch_counts = {}
+    dispatch_names = {}
+    if df_dispatch is not None and not df_dispatch.empty:
+        _d_evt_col = find_col(df_dispatch, ["행사명"])
+        _d_name_col = find_col(df_dispatch, ["인력명", "직원명", "인원"])
+        if _d_evt_col:
+            for evt, grp in df_dispatch.groupby(df_dispatch[_d_evt_col].astype(str).str.strip()):
+                dispatch_counts[evt] = len(grp)
+                if _d_name_col and _d_name_col in grp.columns:
+                    names = grp[_d_name_col].astype(str).str.strip().tolist()
+                    dispatch_names[evt] = ", ".join([n for n in names if n and n not in ('nan', '')])
     
     if not col_start: return []
     if col_start not in df_inq.columns: return []
@@ -336,17 +351,60 @@ def get_calendar_events(df_inq):
             event_name = row.get(col_event, '') if col_event in df_inq.columns else ''
             if pd.isna(event_name): event_name = ''
             
-            title = f"{client_name} ({event_name})" if client_name else str(event_name)
-            if not title.strip() or title.strip() == '()': title = f"행사 {start_dt}"
+            # 간략 정보 구성 (인원, 시간)
+            info_parts = []
+            evt_key = str(event_name).strip()
+            need = safe_int(row.get(col_headcount, 0)) if col_headcount and col_headcount in df_inq.columns else 0
+            assigned = dispatch_counts.get(evt_key, 0)
+            if need > 0:
+                if assigned >= need:
+                    assign_label = f"{assigned}/{need}명 배정완료"
+                elif assigned == 0:
+                    assign_label = f"0/{need}명 배정필요"
+                else:
+                    assign_label = f"{assigned}/{need}명 배정중"
+                info_parts.append(assign_label)
+            elif assigned > 0:
+                info_parts.append(f"{assigned}명")
             
-            events.append({
+            time_str = str(row.get(col_time, '')).strip() if col_time and col_time in df_inq.columns else ''
+            if time_str and time_str not in ('nan', 'None', ''):
+                info_parts.append(time_str)
+            
+            # 배정 인력 이름 (3명까지)
+            names_str = dispatch_names.get(evt_key, '')
+            if names_str:
+                name_list = names_str.split(", ")
+                if len(name_list) > 3:
+                    names_str = ", ".join(name_list[:3]) + f" 외 {len(name_list)-3}명"
+            
+            # 타이틀 구성
+            base_title = f"{client_name} ({event_name})" if client_name else str(event_name)
+            if not base_title.strip() or base_title.strip() == '()': base_title = f"행사 {start_dt}"
+            
+            info_suffix = " | ".join(info_parts)
+            title = f"{base_title} [{info_suffix}]" if info_suffix else base_title
+            
+            # description (이벤트 클릭 시 표시)
+            desc_parts = []
+            if names_str:
+                desc_parts.append(f"👤 {names_str}")
+            if time_str and time_str not in ('nan', 'None', ''):
+                desc_parts.append(f"⏰ {time_str}")
+            description = " / ".join(desc_parts) if desc_parts else ""
+            
+            evt_obj = {
                 "title": title,
                 "start": start_dt, 
                 "end": end_dt_exclusive,
                 "backgroundColor": color, 
                 "borderColor": color, 
                 "allDay": True
-            })
+            }
+            if description:
+                evt_obj["extendedProps"] = {"description": description}
+            
+            events.append(evt_obj)
     except Exception as e:
         print(f"[Calendar] Error: {e}")
         pass
