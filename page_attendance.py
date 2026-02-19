@@ -192,49 +192,98 @@ def _build_staff_work_dates(confirmed_df, event_dates):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  스케줄표 이미지 (Pillow — 고급 디자인)
+#  스케줄표 이미지 (Pillow — 고급 디자인 v2)
 # ──────────────────────────────────────────────────────────────────────────────
+
+def _find_korean_font():
+    """시스템에서 한글 폰트를 검색하여 (bold_path, regular_path) 반환"""
+    import glob
+    search_dirs = [
+        '/usr/share/fonts/truetype/nanum/',
+        '/usr/share/fonts/opentype/nanum/',
+        '/usr/share/fonts/',
+        '/usr/local/share/fonts/',
+    ]
+    bold_candidates = ['NanumGothicBold.ttf', 'NanumSquareRoundB.ttf', 'NanumBarunGothicBold.ttf']
+    regular_candidates = ['NanumGothic.ttf', 'NanumSquareRoundR.ttf', 'NanumBarunGothic.ttf']
+
+    bold_path = regular_path = None
+    for d in search_dirs:
+        for bc in bold_candidates:
+            found = glob.glob(f'{d}{bc}') or glob.glob(f'{d}**/{bc}', recursive=True)
+            if found:
+                bold_path = found[0]
+                break
+        if bold_path:
+            break
+    for d in search_dirs:
+        for rc in regular_candidates:
+            found = glob.glob(f'{d}{rc}') or glob.glob(f'{d}**/{rc}', recursive=True)
+            if found:
+                regular_path = found[0]
+                break
+        if regular_path:
+            break
+    return bold_path, regular_path or bold_path
+
+
+def _hex_to_rgb(hex_color):
+    """'#RRGGBB' → (R, G, B)"""
+    h = hex_color.lstrip('#')
+    return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
+
+
+def _text_center(draw, bbox, text, font, fill):
+    """bbox=(x1,y1,x2,y2) 영역 안에서 텍스트를 가로·세로 중앙 정렬"""
+    x1, y1, x2, y2 = bbox
+    tb = draw.textbbox((0, 0), text, font=font)
+    tw, th = tb[2] - tb[0], tb[3] - tb[1]
+    tx = x1 + (x2 - x1 - tw) // 2
+    ty = y1 + (y2 - y1 - th) // 2
+    draw.text((tx, ty), text, fill=fill, font=font)
+
 
 def _generate_schedule_image(event_name, date_list, staff_schedule,
                               work_time_str='', company=''):
-    """스케줄표를 고품질 PNG 이미지로 생성
+    """스케줄표를 고품질 PNG 이미지로 생성 (2x 해상도)
 
     staff_schedule: list[dict{name, role, dates:[bool,...]}]
     Returns: PIL Image
     """
     from PIL import Image, ImageDraw, ImageFont
-    import glob
+
+    # ── 2배 렌더링 (Retina 품질) ──
+    SCALE = 2
 
     # ── 폰트 ──
-    bold_paths = glob.glob('/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf')
-    regular_paths = glob.glob('/usr/share/fonts/truetype/nanum/NanumGothic.ttf')
-    bold_path = bold_paths[0] if bold_paths else (regular_paths[0] if regular_paths else None)
-    regular_path = regular_paths[0] if regular_paths else bold_path
-
+    bold_path, regular_path = _find_korean_font()
     if bold_path:
-        font_title    = ImageFont.truetype(bold_path, 26)
-        font_subtitle = ImageFont.truetype(regular_path or bold_path, 15)
-        font_header   = ImageFont.truetype(bold_path, 14)
-        font_cell     = ImageFont.truetype(regular_path or bold_path, 13)
-        font_small    = ImageFont.truetype(regular_path or bold_path, 11)
-        font_legend   = ImageFont.truetype(regular_path or bold_path, 11)
+        font_title    = ImageFont.truetype(bold_path, 28 * SCALE)
+        font_subtitle = ImageFont.truetype(regular_path or bold_path, 16 * SCALE)
+        font_header   = ImageFont.truetype(bold_path, 15 * SCALE)
+        font_cell     = ImageFont.truetype(regular_path or bold_path, 14 * SCALE)
+        font_small    = ImageFont.truetype(regular_path or bold_path, 12 * SCALE)
+        font_legend   = ImageFont.truetype(regular_path or bold_path, 12 * SCALE)
+        font_no       = ImageFont.truetype(regular_path or bold_path, 12 * SCALE)
     else:
-        font_title = font_subtitle = font_header = font_cell = font_small = font_legend = ImageFont.load_default()
+        font_title = font_subtitle = font_header = font_cell = font_small = font_legend = font_no = ImageFont.load_default()
 
-    # ── 레이아웃 ──
-    row_h       = 40
-    col_w       = 68
-    name_w      = 130
-    role_w      = 80
-    header_h    = 56
-    title_area  = 80
-    padding     = 28
-    footer_h    = 50
-    legend_h    = 36
+    # ── 레이아웃 (기본 단위, SCALE 곱해서 사용) ──
+    S = SCALE
+    row_h       = 44 * S
+    col_w       = 72 * S
+    no_w        = 40 * S   # 번호 열
+    name_w      = 140 * S
+    role_w      = 90 * S
+    header_h    = 60 * S
+    title_area  = 100 * S
+    padding     = 32 * S
+    footer_h    = 56 * S
+    legend_h    = 44 * S
 
     num_days  = len(date_list)
     num_staff = len(staff_schedule)
-    table_w   = name_w + role_w + col_w * num_days
+    table_w   = no_w + name_w + role_w + col_w * num_days
 
     img_w = padding * 2 + table_w
     img_h = padding * 2 + title_area + header_h + row_h * num_staff + row_h + legend_h + footer_h
@@ -242,94 +291,133 @@ def _generate_schedule_image(event_name, date_list, staff_schedule,
     img  = Image.new('RGB', (img_w, img_h), '#F8FAFC')
     draw = ImageDraw.Draw(img)
 
-    # ── 타이틀 영역 (그라데이션) ──
+    # ── 타이틀 영역 (그라데이션 배경) ──
     for y in range(title_area):
         ratio = y / title_area
-        r = int(15 + (30 - 15) * ratio)
-        g = int(23 + (58 - 23) * ratio)
-        b = int(42 + (82 - 42) * ratio)
+        r = int(15 + (26 - 15) * ratio)
+        g = int(23 + (50 - 23) * ratio)
+        b = int(42 + (74 - 42) * ratio)
         draw.line([(0, y), (img_w, y)], fill=(r, g, b))
 
-    draw.text((padding, 16), f"📋  {event_name}", fill='#FFFFFF', font=font_title)
+    # 타이틀 텍스트
+    draw.text((padding, 18 * S), f"  {event_name}", fill='#FFFFFF', font=font_title)
     parts = []
     if company:
         parts.append(f"업체: {company}")
     if work_time_str:
         parts.append(f"근무시간: {work_time_str}")
-    parts.append(f"인원: {num_staff}명")
+    parts.append(f"총 인원: {num_staff}명")
     parts.append(f"기간: {num_days}일")
-    draw.text((padding, 50), "  |  ".join(parts), fill='#94A3B8', font=font_subtitle)
+    draw.text((padding + 4 * S, 58 * S), "  |  ".join(parts), fill='#94A3B8', font=font_subtitle)
 
-    # ── 테이블 ──
+    # ── 테이블 시작 ──
     tx = padding
     ty = title_area
 
-    # 헤더
+    # 헤더 배경
     draw.rectangle([tx, ty, tx + table_w, ty + header_h], fill='#0F766E')
-    draw.text((tx + 12, ty + 20), "이름", fill='white', font=font_header)
-    draw.text((tx + name_w + 10, ty + 20), "직무", fill='white', font=font_header)
 
+    # 헤더: No
+    _text_center(draw, (tx, ty, tx + no_w, ty + header_h), "No", font_header, 'white')
+    # 헤더: 이름
+    _text_center(draw, (tx + no_w, ty, tx + no_w + name_w, ty + header_h), "이름", font_header, 'white')
+    # 헤더: 직무
+    _text_center(draw, (tx + no_w + name_w, ty, tx + no_w + name_w + role_w, ty + header_h), "직무", font_header, 'white')
+
+    # 헤더: 날짜
     for di, d in enumerate(date_list):
-        x = tx + name_w + role_w + col_w * di
+        x = tx + no_w + name_w + role_w + col_w * di
         is_weekend = d.weekday() >= 5
         if is_weekend:
             draw.rectangle([x, ty, x + col_w, ty + header_h], fill='#115E59')
-        draw.text((x + 14, ty + 14), f"{d.month}/{d.day}", fill='white', font=font_header)
+        # 날짜 (위)
+        date_str = f"{d.month}/{d.day}"
+        _text_center(draw, (x, ty + 4 * S, x + col_w, ty + header_h // 2 + 4 * S), date_str, font_header, 'white')
+        # 요일 (아래)
+        wd_str = '월화수목금토일'[d.weekday()]
         wd_color = '#FBBF24' if is_weekend else '#A7F3D0'
-        draw.text((x + 24, ty + 34), '월화수목금토일'[d.weekday()], fill=wd_color, font=font_small)
+        _text_center(draw, (x, ty + header_h // 2 - 2 * S, x + col_w, ty + header_h), wd_str, font_small, wd_color)
+
+    # 헤더/고정열 세로 구분선
+    for sep_x in [tx + no_w, tx + no_w + name_w, tx + no_w + name_w + role_w]:
+        draw.line([(sep_x, ty), (sep_x, ty + header_h)], fill='#0D9488', width=S)
 
     # ── 데이터 행 ──
     daily_counts = [0] * num_days
     for ri, staff in enumerate(staff_schedule):
         y = ty + header_h + row_h * ri
-        bg = '#FFFFFF' if ri % 2 == 0 else '#F1F5F9'
+        bg = '#FFFFFF' if ri % 2 == 0 else '#F0F9FF'
         draw.rectangle([tx, y, tx + table_w, y + row_h], fill=bg)
-        draw.line([(tx, y + row_h), (tx + table_w, y + row_h)], fill='#E2E8F0')
-        draw.text((tx + 12, y + 12), staff['name'], fill='#1E293B', font=font_cell)
-        draw.text((tx + name_w + 10, y + 12), staff.get('role', ''), fill='#64748B', font=font_small)
+        # 행 하단 구분선
+        draw.line([(tx, y + row_h - 1), (tx + table_w, y + row_h - 1)], fill='#E2E8F0', width=S)
+
+        # 번호
+        _text_center(draw, (tx, y, tx + no_w, y + row_h), str(ri + 1), font_no, '#94A3B8')
+        # 이름
+        _text_center(draw, (tx + no_w, y, tx + no_w + name_w, y + row_h), staff['name'], font_cell, '#1E293B')
+        # 직무
+        _text_center(draw, (tx + no_w + name_w, y, tx + no_w + name_w + role_w, y + row_h),
+                      staff.get('role', ''), font_small, '#475569')
+
+        # 고정열 세로 구분선
+        for sep_x in [tx + no_w, tx + no_w + name_w, tx + no_w + name_w + role_w]:
+            draw.line([(sep_x, y), (sep_x, y + row_h)], fill='#E2E8F0', width=S)
 
         for di, checked in enumerate(staff['dates']):
-            x = tx + name_w + role_w + col_w * di
+            x = tx + no_w + name_w + role_w + col_w * di
             is_weekend = date_list[di].weekday() >= 5
             if is_weekend:
-                overlay = '#FEF9C3' if ri % 2 == 0 else '#FEF3C7'
+                overlay = '#FFFBEB' if ri % 2 == 0 else '#FEF9C3'
                 draw.rectangle([x, y, x + col_w, y + row_h], fill=overlay)
-                draw.line([(x, y + row_h), (x + col_w, y + row_h)], fill='#E2E8F0')
+                draw.line([(x, y + row_h - 1), (x + col_w, y + row_h - 1)], fill='#E2E8F0', width=S)
             if checked:
-                bx, by = x + 16, y + 8
-                draw.rounded_rectangle([bx, by, bx + 36, by + 24], radius=6, fill='#10B981')
-                draw.text((bx + 9, by + 4), "✓", fill='white', font=font_header)
+                # 체크 배지 (중앙 정렬)
+                bw, bh = 40 * S, 26 * S
+                bx = x + (col_w - bw) // 2
+                by = y + (row_h - bh) // 2
+                draw.rounded_rectangle([bx, by, bx + bw, by + bh], radius=7 * S, fill='#10B981')
+                _text_center(draw, (bx, by, bx + bw, by + bh), "O", font_header, 'white')
                 daily_counts[di] += 1
             else:
-                draw.text((x + 28, y + 12), "—", fill='#CBD5E1', font=font_cell)
+                _text_center(draw, (x, y, x + col_w, y + row_h), "—", font_cell, '#D1D5DB')
 
     # ── 합계 행 ──
     sy = ty + header_h + row_h * num_staff
     draw.rectangle([tx, sy, tx + table_w, sy + row_h], fill='#ECFDF5')
-    draw.line([(tx, sy), (tx + table_w, sy)], fill='#0F766E', width=2)
-    draw.text((tx + 12, sy + 12), "일자별 합계", fill='#0F766E', font=font_header)
+    draw.line([(tx, sy), (tx + table_w, sy)], fill='#0F766E', width=2 * S)
+    _text_center(draw, (tx, sy, tx + no_w + name_w + role_w, sy + row_h),
+                  "일자별 합계", font_header, '#0F766E')
     for di, cnt in enumerate(daily_counts):
-        x = tx + name_w + role_w + col_w * di
-        draw.text((x + 16, sy + 12), f"{cnt}명", fill='#0F766E', font=font_header)
+        x = tx + no_w + name_w + role_w + col_w * di
+        _text_center(draw, (x, sy, x + col_w, sy + row_h), f"{cnt}명", font_header, '#0F766E')
 
     # ── 범례 ──
-    ly = sy + row_h + 8
-    draw.text((tx + 4, ly + 8), "범례:", fill='#64748B', font=font_legend)
-    draw.rounded_rectangle([tx + 50, ly + 4, tx + 72, ly + 24], radius=4, fill='#10B981')
-    draw.text((tx + 56, ly + 6), "✓", fill='white', font=font_small)
-    draw.text((tx + 78, ly + 8), "근무", fill='#64748B', font=font_legend)
-    draw.text((tx + 120, ly + 8), "—  비근무", fill='#94A3B8', font=font_legend)
-    draw.rectangle([tx + 200, ly + 4, tx + 222, ly + 24], fill='#FEF3C7', outline='#E5E7EB')
-    draw.text((tx + 228, ly + 8), "주말/공휴일", fill='#92400E', font=font_legend)
+    ly = sy + row_h + 10 * S
+    lx = tx + 8 * S
+    draw.text((lx, ly + 8 * S), "범례 :", fill='#64748B', font=font_legend)
+    lx2 = lx + 80 * S
+    draw.rounded_rectangle([lx2, ly + 4 * S, lx2 + 26 * S, ly + 26 * S], radius=5 * S, fill='#10B981')
+    _text_center(draw, (lx2, ly + 4 * S, lx2 + 26 * S, ly + 26 * S), "O", font_small, 'white')
+    draw.text((lx2 + 32 * S, ly + 8 * S), "근무", fill='#64748B', font=font_legend)
+    lx3 = lx2 + 90 * S
+    draw.text((lx3, ly + 8 * S), "—  비근무", fill='#94A3B8', font=font_legend)
+    lx4 = lx3 + 120 * S
+    draw.rectangle([lx4, ly + 4 * S, lx4 + 26 * S, ly + 26 * S], fill='#FEF3C7', outline='#E5E7EB')
+    draw.text((lx4 + 32 * S, ly + 8 * S), "주말/공휴일", fill='#92400E', font=font_legend)
 
-    # 외곽
-    draw.rectangle([tx, ty, tx + table_w, sy + row_h], outline='#94A3B8')
+    # ── 외곽 테두리 ──
+    draw.rectangle([tx, ty, tx + table_w, sy + row_h], outline='#94A3B8', width=S)
 
-    # 푸터
-    fy = img_h - footer_h + 10
+    # ── 푸터 ──
+    fy = img_h - footer_h + 12 * S
     draw.text((padding, fy),
-              f"(주)가디어스 Gradius ERP | 출력: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+              f"(주)가디어스 Gradius ERP  |  출력: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
               fill='#94A3B8', font=font_legend)
+
+    # ── 최종 리사이즈 (2x → 1x, 안티앨리어싱) ──
+    final_w = img_w // SCALE
+    final_h = img_h // SCALE
+    img = img.resize((final_w, final_h), Image.LANCZOS)
 
     return img
 
@@ -579,7 +667,7 @@ def _tab_schedule(data):
             pil_img = _generate_schedule_image(
                 event_name, event_dates, img_data, work_time_str, company)
             buf = io.BytesIO()
-            pil_img.save(buf, format='PNG', dpi=(150, 150))
+            pil_img.save(buf, format='PNG', dpi=(300, 300))
             buf.seek(0)
         st.image(pil_img, caption=f"{event_name} 스케줄표", use_container_width=True)
         st.download_button(
