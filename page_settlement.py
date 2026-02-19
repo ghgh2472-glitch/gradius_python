@@ -934,20 +934,22 @@ def show_settlement_detail(data):
             team_code_col = '팀코드' if '팀코드' in assignment_df.columns else None
             pay_target_col = '결제대상' if '결제대상' in assignment_df.columns else None
 
-            team_info = {}  # {팀코드: {'members': [...], 'leader': ..., 'sum_amount': int}}
+            team_info = {}  # {팀코드: {'members': [...], 'leader': ..., 'sum_amount': int, ...}}
             if team_code_col and pay_target_col:
                 for _, _tr in assignment_df.iterrows():
                     _tc = str(_tr.get(team_code_col, '')).strip()
                     if not _tc:
                         continue
                     if _tc not in team_info:
-                        team_info[_tc] = {'members': [], 'leader': None, 'sum_amount': 0}
+                        team_info[_tc] = {'members': [], 'leader': None, 'sum_amount': 0, 'per_rate': 0, 'per_days': 0}
                     _t_name = str(_tr.get(name_col, '')) if name_col else ''
                     _t_rate = int(float(_tr.get(rate_col, 0) or 0)) if rate_col else 0
                     _t_days = int(float(_tr.get(days_col, 1) or 1)) if days_col else 1
                     _is_pay = str(_tr.get(pay_target_col, 'Y')).strip().upper() == 'Y'
                     team_info[_tc]['members'].append(_t_name)
                     team_info[_tc]['sum_amount'] += _t_rate * _t_days
+                    team_info[_tc]['per_rate'] = _t_rate
+                    team_info[_tc]['per_days'] = _t_days
                     if _is_pay:
                         team_info[_tc]['leader'] = _t_name
 
@@ -975,7 +977,12 @@ def show_settlement_detail(data):
                     ti = team_info[_tc]
                     display_basic = ti['sum_amount']
                     member_names = [m for m in ti['members'] if m != a_name]
-                    team_note = f"[팀{len(ti['members'])}명] {', '.join(member_names)}"
+                    member_count = len(member_names)
+                    per_rate = ti.get('per_rate', a_rate)
+                    per_days = ti.get('per_days', a_days)
+                    team_note = (f"팀원{member_count}명분 포함 | "
+                                f"인당 ₩{per_rate:,}×{per_days}일×{len(ti['members'])}명"
+                                f"=₩{display_basic:,}")
                 else:
                     display_basic = a_rate * a_days
                     team_note = ''
@@ -1094,11 +1101,18 @@ def show_settlement_detail(data):
                 for _tc, _ti in team_info.items():
                     _leader = _ti['leader'] or '?'
                     _members = [m for m in _ti['members'] if m != _leader]
-                    team_html += (f'<span style="background:#EDE9FE;color:#5B21B6;padding:3px 8px;border-radius:6px;'
-                                 f'font-size:12px;margin:2px;">👥 {_leader}팀 ({len(_ti["members"])}명): '
-                                 f'₩{_ti["sum_amount"]:,} → {_leader} 일괄지급</span> ')
+                    _per_r = _ti.get('per_rate', 0)
+                    _per_d = _ti.get('per_days', 0)
+                    _n = len(_ti['members'])
+                    team_html += (f'<div style="background:#EDE9FE;border-radius:8px;padding:6px 10px;margin:3px 0;">'
+                                 f'<b>👥 {_leader}팀</b> ({_n}명) → <b>{_leader}</b> 계좌로 일괄지급<br/>'
+                                 f'<span style="font-size:12px;color:#5B21B6;">'
+                                 f'  산출: 인당 ₩{_per_r:,} × {_per_d}일 × {_n}명 = <b>₩{_ti["sum_amount"]:,}</b>'
+                                 f'</span><br/>'
+                                 f'<span style="font-size:11px;color:#7C3AED;">팀원: {", ".join(_members) if _members else "(팀장만)"}</span>'
+                                 f'</div>')
                 st.markdown(f'<div style="background:#F5F3FF;border:1px solid #A78BFA;border-radius:8px;'
-                            f'padding:8px 12px;margin:6px 0;"><b style="font-size:12px;">👥 팀 일괄결제</b><br/>'
+                            f'padding:8px 12px;margin:6px 0;"><b style="font-size:13px;">💰 팀 일괄결제 내역</b>'
                             f'{team_html}</div>', unsafe_allow_html=True)
 
             edited_df = st.data_editor(

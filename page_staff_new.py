@@ -1930,20 +1930,22 @@ def tab_payment(data):
     pay_target_col = '결제대상' if '결제대상' in assignments_df.columns else None
 
     # 팀별 합산 정보 수집
-    team_info = {}  # {팀코드: {'members': [...], 'total_rate_days': int}}
+    team_info = {}  # {팀코드: {'members': [...], 'leader': ..., 'sum_amount': int, ...}}
     if team_code_col and pay_target_col:
         for _, row in assignments_df.iterrows():
             tc = str(row.get(team_code_col, '')).strip()
             if not tc:
                 continue
             if tc not in team_info:
-                team_info[tc] = {'members': [], 'leader': None, 'sum_amount': 0}
+                team_info[tc] = {'members': [], 'leader': None, 'sum_amount': 0, 'per_rate': 0, 'per_days': 0}
             name = row.get(name_col, '')
             rate = int(row.get(rate_col, 0) or 0)
             days = int(row.get(days_col, 0) or 0)
             is_pay_target = str(row.get(pay_target_col, 'Y')).strip().upper() == 'Y'
             team_info[tc]['members'].append(name)
             team_info[tc]['sum_amount'] += rate * days
+            team_info[tc]['per_rate'] = rate  # 팀원 동일 단가
+            team_info[tc]['per_days'] = days
             if is_pay_target:
                 team_info[tc]['leader'] = name
 
@@ -1970,7 +1972,12 @@ def tab_payment(data):
             ti = team_info[tc]
             display_basic = ti['sum_amount']
             member_names = [m for m in ti['members'] if m != name]
-            team_note = f"[팀{len(ti['members'])}명] {', '.join(member_names)}"
+            member_count = len(member_names)
+            per_rate = ti.get('per_rate', base_rate)
+            per_days = ti.get('per_days', days)
+            team_note = (f"팀원{member_count}명분 포함 | "
+                        f"인당 ₩{per_rate:,}×{per_days}일×{len(ti['members'])}명"
+                        f"=₩{display_basic:,}")
         else:
             display_basic = base_rate * days
             team_note = ''
@@ -2000,11 +2007,18 @@ def tab_payment(data):
         for tc, ti in team_info.items():
             leader = ti['leader'] or '?'
             members = [m for m in ti['members'] if m != leader]
-            team_html += (f'<span style="background:#EDE9FE;color:#5B21B6;padding:3px 8px;border-radius:6px;'
-                         f'font-size:12px;margin:2px;">👥 {leader}팀 ({len(ti["members"])}명): '
-                         f'₩{ti["sum_amount"]:,} → {leader} 일괄지급</span> ')
+            per_r = ti.get('per_rate', 0)
+            per_d = ti.get('per_days', 0)
+            n = len(ti['members'])
+            team_html += (f'<div style="background:#EDE9FE;border-radius:8px;padding:6px 10px;margin:3px 0;">'
+                         f'<b>👥 {leader}팀</b> ({n}명) → <b>{leader}</b> 계좌로 일괄지급<br/>'
+                         f'<span style="font-size:12px;color:#5B21B6;">'
+                         f'  산출: 인당 ₩{per_r:,} × {per_d}일 × {n}명 = <b>₩{ti["sum_amount"]:,}</b>'
+                         f'</span><br/>'
+                         f'<span style="font-size:11px;color:#7C3AED;">팀원: {", ".join(members) if members else "(팀장만)"}</span>'
+                         f'</div>')
         st.markdown(f'<div style="background:#F5F3FF;border:1px solid #A78BFA;border-radius:8px;'
-                    f'padding:8px 12px;margin:6px 0;"><b style="font-size:12px;">👥 팀 일괄결제</b><br/>'
+                    f'padding:8px 12px;margin:6px 0;"><b style="font-size:13px;">💰 팀 일괄결제 내역</b>'
                     f'{team_html}</div>', unsafe_allow_html=True)
 
     edited_df = st.data_editor(
