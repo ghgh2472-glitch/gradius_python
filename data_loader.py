@@ -1019,11 +1019,12 @@ def save_candidates_batch(inquiry_id: str, event_name: str, candidates: list):
                 '',                                 # S: 근무일자
                 c.get('팀코드', ''),                # T: 팀코드
                 c.get('결제대상', 'Y'),             # U: 결제대상
+                c.get('현장참여', 'Y'),             # V: 현장참여 (Y/N)
             ])
         
-        # 한 번의 API 호출로 배치 저장 (A~U: 21컬럼)
+        # 한 번의 API 호출로 배치 저장 (A~V: 22컬럼)
         if batch_rows:
-            cell_range = f'A{next_row}:U{next_row + len(batch_rows) - 1}'
+            cell_range = f'A{next_row}:V{next_row + len(batch_rows) - 1}'
             _invalidate_assign_ctx()
             wks.update(cell_range, batch_rows, value_input_option='RAW')
             print(f"[Batch] Saved {len(batch_rows)} candidates for {inquiry_id}")

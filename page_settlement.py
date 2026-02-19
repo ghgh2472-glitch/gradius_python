@@ -928,6 +928,28 @@ def show_settlement_detail(data):
 
             # ── 원본 데이터 수집 (변동내역 비교용) ──
             orig_data = {}  # {이름: {단가, 일수}}
+
+            # ── 팀 그룹핑: 결제대상='N'인 팀원은 팀장 합산 ──
+            team_code_col = '팀코드' if '팀코드' in assignment_df.columns else None
+            pay_target_col = '결제대상' if '결제대상' in assignment_df.columns else None
+
+            team_info = {}  # {팀코드: {'members': [...], 'leader': ..., 'sum_amount': int}}
+            if team_code_col and pay_target_col:
+                for _, _tr in assignment_df.iterrows():
+                    _tc = str(_tr.get(team_code_col, '')).strip()
+                    if not _tc:
+                        continue
+                    if _tc not in team_info:
+                        team_info[_tc] = {'members': [], 'leader': None, 'sum_amount': 0}
+                    _t_name = str(_tr.get(name_col, '')) if name_col else ''
+                    _t_rate = int(float(_tr.get(rate_col, 0) or 0)) if rate_col else 0
+                    _t_days = int(float(_tr.get(days_col, 1) or 1)) if days_col else 1
+                    _is_pay = str(_tr.get(pay_target_col, 'Y')).strip().upper() == 'Y'
+                    team_info[_tc]['members'].append(_t_name)
+                    team_info[_tc]['sum_amount'] += _t_rate * _t_days
+                    if _is_pay:
+                        team_info[_tc]['leader'] = _t_name
+
             edit_rows = []
             for i, arow in assignment_df.iterrows():
                 a_name = str(arow.get(name_col, 'N/A')) if name_col else 'N/A'
@@ -936,16 +958,33 @@ def show_settlement_detail(data):
                 a_days = int(float(arow.get(days_col, 1) or 1)) if days_col else 1
                 a_type = str(arow.get(assign_type_col, '')) if assign_type_col else ''
                 is_hq = a_name in hq_names
+                _tc = str(arow.get(team_code_col, '')).strip() if team_code_col else ''
+                _is_pay = str(arow.get(pay_target_col, 'Y')).strip().upper() == 'Y' if pay_target_col else True
+
+                # 팀원(결제대상=N)은 정산 테이블에서 제외
+                if _tc and not _is_pay:
+                    continue
 
                 orig_data[a_name] = {'단가': a_rate, '일수': a_days}
 
                 bank, account = _get_bank_info(a_name, df_staff)
+
+                # 팀장이면 팀 전체 합산
+                if _tc and _tc in team_info:
+                    ti = team_info[_tc]
+                    display_basic = ti['sum_amount']
+                    member_names = [m for m in ti['members'] if m != a_name]
+                    team_note = f"[팀{len(ti['members'])}명] {', '.join(member_names)}"
+                else:
+                    display_basic = a_rate * a_days
+                    team_note = ''
 
                 edit_rows.append({
                     '이체': False,
                     '이름': a_name,
                     '직무': a_role,
                     '구분': '본사' if is_hq else a_type,
+                    '팀': team_note,
                     '공제율': default_tax_label,
                     '별도': True if is_hq else False,
                     '단가': a_rate,
@@ -954,12 +993,13 @@ def show_settlement_detail(data):
                     '교통비': 0,
                     '연장': 0,
                     '기타(숙박등)': 0,
-                    '기본급': a_rate * a_days,
+                    '기본급': display_basic,
                     '공제': 0,
-                    '실수령': a_rate * a_days,
+                    '실수령': display_basic,
                     '메모': '',
                     '_은행': bank or '',
                     '_계좌': account or '',
+                    '_팀코드': _tc,
                 })
 
             initial_df = pd.DataFrame(edit_rows)
@@ -1009,7 +1049,12 @@ def show_settlement_detail(data):
                 _r_is_sep = bool(initial_df.at[idx, '별도'])
                 _r_tax_label = str(initial_df.at[idx, '공제율'])
                 _r_person_rate = _parse_tax_rate(_r_tax_label)
-                _r_basic = _r_rate * _r_days
+                # 팀장이면 팀 합산 기본급 사용
+                _r_tc = str(initial_df.at[idx, '_팀코드']) if '_팀코드' in initial_df.columns else ''
+                if _r_tc and _r_tc in team_info:
+                    _r_basic = team_info[_r_tc]['sum_amount']
+                else:
+                    _r_basic = _r_rate * _r_days
                 _r_gross = _r_basic + _r_meal + _r_trans + _r_overtime + _r_etc
                 _r_tax = int(_r_gross * _r_person_rate) if not _r_is_sep else 0
                 _r_net = _r_gross - _r_tax
@@ -1036,16 +1081,33 @@ def show_settlement_detail(data):
                         persisted['added_rows'].extend(new_added)
 
             # ── 인력 급여 통합 테이블 ──
-            st.subheader(f"👷 인력 급여 관리 ({len(assignment_df)}명)")
+            display_count = len(initial_df)
+            team_member_count = len(assignment_df) - display_count if team_info else 0
+            team_label = f" (팀원 {team_member_count}명 → 팀장 합산)" if team_member_count > 0 else ""
+            st.subheader(f"👷 인력 급여 관리 ({display_count}명{team_label})")
             st.caption("💡 단가·일수·수당을 수정하면 기본급→공제→실수령이 **자동 계산**됩니다. 행 하단 `+`로 충원 인원 추가 가능.")
 
+            # 팀 일괄결제 안내
+            if team_info:
+                team_html = ""
+                for _tc, _ti in team_info.items():
+                    _leader = _ti['leader'] or '?'
+                    _members = [m for m in _ti['members'] if m != _leader]
+                    team_html += (f'<span style="background:#EDE9FE;color:#5B21B6;padding:3px 8px;border-radius:6px;'
+                                 f'font-size:12px;margin:2px;">👥 {_leader}팀 ({len(_ti["members"])}명): '
+                                 f'₩{_ti["sum_amount"]:,} → {_leader} 일괄지급</span> ')
+                st.markdown(f'<div style="background:#F5F3FF;border:1px solid #A78BFA;border-radius:8px;'
+                            f'padding:8px 12px;margin:6px 0;"><b style="font-size:12px;">👥 팀 일괄결제</b><br/>'
+                            f'{team_html}</div>', unsafe_allow_html=True)
+
             edited_df = st.data_editor(
-                initial_df.drop(columns=['_은행', '_계좌']),
+                initial_df.drop(columns=['_은행', '_계좌', '_팀코드']),
                 column_config={
                     '이체': st.column_config.CheckboxColumn('이체✓', width=50, help="이체 완료 체크"),
                     '이름': st.column_config.TextColumn('이름', width=75, disabled=True),
                     '직무': st.column_config.TextColumn('직무', width=65, disabled=True),
                     '구분': st.column_config.TextColumn('구분', width=50, disabled=True),
+                    '팀': st.column_config.TextColumn('팀', width=140, disabled=True, help="팀 배정 시 팀원 정보"),
                     '공제율': st.column_config.SelectboxColumn('공제율', width=80, options=TAX_OPTIONS, help="개인별 공제율"),
                     '별도': st.column_config.CheckboxColumn('별도', width=45, help="✅ 별도정산 → 합계 제외"),
                     '단가': st.column_config.NumberColumn('단가', width=85, min_value=0, step=10000, format="%d"),
@@ -1080,7 +1142,12 @@ def show_settlement_detail(data):
                 person_rate = _parse_tax_rate(erow.get('공제율', default_tax_label))
                 e_name = str(erow.get('이름', '')).strip()
 
-                basic = e_rate * e_days
+                # 팀장이면 팀 합산 기본급 사용
+                _e_tc = str(initial_df.iloc[i].get('_팀코드', '')) if i < len(initial_df) else ''
+                if _e_tc and _e_tc in team_info:
+                    basic = team_info[_e_tc]['sum_amount']
+                else:
+                    basic = e_rate * e_days
                 gross = basic + e_meal + e_trans + e_overtime + e_etc
                 tax = int(gross * person_rate) if not is_sep else 0
                 net = gross - tax
@@ -1125,6 +1192,7 @@ def show_settlement_detail(data):
                     '계좌': acct_val,
                     '_changes': changes,
                     '_tax_rate': person_rate,
+                    '_팀코드': _e_tc,
                 })
 
             # ── ⚡ 변동내역 배지 ──
@@ -1199,7 +1267,15 @@ def show_settlement_detail(data):
                             continue
                         if cr['총액'] <= 0:
                             continue
-                        a_assign_id = str(assignment_df.iloc[i].get('배정ID', '')) if i < len(assignment_df) else ''
+                        # initial_df에서 배정ID 가져오기 (assignment_df가 아닌 initial_df 사용 — 팀원 제외되었으므로)
+                        a_assign_id = ''
+                        if i < len(initial_df):
+                            # initial_df에는 _은행/_계좌는 있지만 배정ID는 없을 수 있으므로 이름으로 매칭
+                            _match_name = cr['이름']
+                            _matched = assignment_df[assignment_df[name_col].astype(str) == _match_name] if name_col else pd.DataFrame()
+                            if not _matched.empty:
+                                a_assign_id = str(_matched.iloc[0].get('배정ID', ''))
+                        _tc_note = "[팀일괄] " if cr.get('_팀코드') else ""
                         payment_dict = {
                             '배정ID': a_assign_id,
                             '인력명': cr['이름'],
@@ -1217,7 +1293,7 @@ def show_settlement_detail(data):
                             '지급상태': '완료',
                             '지급일': datetime.now().strftime('%Y-%m-%d'),
                             '지급담당자': '',
-                            '비고': f"{cr['공제율']} 공제" + (f" | {cr['메모']}" if cr['메모'] else ""),
+                            '비고': _tc_note + f"{cr['공제율']} 공제" + (f" | {cr['메모']}" if cr['메모'] else ""),
                         }
                         if db.save_payment_record(payment_dict):
                             save_count += 1
