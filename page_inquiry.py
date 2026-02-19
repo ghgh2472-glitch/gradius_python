@@ -191,6 +191,9 @@ def show(data):
                     st.session_state['form_pay'] = parsed.get('pay', '')
                     st.session_state['form_contact'] = parsed.get('contact', '')
                     st.session_state['form_manager'] = parsed.get('manager', '')
+                    st.session_state['form_dress'] = parsed.get('dress', '')
+                    st.session_state['form_meal'] = parsed.get('meal', '')
+                    st.session_state['form_parking'] = parsed.get('parking', '')
                     st.session_state['form_note'] = parsed.get('note_detail', raw_text)
                     
                     # 업체명 매칭 로직
