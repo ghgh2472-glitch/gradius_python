@@ -456,6 +456,136 @@ def _step1_candidate_pool(sel_id, sel, df_staff, role_status, est_items):
         else:
             _render_individual_assignment_ui(sel, df_staff, role_status)
 
+    # ── 오른쪽: 후보풀 (로컬 대기 + 서버 저장됨) ──
+    with col_right:
+        _render_candidate_pool_panel(sel_id, sel, df_staff, role_status)
+
+
+def _render_candidate_pool_panel(sel_id, sel, df_staff, role_status):
+    """오른쪽 패널: 후보풀 + 확정 인력"""
+    st.markdown('<div class="section-title">👥 후보풀</div>', unsafe_allow_html=True)
+
+    # 로컬 대기 카트 (아직 서버 미저장)
+    cart = st.session_state.get('assign_cart', [])
+    if cart:
+        st.markdown(f"##### 🕐 등록 대기 ({len(cart)}명)")
+        cart_df = pd.DataFrame(cart)
+        display_cart_cols = ['인력명', '구분', '팀코드']
+        avail_cart = [c for c in display_cart_cols if c in cart_df.columns]
+        st.dataframe(cart_df[avail_cart], use_container_width=True, hide_index=True,
+                     height=min(180, 35 * len(cart) + 38))
+
+        # 팀별 요약 (카트에 팀 배정이 있을 때)
+        if '팀코드' in cart_df.columns:
+            team_cart = cart_df[cart_df['팀코드'].astype(str).str.strip() != '']
+            if not team_cart.empty:
+                for tc in team_cart['팀코드'].unique():
+                    tc_df = team_cart[team_cart['팀코드'] == tc]
+                    leader = tc_df[tc_df['구분'] == '팀장']
+                    leader_name = leader['인력명'].iloc[0] if not leader.empty else '?'
+                    total = int(tc_df['총지급액'].sum()) if '총지급액' in tc_df.columns else 0
+                    st.caption(f"👥 {leader_name}팀 ({len(tc_df)}명) — ₩{total:,}")
+
+        for ci_idx in range(len(cart)):
+            item = cart[ci_idx]
+            dc1, dc2 = st.columns([3, 1])
+            with dc1:
+                st.caption(f"{item['인력명']} ({item['구분']})")
+            with dc2:
+                if st.button(f"🗑️", key=f"del_cart_{ci_idx}", help=f"{item['인력명']} 제거"):
+                    st.session_state.assign_cart.pop(ci_idx)
+                    st.rerun()
+
+        col_a1, col_a2 = st.columns(2)
+        with col_a1:
+            if st.button("💾 후보풀에 등록", type="primary", use_container_width=True, key="save_pool"):
+                with st.spinner("후보 등록 중..."):
+                    event_name = sel.get('행사명', '')
+                    ok, fail = db.save_candidates_batch(sel_id, event_name, cart)
+                if ok > 0:
+                    st.session_state.assign_cart = []
+                    db.invalidate_dispatch_only()
+                    st.success(f"✅ {ok}명 후보 등록 완료!")
+                    st.rerun()
+                else:
+                    st.error("❌ 등록 실패")
+        with col_a2:
+            if st.button("🗑️ 전체 비우기", use_container_width=True, key="clear_cart"):
+                st.session_state.assign_cart = []
+                st.rerun()
+
+    # 서버 저장된 후보 목록
+    st.markdown("##### 📋 등록된 후보 목록")
+    if st.button("🔄 새로고침", key="refresh_candidates"):
+        db.invalidate_dispatch_only()
+        st.rerun()
+
+    candidates_df = db.get_candidates_by_inquiry(sel_id)
+    if not candidates_df.empty:
+        name_col = _col(candidates_df, '인력명', '이름')
+        status_col = _col(candidates_df, '지급상태', '상태')
+        role_col = _col(candidates_df, '직무', '역할')
+
+        for idx, row in candidates_df.iterrows():
+            cname = row.get(name_col, 'N/A')
+            cstatus = str(row.get(status_col, '후보'))
+            crole = row.get(role_col, '')
+            ctype = row.get('구분', '외부')
+            badge_icon = "🏢" if ctype == '본사' else "👤"
+            status_badge = "🟡 후보" if '후보' in cstatus else "🔵 배정중"
+            role_text = f" → {crole}" if crole and str(crole) != 'nan' and str(crole).strip() else ""
+
+            # STAFF 정보 조회
+            sinfo = _lookup_staff_brief(df_staff, cname)
+            info_line = ""
+            if sinfo:
+                phone_display = sinfo['연락처'] if sinfo['연락처'] else '-'
+                info_line = f"{sinfo['성별']}/{sinfo['나이']} · 📱{phone_display} · ⭐{sinfo['총점']}"
+
+            c1, c2 = st.columns([3, 1])
+            with c1:
+                st.markdown(f"{badge_icon} **{cname}** {status_badge}{role_text}")
+                if info_line:
+                    st.caption(f"  {info_line}")
+            with c2:
+                if '후보' in cstatus:
+                    if st.button("❌", key=f"rm_cand_{idx}", help=f"{cname} 제거"):
+                        aid = row.get('배정ID', '')
+                        if aid:
+                            db.remove_candidate(aid)
+                            db.invalidate_dispatch_only()
+                            st.rerun()
+
+        st.caption(f"총 {len(candidates_df)}명 후보 등록됨")
+    else:
+        st.info("👈 왼쪽에서 인력을 검색하고 후보풀에 등록하세요")
+
+    # 기존 확정 인력
+    all_assignments = db.get_assignments_by_inquiry(sel_id)
+    if not all_assignments.empty:
+        status_col = _col(all_assignments, '지급상태', '상태')
+        confirmed = all_assignments[
+            all_assignments[status_col].astype(str).str.contains('확정', na=False)]
+        if not confirmed.empty:
+            name_col = _col(confirmed, '인력명', '이름')
+            st.markdown(f"##### ✅ 확정 인력 ({len(confirmed)}명)")
+            display_cols = ['인력명', '이름', '직무', '역할', '팀코드', '지급단가', '단가', '근무일수', '일수']
+            avail = [c for c in display_cols if c in confirmed.columns]
+            st.dataframe(confirmed[avail], use_container_width=True, hide_index=True,
+                         height=min(200, 35 * len(confirmed) + 38))
+
+            # 팀별 요약 표시
+            if '팀코드' in confirmed.columns:
+                team_confirmed = confirmed[confirmed['팀코드'].astype(str).str.strip() != '']
+                if not team_confirmed.empty:
+                    st.markdown("##### 👥 팀 배정 요약")
+                    for tc in team_confirmed['팀코드'].unique():
+                        tc_members = team_confirmed[team_confirmed['팀코드'] == tc]
+                        leader = tc_members[tc_members['구분'].astype(str) == '팀장'] if '구분' in tc_members.columns else pd.DataFrame()
+                        leader_name = leader['인력명'].iloc[0] if not leader.empty and '인력명' in leader.columns else '?'
+                        tc_total = int(pd.to_numeric(tc_members.get('총지급액', 0), errors='coerce').sum())
+                        st.info(f"👤 **{leader_name}팀** ({len(tc_members)}명) — 합계: ₩{tc_total:,} → 팀장 지급")
+
 
 def _render_team_assignment_ui(df_staff, role_status):
     """팀 배정 모드 UI — 팀장 검색 + 팀원 수기 입력"""
@@ -715,131 +845,6 @@ def _render_individual_assignment_ui(sel, df_staff, role_status):
                 else:
                     st.success(f"✅ {new_name} — 후보풀에 추가!")
                 st.rerun()
-
-    # ── 오른쪽: 후보풀 (로컬 대기 + 서버 저장됨) ──
-    with col_right:
-        st.markdown('<div class="section-title">👥 후보풀</div>', unsafe_allow_html=True)
-
-        # 로컬 대기 카트 (아직 서버 미저장)
-        cart = st.session_state.get('assign_cart', [])
-        if cart:
-            st.markdown(f"##### 🕐 등록 대기 ({len(cart)}명)")
-            cart_df = pd.DataFrame(cart)
-            display_cart_cols = ['인력명', '구분', '팀코드']
-            avail_cart = [c for c in display_cart_cols if c in cart_df.columns]
-            st.dataframe(cart_df[avail_cart], use_container_width=True, hide_index=True,
-                         height=min(180, 35 * len(cart) + 38))
-
-            # 팀별 요약 (카트에 팀 배정이 있을 때)
-            if '팀코드' in cart_df.columns:
-                team_cart = cart_df[cart_df['팀코드'].astype(str).str.strip() != '']
-                if not team_cart.empty:
-                    for tc in team_cart['팀코드'].unique():
-                        tc_df = team_cart[team_cart['팀코드'] == tc]
-                        leader = tc_df[tc_df['구분'] == '팀장']
-                        leader_name = leader['인력명'].iloc[0] if not leader.empty else '?'
-                        total = int(tc_df['총지급액'].sum()) if '총지급액' in tc_df.columns else 0
-                        st.caption(f"👥 {leader_name}팀 ({len(tc_df)}명) — ₩{total:,}")
-
-            for ci_idx in range(len(cart)):
-                item = cart[ci_idx]
-                dc1, dc2 = st.columns([3, 1])
-                with dc1:
-                    st.caption(f"{item['인력명']} ({item['구분']})")
-                with dc2:
-                    if st.button(f"🗑️", key=f"del_cart_{ci_idx}", help=f"{item['인력명']} 제거"):
-                        st.session_state.assign_cart.pop(ci_idx)
-                        st.rerun()
-
-            col_a1, col_a2 = st.columns(2)
-            with col_a1:
-                if st.button("💾 후보풀에 등록", type="primary", use_container_width=True, key="save_pool"):
-                    with st.spinner("후보 등록 중..."):
-                        event_name = sel.get('행사명', '')
-                        ok, fail = db.save_candidates_batch(sel_id, event_name, cart)
-                    if ok > 0:
-                        st.session_state.assign_cart = []
-                        db.invalidate_dispatch_only()
-                        st.success(f"✅ {ok}명 후보 등록 완료!")
-                        st.rerun()
-                    else:
-                        st.error("❌ 등록 실패")
-            with col_a2:
-                if st.button("🗑️ 전체 비우기", use_container_width=True, key="clear_cart"):
-                    st.session_state.assign_cart = []
-                    st.rerun()
-
-        # 서버 저장된 후보 목록
-        st.markdown("##### 📋 등록된 후보 목록")
-        if st.button("🔄 새로고침", key="refresh_candidates"):
-            db.invalidate_dispatch_only()
-            st.rerun()
-
-        candidates_df = db.get_candidates_by_inquiry(sel_id)
-        if not candidates_df.empty:
-            name_col = _col(candidates_df, '인력명', '이름')
-            status_col = _col(candidates_df, '지급상태', '상태')
-            role_col = _col(candidates_df, '직무', '역할')
-
-            for idx, row in candidates_df.iterrows():
-                cname = row.get(name_col, 'N/A')
-                cstatus = str(row.get(status_col, '후보'))
-                crole = row.get(role_col, '')
-                ctype = row.get('구분', '외부')
-                badge_icon = "🏢" if ctype == '본사' else "👤"
-                status_badge = "🟡 후보" if '후보' in cstatus else "🔵 배정중"
-                role_text = f" → {crole}" if crole and str(crole) != 'nan' and str(crole).strip() else ""
-
-                # STAFF 정보 조회
-                sinfo = _lookup_staff_brief(df_staff, cname)
-                info_line = ""
-                if sinfo:
-                    phone_display = sinfo['연락처'] if sinfo['연락처'] else '-'
-                    info_line = f"{sinfo['성별']}/{sinfo['나이']} · 📱{phone_display} · ⭐{sinfo['총점']}"
-
-                c1, c2 = st.columns([3, 1])
-                with c1:
-                    st.markdown(f"{badge_icon} **{cname}** {status_badge}{role_text}")
-                    if info_line:
-                        st.caption(f"  {info_line}")
-                with c2:
-                    if '후보' in cstatus:
-                        if st.button("❌", key=f"rm_cand_{idx}", help=f"{cname} 제거"):
-                            aid = row.get('배정ID', '')
-                            if aid:
-                                db.remove_candidate(aid)
-                                db.invalidate_dispatch_only()
-                                st.rerun()
-
-            st.caption(f"총 {len(candidates_df)}명 후보 등록됨")
-        else:
-            st.info("👈 왼쪽에서 인력을 검색하고 후보풀에 등록하세요")
-
-        # 기존 확정 인력
-        all_assignments = db.get_assignments_by_inquiry(sel_id)
-        if not all_assignments.empty:
-            status_col = _col(all_assignments, '지급상태', '상태')
-            confirmed = all_assignments[
-                all_assignments[status_col].astype(str).str.contains('확정', na=False)]
-            if not confirmed.empty:
-                name_col = _col(confirmed, '인력명', '이름')
-                st.markdown(f"##### ✅ 확정 인력 ({len(confirmed)}명)")
-                display_cols = ['인력명', '이름', '직무', '역할', '팀코드', '지급단가', '단가', '근무일수', '일수']
-                avail = [c for c in display_cols if c in confirmed.columns]
-                st.dataframe(confirmed[avail], use_container_width=True, hide_index=True,
-                             height=min(200, 35 * len(confirmed) + 38))
-
-                # 팀별 요약 표시
-                if '팀코드' in confirmed.columns:
-                    team_confirmed = confirmed[confirmed['팀코드'].astype(str).str.strip() != '']
-                    if not team_confirmed.empty:
-                        st.markdown("##### 👥 팀 배정 요약")
-                        for tc in team_confirmed['팀코드'].unique():
-                            tc_members = team_confirmed[team_confirmed['팀코드'] == tc]
-                            leader = tc_members[tc_members['구분'].astype(str) == '팀장'] if '구분' in tc_members.columns else pd.DataFrame()
-                            leader_name = leader['인력명'].iloc[0] if not leader.empty and '인력명' in leader.columns else '?'
-                            tc_total = int(pd.to_numeric(tc_members.get('총지급액', 0), errors='coerce').sum())
-                            st.info(f"👤 **{leader_name}팀** ({len(tc_members)}명) — 합계: ₩{tc_total:,} → 팀장 지급")
 
 
 # ──────────────────────────────────────────────────────────
