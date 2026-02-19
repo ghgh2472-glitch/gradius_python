@@ -789,6 +789,11 @@ def save_settlement_record(settlement_data, site_info=None):
                 else:
                     value = ""
             
+            # ✅ Google Sheets 셀 제한: 50,000자 초과 시 빈값 처리 (base64 잘라내면 깨짐)
+            if isinstance(value, str) and len(value) > 49000:
+                logger.warning(f"⚠️ {header} 컬럼 데이터 초과 ({len(value)}자) → 빈값 처리")
+                value = ""
+            
             cells_to_update.append(Cell(row=target_row, col=col_idx, value=value))
         
         # 8. 일괄 업데이트
