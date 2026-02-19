@@ -212,8 +212,11 @@ def _auto_update_status(inquiry_id, role_status):
             total_assigned = len(active) if not active.empty else 0
             if total_needed > 0 and total_assigned >= total_needed:
                 db.update_status(inquiry_id, sc.STATUS_FLOW[3])  # '배정완료'
+                # ✅ 정산 시트 진행상황도 '행사준비'로 자동 전환
+                db.update_settlement_progress(inquiry_id, '행사준비')
         elif not active.empty:
             db.update_status(inquiry_id, sc.STATUS_FLOW[3])
+            db.update_settlement_progress(inquiry_id, '행사준비')
     except Exception:
         pass
 

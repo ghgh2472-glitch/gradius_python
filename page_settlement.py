@@ -42,6 +42,52 @@ def show(data):
         show_tax_invoice_management()
 
 
+def _auto_check_event_completion(settlement_df):
+    """파견일자가 지난 '행사준비' 건 → '행사종료'로 자동 전환
+    
+    Returns:
+        int: 자동 전환된 건수
+    """
+    if '파견일자' not in settlement_df.columns or '진행상황' not in settlement_df.columns:
+        return 0
+    if '문의ID' not in settlement_df.columns:
+        return 0
+    
+    today = datetime.now().date()
+    updated = 0
+    
+    for _, row in settlement_df.iterrows():
+        progress = str(row.get('진행상황', '')).strip()
+        if progress != '행사준비':
+            continue
+        
+        date_str = str(row.get('파견일자', '')).strip()
+        if not date_str:
+            continue
+        
+        # 파견일자 파싱 (다양한 형식 지원)
+        event_date = None
+        import re
+        # "2026-02-20 ~ 2026-02-22" 같은 범위에선 마지막 날짜 사용
+        range_match = re.search(r'(\d{4}[-./]\d{1,2}[-./]\d{1,2})\s*[~\-]\s*(\d{4}[-./]\d{1,2}[-./]\d{1,2})', date_str)
+        if range_match:
+            date_str = range_match.group(2)  # 종료일
+        
+        for fmt in ('%Y-%m-%d', '%Y.%m.%d', '%Y/%m/%d'):
+            try:
+                event_date = datetime.strptime(date_str.strip(), fmt).date()
+                break
+            except ValueError:
+                continue
+        
+        if event_date and event_date < today:
+            inq_id = str(row.get('문의ID', '')).strip()
+            if inq_id and db.update_settlement_progress(inq_id, '행사종료'):
+                updated += 1
+    
+    return updated
+
+
 def show_settlement_overview():
     """전체 정산 현황"""
     st.markdown('<div class="section-title">📊 전체 정산 현황</div>', unsafe_allow_html=True)
@@ -56,6 +102,13 @@ def show_settlement_overview():
     if settlement_df.empty:
         st.warning("⚠️ 정산 데이터가 없습니다.")
         return
+    
+    # ✅ 행사종료 자동 체크 (파견일자 경과 + 진행상황=행사준비 → 행사종료)
+    auto_completed = _auto_check_event_completion(settlement_df)
+    if auto_completed > 0:
+        st.toast(f"📅 {auto_completed}건 행사종료 자동 전환", icon="✅")
+        db.invalidate_data()
+        st.rerun()
     
     # 데이터 정리
     settlement_df = settlement_df.fillna('').copy()
@@ -298,6 +351,10 @@ def show_settlement_overview():
                             # 이익 자동 계산: 공급가액 - 지급액
                             _profit_v = _supply - _payout_v if _payout_v > 0 else 0
                             
+                            # ✅ 정산완료 자동 전환: 입금완료 + 지급완료 → 정산완료
+                            if _deposit_v == "입금완료" and _payout_v > 0 and _status_v != "정산완료":
+                                _status_v = "정산완료"
+                            
                             _direct_save_settlement(
                                 inq_id_edit, _paid_v, _bal_v, _status_v,
                                 deposit=_deposit_v, tax_invoice=_tax_inv_v,
@@ -484,6 +541,21 @@ def save_payment_record(inquiry_id, total_paid, total_invoice):
         # 입금여부만 자동 변경 (진행상황은 프로젝트 단계이므로 건드리지 않음)
         if '입금여부' in col_indices:
             extra_cells.append(Cell(row=target_row, col=col_indices['입금여부'], value=auto_deposit))
+        
+        # ✅ 정산완료 자동 전환: 입금완료 + 기존 지급액 > 0 → 정산완료
+        if auto_deposit == "입금완료" and '진행상황' in col_indices:
+            # 기존 레코드에서 지급액 확인
+            existing_payout = 0
+            for rec in all_records:
+                if str(rec.get('문의ID', '')).strip() == str(inquiry_id).strip():
+                    try:
+                        existing_payout = int(float(rec.get('지급액', 0) or 0))
+                    except:
+                        pass
+                    break
+            if existing_payout > 0:
+                extra_cells.append(Cell(row=target_row, col=col_indices['진행상황'], value='정산완료'))
+        
         if extra_cells:
             wks.update_cells(extra_cells, value_input_option='RAW')
         
@@ -548,6 +620,16 @@ def update_payment_and_profit(inquiry_id, total_payment, supply_amount=None):
         if '이익' in col_map and supply_amount is not None:
             profit = int(supply_amount) - int(total_payment)
             wks.update_cell(target_row, col_map['이익'], profit)
+        
+        # ✅ 정산완료 자동 전환: 지급 완료 + 입금완료 → 정산완료
+        if current_record and int(total_payment) > 0:
+            deposit_status = str(current_record.get('입금여부', '')).strip()
+            if deposit_status == '입금완료':
+                # 진행상황 컬럼 찾기
+                for i, h in enumerate(headers, 1):
+                    if str(h).strip() == '진행상황':
+                        wks.update_cell(target_row, i, '정산완료')
+                        break
         
         return True
     except Exception as e:

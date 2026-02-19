@@ -491,6 +491,19 @@ def update_cell(sheet_name, inquiry_id, col_name=None, value=""):
         print(f"❌ update_cell 오류: {e}")
         return False
 
+
+def update_settlement_progress(inquiry_id, progress):
+    """계약건은청구금액적기 시트의 '진행상황' 컬럼만 업데이트
+    
+    Args:
+        inquiry_id: 문의ID
+        progress: 진행상황 값 (계약체결/행사준비/행사종료/정산완료)
+    Returns:
+        bool: 성공 여부
+    """
+    return update_cell("계약건은청구금액적기", inquiry_id, "진행상황", progress)
+
+
 def save_estimate_details(est_data, metadata=None):
     """
     견적상세 시트에 견적 정보를 저장합니다.
