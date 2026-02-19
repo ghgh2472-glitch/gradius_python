@@ -138,7 +138,7 @@ def show(data):
                             st.balloons()
                             st.success(f"🎊 [계약 체결] {selected_project['업체명']} 프로젝트가 운영 단계로 성공적으로 전환되었습니다!")
                             time.sleep(2)
-                            st.cache_data.clear() # 캐시 초기화
+                            db.invalidate_data()
                             st.rerun()
                         else:
                             st.error("시트 저장 중 통신 오류가 발생했습니다. 잠시 후 다시 시도해주세요.")

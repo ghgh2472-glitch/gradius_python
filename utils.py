@@ -10,7 +10,7 @@ import pandas as pd
 def safe_int(val):
     try:
         if isinstance(val, str):
-            clean_val = val.replace(',', '').replace('원', '').strip()
+            clean_val = val.replace(',', '').replace('원', '').replace('명', '').replace('건', '').replace('개', '').strip()
             if not clean_val: return 0
             return int(float(clean_val))
         return int(float(val))

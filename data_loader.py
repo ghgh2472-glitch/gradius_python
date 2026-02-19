@@ -723,39 +723,51 @@ def save_assignment_record(assignment):
             except Exception as e:
                 print(f"Failed to add rows before write: {e}")
 
-        # 배정기록 시트 15컬럼 구조 (구분 컬럼 포함)
-        # Col 1: 배정ID
-        # Col 2: 문의ID
-        # Col 3: 행사명
-        # Col 4: 인력명
-        # Col 5: 구분 (본사/외부)
-        # Col 6: 직무
-        # Col 7: 연락처
-        # Col 8: 주민등록번호
-        # Col 9: 은행명
-        # Col 10: 계좌번호
-        # Col 11: 지급단가
-        # Col 12: 근무일수
-        # Col 13: 총지급액
-        # Col 14: 지급상태
-        # Col 15: 배정일시
+        # 배정기록 시트 21컬럼 구조 (팀 배정 지원)
+        # Col A: 배정ID
+        # Col B: 문의ID
+        # Col C: 행사명
+        # Col D: 인력명
+        # Col E: 구분 (본사/외부/팀장/팀원)
+        # Col F: 직무
+        # Col G: 연락처
+        # Col H: 주민등록번호
+        # Col I: 은행명
+        # Col J: 계좌번호
+        # Col K: 지급단가
+        # Col L: 근무일수
+        # Col M: 총지급액
+        # Col N: 지급상태
+        # Col O: 배정일시
+        # Col P: 투입시작일
+        # Col Q: 투입종료일
+        # Col R: 메모
+        # Col S: 근무일자
+        # Col T: 팀코드
+        # Col U: 결제대상 (Y/N)
         
         row_values = [
-            assign_id,  # Col 1: 배정ID
-            merged_assignment.get('문의ID', ''),  # Col 2: 문의ID
-            merged_assignment.get('행사명', ''),  # Col 3: 행사명
-            merged_assignment.get('인력명', ''),  # Col 4: 인력명
-            merged_assignment.get('구분', '외부'),  # Col 5: 구분 (본사/외부)
-            merged_assignment.get('직무', ''),  # Col 6: 직무
-            merged_assignment.get('연락처', ''),  # Col 7: 연락처
-            merged_assignment.get('주민등록번호', ''),  # Col 8: 주민등록번호
-            merged_assignment.get('은행명', ''),  # Col 9: 은행명
-            merged_assignment.get('계좌번호', ''),  # Col 10: 계좌번호
-            merged_assignment.get('지급단가', ''),  # Col 11: 지급단가
-            merged_assignment.get('근무일수', ''),  # Col 12: 근무일수
-            merged_assignment.get('총지급액', ''),  # Col 13: 총지급액
-            merged_assignment.get('지급상태', '배정중'),  # Col 14: 지급상태
-            merged_assignment.get('배정일시', datetime.now().strftime('%Y-%m-%d %H:%M:%S')),  # Col 15: 배정일시
+            assign_id,  # Col A: 배정ID
+            merged_assignment.get('문의ID', ''),  # Col B: 문의ID
+            merged_assignment.get('행사명', ''),  # Col C: 행사명
+            merged_assignment.get('인력명', ''),  # Col D: 인력명
+            merged_assignment.get('구분', '외부'),  # Col E: 구분 (본사/외부/팀장/팀원)
+            merged_assignment.get('직무', ''),  # Col F: 직무
+            merged_assignment.get('연락처', ''),  # Col G: 연락처
+            merged_assignment.get('주민등록번호', ''),  # Col H: 주민등록번호
+            merged_assignment.get('은행명', ''),  # Col I: 은행명
+            merged_assignment.get('계좌번호', ''),  # Col J: 계좌번호
+            merged_assignment.get('지급단가', ''),  # Col K: 지급단가
+            merged_assignment.get('근무일수', ''),  # Col L: 근무일수
+            merged_assignment.get('총지급액', ''),  # Col M: 총지급액
+            merged_assignment.get('지급상태', '배정중'),  # Col N: 지급상태
+            merged_assignment.get('배정일시', datetime.now().strftime('%Y-%m-%d %H:%M:%S')),  # Col O: 배정일시
+            merged_assignment.get('투입시작일', ''),  # Col P: 투입시작일
+            merged_assignment.get('투입종료일', ''),  # Col Q: 투입종료일
+            merged_assignment.get('메모', ''),  # Col R: 메모
+            merged_assignment.get('근무일자', ''),  # Col S: 근무일자
+            merged_assignment.get('팀코드', ''),  # Col T: 팀코드
+            merged_assignment.get('결제대상', 'Y'),  # Col U: 결제대상 (기본값 Y - 개별 배정)
         ]
 
         # A{next_row} 위치에 한 줄로 업데이트

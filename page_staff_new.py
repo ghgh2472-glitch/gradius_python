@@ -238,6 +238,21 @@ def tab_assignment(data):
     ci[2].metric("장소", sel.get('장소', '-'))
     ci[3].metric("상태", sel.get('상태', ''))
 
+    # ── 배정 스킵 (위약금/취소 케이스) ──
+    current_status = str(sel.get('상태', '')).strip()
+    if current_status == '체결':
+        with st.expander("⏭️ 배정 불필요 (위약금/취소 등)", expanded=False):
+            st.warning("⚠️ 인력 배정 없이 정산으로 바로 넘어갑니다.")
+            skip_memo = st.text_input("사유 메모 (선택)", placeholder="예: 고객 취소, 위약금 50%", key="skip_memo")
+            if st.button("✅ 배정 스킵 → 완료 상태로 전환", type="secondary", key="skip_assignment"):
+                # 바로 '완료' 상태로 전환
+                db.update_status(sel_id, sc.STATUS_FLOW[5])  # '완료'
+                st.cache_data.clear()
+                st.success(f"✅ '{sel.get('행사명', '')}'이(가) 완료 상태로 전환되었습니다.")
+                if skip_memo:
+                    st.info(f"📝 메모: {skip_memo}")
+                st.rerun()
+
     # ── 필요 직군 현황 ──
     st.markdown('<div class="section-title">📊 필요인력 현황</div>', unsafe_allow_html=True)
     est_items = db.load_estimate_items(sel_id)
@@ -274,8 +289,17 @@ def tab_assignment(data):
         st.markdown('<div class="section-title">🎯 인력 배정</div>', unsafe_allow_html=True)
         if 'assign_cart' not in st.session_state:
             st.session_state.assign_cart = []
+        if 'team_members' not in st.session_state:
+            st.session_state.team_members = []
 
-        # 직군 선택
+        # ══════════════════════════════════════════════════════════════
+        # 배정 유형 선택: 개별 / 팀
+        # ══════════════════════════════════════════════════════════════
+        assign_type = st.radio("배정 유형", ["개별 배정", "👥 팀 배정"], horizontal=True, key="assign_type")
+        
+        st.divider()
+
+        # 직군 선택 (공통)
         role_options = [rs['role'] for rs in role_status] if role_status else []
         role_options.append("기타 (직접입력)")
         col_role, col_custom = st.columns([2, 1])
@@ -291,111 +315,222 @@ def tab_assignment(data):
         default_rate = role_info['pay_rate'] if role_info else 100000
         default_days = role_info['days'] if role_info else 1
 
-        # ── 본사 인력 ──
-        st.markdown("##### 🏢 본사 인원 배정")
-        hq_cols = st.columns(min(len(db.HQ_STAFF) + 1, 5))
-        for i, hq in enumerate(db.HQ_STAFF):
-            with hq_cols[i % len(hq_cols)]:
-                if st.button(f"➕ {hq['이름']}", key=f"hq_{hq['이름']}", use_container_width=True):
-                    st.session_state.assign_cart.append({
-                        '인력명': hq['이름'], '구분': '본사',
-                        '직무': sel_role if sel_role else hq['직무'],
-                        '지급단가': 0, '근무일수': default_days, '총지급액': 0,
-                    })
-                    st.rerun()
-
-        # ── 외부 인력 검색 ──
-        st.markdown("##### 👥 외부 인력 검색")
-        col_name, col_gender = st.columns([3, 1])
-        with col_name:
-            search_q = st.text_input("🔍 이름 / 지역 / 직무 검색", placeholder="예: 김, 서울, 경호",
-                                     key="staff_search")
-        with col_gender:
-            gender_f = st.radio("성별", ["전체", "M", "F"], horizontal=True, key="gender_f")
-
-        with st.expander("🔧 상세 필터", expanded=False):
-            fc1, fc2, fc3 = st.columns(3)
-            with fc1:
-                age_filter = st.multiselect("연령대", ["20대", "30대", "40대", "50대↑"], key="age_f")
-                rec_filter = st.multiselect("추천도", ["우선투입", "일반", "보류"], key="rec_f")
-            with fc2:
-                role_filter = st.text_input("가능직무", placeholder="예: 경호, 안내", key="role_f")
-                region_filter = st.text_input("이동가능지역", placeholder="예: 서울, 경기", key="region_f")
-            with fc3:
-                min_height = st.number_input("최소 키(cm)", min_value=0, value=0, step=5, key="height_f")
-                min_score = st.number_input("최소 총점", min_value=0, value=0, step=10, key="score_f")
-                ec1, ec2 = st.columns(2)
-                with ec1:
-                    english_f = st.selectbox("영어", ["무관", "가능"], key="eng_f")
-                with ec2:
-                    driving_f = st.selectbox("운전", ["무관", "가능"], key="drv_f")
-
-        col_ai, col_manual = st.columns(2)
-        do_ai = col_ai.button("🤖 AI 추천", use_container_width=True, type="primary", key="ai_btn")
-        do_search = col_manual.button("🔍 검색", use_container_width=True, key="search_btn")
-
-        if do_ai or do_search:
-            with st.spinner("인력을 검색 중..."):
-                if do_ai:
-                    from smart_assignment import SmartAssignment
-                    dispatch_data = db.load_dispatch_data()
-                    df_dispatch = dispatch_data.get('dispatch', pd.DataFrame())
-                    location = str(sel.get('장소', ''))
-                    g_val = gender_f if gender_f != "전체" else None
-                    result = SmartAssignment.ai_recommend(
-                        staff_df=df_staff, dispatch_df=df_dispatch,
-                        job_type=sel_role, location=location.split()[0] if location else None,
-                        gender=g_val, top_n=20)
+        # ══════════════════════════════════════════════════════════════
+        # 팀 배정 모드
+        # ══════════════════════════════════════════════════════════════
+        if assign_type == "👥 팀 배정":
+            st.markdown("##### 👤 팀장 선택 (STAFF에서 검색)")
+            
+            # 팀장 검색
+            leader_search = st.text_input("🔍 팀장 이름 검색", placeholder="예: 강정호", key="leader_search")
+            
+            if leader_search:
+                mask = df_staff['이름'].astype(str).str.contains(leader_search, na=False, case=False)
+                leaders = df_staff[mask].head(10)
+                
+                if not leaders.empty:
+                    leader_options = {
+                        idx: f"{row.get('이름', '')} | {row.get('성별', '-')} | {row.get('가능직무', '-')}"
+                        for idx, row in leaders.iterrows()
+                    }
+                    sel_leader_idx = st.selectbox(
+                        "팀장 선택", list(leader_options.keys()),
+                        format_func=lambda x: leader_options[x],
+                        key="sel_leader"
+                    )
+                    selected_leader = leaders.loc[sel_leader_idx]
+                    st.success(f"✅ 팀장: **{selected_leader.get('이름', '')}**")
                 else:
-                    result = _search_staff(
-                        df_staff, search_q, gender_f, age_filter, rec_filter,
-                        role_filter, region_filter, min_height, min_score,
-                        english_f, driving_f)
-
-                st.session_state.search_results = result
-                st.session_state.search_done = True
-
-        # 검색 결과 (컴팩트)
-        if st.session_state.get('search_done') and not st.session_state.get('search_results', pd.DataFrame()).empty:
-            results = st.session_state.search_results
-            st.markdown(f"**{len(results)}명 검색됨**")
-
-            selected_indices = []
-            for idx, row in results.reset_index(drop=True).iterrows():
-                name = row.get('이름', 'N/A')
-                gender = row.get('성별', '-')
-                age = row.get('나이', '-')
-                region = row.get('이동가능지역', row.get('거주지', '-'))
-                role = row.get('가능직무', '-')
-                height = row.get('키', '-')
-                score = row.get('총점', '-')
-                recommend = row.get('추천도', '-')
-                ai_score = row.get('AI점수', '')
-                ai_txt = f" · AI:{ai_score}" if ai_score != '' else ''
-
-                label = (f"{name}  |  {gender}/{age}  |  📍{region}  |  🔧{role}  "
-                         f"|  📏{height}cm  |  ⭐{score}  |  {recommend}{ai_txt}")
-
-                if st.checkbox(label, key=f"staff_sel_{idx}"):
-                    selected_indices.append(idx)
-
-            if selected_indices:
-                pay_rate = st.number_input("지급단가 (원/일)", value=default_rate, step=10000, key="batch_rate")
-                work_days = st.number_input("근무일수", value=default_days, min_value=1, key="batch_days")
-
-                if st.button(f"✅ 선택한 {len(selected_indices)}명 배정 추가", type="primary",
-                             use_container_width=True, key="add_selected"):
-                    for si in selected_indices:
-                        row = results.iloc[si]
+                    st.warning("검색 결과가 없습니다.")
+                    selected_leader = None
+            else:
+                selected_leader = None
+            
+            st.markdown("##### 👥 팀원 추가 (수기 입력)")
+            st.caption("팀원은 STAFF에 없어도 됩니다. 이름만 입력하세요.")
+            
+            # 팀원 추가 입력
+            col_add, col_btn = st.columns([3, 1])
+            with col_add:
+                new_member = st.text_input("팀원 이름", placeholder="예: 김철수", key="new_member", label_visibility="collapsed")
+            with col_btn:
+                if st.button("➕ 추가", key="add_member"):
+                    if new_member.strip():
+                        st.session_state.team_members.append(new_member.strip())
+                        st.rerun()
+            
+            # 현재 팀원 목록 표시
+            if st.session_state.team_members:
+                st.markdown(f"**현재 팀원:** {len(st.session_state.team_members)}명")
+                for i, member in enumerate(st.session_state.team_members):
+                    mc1, mc2 = st.columns([4, 1])
+                    mc1.write(f"• {member}")
+                    if mc2.button("🗑️", key=f"del_member_{i}"):
+                        st.session_state.team_members.pop(i)
+                        st.rerun()
+            
+            st.divider()
+            
+            # 팀 단가 설정
+            col_rate, col_days = st.columns(2)
+            with col_rate:
+                team_rate = st.number_input("인당 단가 (원/일)", value=default_rate, step=10000, key="team_rate")
+            with col_days:
+                team_days = st.number_input("근무일수", value=default_days, min_value=1, key="team_days")
+            
+            # 팀 합계 계산
+            team_size = 1 + len(st.session_state.team_members)  # 팀장 + 팀원
+            team_total = team_rate * team_days * team_size
+            
+            st.info(f"""
+            📊 **팀 합계**
+            - 팀 인원: {team_size}명 (팀장 1 + 팀원 {len(st.session_state.team_members)})
+            - 총 지급액: **{team_total:,}원** → 팀장 계좌로 지급
+            """)
+            
+            # 팀 배정 추가 버튼
+            if st.button("✅ 팀 배정 추가", type="primary", use_container_width=True, key="add_team"):
+                if selected_leader is None:
+                    st.error("팀장을 선택해주세요.")
+                else:
+                    # 팀코드 생성
+                    from uuid import uuid4
+                    team_code = f"T-{datetime.now().strftime('%y%m%d')}-{str(uuid4())[:4]}"
+                    leader_name = selected_leader.get('이름', '')
+                    
+                    # 팀장 추가 (결제대상 = Y)
+                    st.session_state.assign_cart.append({
+                        '인력명': leader_name, '구분': '팀장',
+                        '직무': sel_role, '지급단가': int(team_rate),
+                        '근무일수': int(team_days), '총지급액': int(team_rate * team_days),
+                        '팀코드': team_code, '결제대상': 'Y',
+                    })
+                    
+                    # 팀원 추가 (결제대상 = N)
+                    for member in st.session_state.team_members:
                         st.session_state.assign_cart.append({
-                            '인력명': row.get('이름', ''),
-                            '구분': '외부',
-                            '직무': sel_role,
-                            '지급단가': int(pay_rate),
-                            '근무일수': int(work_days),
-                            '총지급액': int(pay_rate) * int(work_days),
+                            '인력명': member, '구분': '팀원',
+                            '직무': sel_role, '지급단가': int(team_rate),
+                            '근무일수': int(team_days), '총지급액': int(team_rate * team_days),
+                            '팀코드': team_code, '결제대상': 'N',
                         })
+                    
+                    # 팀원 목록 초기화
+                    st.session_state.team_members = []
+                    st.success(f"✅ {leader_name}팀 ({team_size}명) 배정 추가!")
                     st.rerun()
+
+        # ══════════════════════════════════════════════════════════════
+        # 개별 배정 모드 (기존)
+        # ══════════════════════════════════════════════════════════════
+        else:
+            # ── 본사 인력 ──
+            st.markdown("##### 🏢 본사 인원 배정")
+            hq_cols = st.columns(min(len(db.HQ_STAFF) + 1, 5))
+            for i, hq in enumerate(db.HQ_STAFF):
+                with hq_cols[i % len(hq_cols)]:
+                    if st.button(f"➕ {hq['이름']}", key=f"hq_{hq['이름']}", use_container_width=True):
+                        st.session_state.assign_cart.append({
+                            '인력명': hq['이름'], '구분': '본사',
+                            '직무': sel_role if sel_role else hq['직무'],
+                            '지급단가': 0, '근무일수': default_days, '총지급액': 0,
+                            '팀코드': '', '결제대상': 'Y',
+                        })
+                        st.rerun()
+
+            # ── 외부 인력 검색 ──
+            st.markdown("##### 👥 외부 인력 검색")
+            col_name, col_gender = st.columns([3, 1])
+            with col_name:
+                search_q = st.text_input("🔍 이름 / 지역 / 직무 검색", placeholder="예: 김, 서울, 경호",
+                                         key="staff_search")
+            with col_gender:
+                gender_f = st.radio("성별", ["전체", "M", "F"], horizontal=True, key="gender_f")
+
+            with st.expander("🔧 상세 필터", expanded=False):
+                fc1, fc2, fc3 = st.columns(3)
+                with fc1:
+                    age_filter = st.multiselect("연령대", ["20대", "30대", "40대", "50대↑"], key="age_f")
+                    rec_filter = st.multiselect("추천도", ["우선투입", "일반", "보류"], key="rec_f")
+                with fc2:
+                    role_filter = st.text_input("가능직무", placeholder="예: 경호, 안내", key="role_f")
+                    region_filter = st.text_input("이동가능지역", placeholder="예: 서울, 경기", key="region_f")
+                with fc3:
+                    min_height = st.number_input("최소 키(cm)", min_value=0, value=0, step=5, key="height_f")
+                    min_score = st.number_input("최소 총점", min_value=0, value=0, step=10, key="score_f")
+                    ec1, ec2 = st.columns(2)
+                    with ec1:
+                        english_f = st.selectbox("영어", ["무관", "가능"], key="eng_f")
+                    with ec2:
+                        driving_f = st.selectbox("운전", ["무관", "가능"], key="drv_f")
+
+            col_ai, col_manual = st.columns(2)
+            do_ai = col_ai.button("🤖 AI 추천", use_container_width=True, type="primary", key="ai_btn")
+            do_search = col_manual.button("🔍 검색", use_container_width=True, key="search_btn")
+
+            if do_ai or do_search:
+                with st.spinner("인력을 검색 중..."):
+                    if do_ai:
+                        from smart_assignment import SmartAssignment
+                        dispatch_data = db.load_dispatch_data()
+                        df_dispatch = dispatch_data.get('dispatch', pd.DataFrame())
+                        location = str(sel.get('장소', ''))
+                        g_val = gender_f if gender_f != "전체" else None
+                        result = SmartAssignment.ai_recommend(
+                            staff_df=df_staff, dispatch_df=df_dispatch,
+                            job_type=sel_role, location=location.split()[0] if location else None,
+                            gender=g_val, top_n=20)
+                    else:
+                        result = _search_staff(
+                            df_staff, search_q, gender_f, age_filter, rec_filter,
+                            role_filter, region_filter, min_height, min_score,
+                            english_f, driving_f)
+
+                    st.session_state.search_results = result
+                    st.session_state.search_done = True
+
+            # 검색 결과 (컴팩트)
+            if st.session_state.get('search_done') and not st.session_state.get('search_results', pd.DataFrame()).empty:
+                results = st.session_state.search_results
+                st.markdown(f"**{len(results)}명 검색됨**")
+
+                selected_indices = []
+                for idx, row in results.reset_index(drop=True).iterrows():
+                    name = row.get('이름', 'N/A')
+                    gender = row.get('성별', '-')
+                    age = row.get('나이', '-')
+                    region = row.get('이동가능지역', row.get('거주지', '-'))
+                    role = row.get('가능직무', '-')
+                    height = row.get('키', '-')
+                    score = row.get('총점', '-')
+                    recommend = row.get('추천도', '-')
+                    ai_score = row.get('AI점수', '')
+                    ai_txt = f" · AI:{ai_score}" if ai_score != '' else ''
+
+                    label = (f"{name}  |  {gender}/{age}  |  📍{region}  |  🔧{role}  "
+                             f"|  📏{height}cm  |  ⭐{score}  |  {recommend}{ai_txt}")
+
+                    if st.checkbox(label, key=f"staff_sel_{idx}"):
+                        selected_indices.append(idx)
+
+                if selected_indices:
+                    pay_rate = st.number_input("지급단가 (원/일)", value=default_rate, step=10000, key="batch_rate")
+                    work_days = st.number_input("근무일수", value=default_days, min_value=1, key="batch_days")
+
+                    if st.button(f"✅ 선택한 {len(selected_indices)}명 배정 추가", type="primary",
+                                 use_container_width=True, key="add_selected"):
+                        for si in selected_indices:
+                            row = results.iloc[si]
+                            st.session_state.assign_cart.append({
+                                '인력명': row.get('이름', ''),
+                                '구분': '외부',
+                                '직무': sel_role,
+                                '지급단가': int(pay_rate),
+                                '근무일수': int(work_days),
+                                '총지급액': int(pay_rate) * int(work_days),
+                                '팀코드': '', '결제대상': 'Y',
+                            })
+                        st.rerun()
 
     # ── 오른쪽: 배정 현황 실시간 ──
     with col_right:
@@ -429,8 +564,11 @@ def tab_assignment(data):
                                 "지급단가": item['지급단가'], "근무일수": item['근무일수'],
                                 "총지급액": item['총지급액'], "지급상태": "배정중",
                                 "배정일시": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                "팀코드": item.get('팀코드', ''),
+                                "결제대상": item.get('결제대상', 'Y'),
                             }
                             if db.save_assignment_record(assignment_dict):
+                                success_count += 1
                                 success_count += 1
 
                     if success_count > 0:
@@ -458,10 +596,24 @@ def tab_assignment(data):
 
         assignments_df = db.get_assignments_by_inquiry(sel_id)
         if not assignments_df.empty:
-            display_cols = ['인력명', '구분', '직무', '지급단가', '근무일수', '총지급액', '지급상태']
+            # 팀코드가 있으면 표시
+            display_cols = ['인력명', '구분', '팀코드', '직무', '지급단가', '근무일수', '총지급액', '지급상태', '결제대상']
             avail = [c for c in display_cols if c in assignments_df.columns]
             st.dataframe(assignments_df[avail], use_container_width=True, hide_index=True,
                          height=min(300, 35 * len(assignments_df) + 38))
+            
+            # 팀별 요약 표시
+            if '팀코드' in assignments_df.columns:
+                team_df = assignments_df[assignments_df['팀코드'].astype(str).str.strip() != '']
+                if not team_df.empty:
+                    st.markdown("##### 👥 팀 배정 요약")
+                    for team_code in team_df['팀코드'].unique():
+                        team_members = team_df[team_df['팀코드'] == team_code]
+                        leader = team_members[team_members['구분'].astype(str) == '팀장']
+                        leader_name = leader['인력명'].iloc[0] if not leader.empty else '?'
+                        member_count = len(team_members)
+                        team_total = team_members['총지급액'].astype(int).sum() if '총지급액' in team_members.columns else 0
+                        st.info(f"👤 **{leader_name}팀** ({member_count}명) — 합계: {team_total:,}원 → 팀장 지급")
 
             st.markdown("##### 🔧 배정 관리")
             name_col = '인력명' if '인력명' in assignments_df.columns else '이름'

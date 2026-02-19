@@ -92,6 +92,11 @@ def show(data):
     settlement_overview = ud.get_settlement_overview(df_settlement)
     unpaid_df = ud.get_unpaid_list(df_inq)
     pending_df = ud.get_pending_list(df_inq)
+    operating_profit = ud.get_operating_profit(df_settlement, df_dispatch)
+    conversion = ud.get_estimate_conversion_rate(df_inq)
+    stale_estimates = ud.get_stale_estimates(df_inq)
+    role_stats = ud.get_role_statistics(df_dispatch)
+    team_stats = ud.get_team_dispatch_stats(df_dispatch)
     
     # 2. AI 브리핑
     insight = ud.generate_ai_insight(kpi, len(unpaid_df), len(pending_df))
@@ -105,8 +110,33 @@ def show(data):
     st.markdown('<div class="section-title">📌 오늘의 확인 사항</div>', unsafe_allow_html=True)
     
     smart_briefing = ud.generate_smart_briefing(df_inq, df_dispatch, df_settlement)
-    briefing_colors = ["#FEF2F2", "#FFF7ED", "#F0FDF4"]
-    briefing_borders = ["#EF4444", "#F97316", "#10B981"]
+    briefing_colors = ["#FEF2F2", "#FFF7ED", "#F0FDF4", "#EFF6FF", "#FDF4FF"]
+    briefing_borders = ["#EF4444", "#F97316", "#10B981", "#3B82F6", "#A855F7"]
+    
+    # 견적 미체결 경과일 알림 추가
+    if not stale_estimates.empty:
+        count = len(stale_estimates)
+        top_names = ", ".join(stale_estimates['업체명'].head(3).tolist()) if '업체명' in stale_estimates.columns else ""
+        smart_briefing.append(
+            f"🧮 <b>견적 후 미체결 {count}건 확인 필요</b><br/>"
+            f"견적 발송 후 7일 이상 체결되지 않은 건이 있습니다"
+            + (f": <b>{top_names}</b>" if top_names else "")
+        )
+    
+    # 영업이익 알림
+    if operating_profit['공급가액'] > 0:
+        if operating_profit['이익률'] < 15:
+            smart_briefing.append(
+                f"📉 <b>이익률 주의 ({operating_profit['이익률']}%)</b><br/>"
+                f"공급가액 {operating_profit['공급가액']:,}원 대비 지급액 {operating_profit['지급액']:,}원 → 이익률이 낮습니다"
+            )
+    
+    # 팀 배정 현황 요약
+    if team_stats['팀배정건수'] > 0:
+        smart_briefing.append(
+            f"👥 <b>팀 배정 현황</b><br/>"
+            f"현재 {team_stats['팀수']}개 팀, 팀장 {team_stats.get('팀장수', 0)}명 + 팀원 {team_stats.get('팀원수', 0)}명 투입 중"
+        )
     
     for idx, item in enumerate(smart_briefing):
         color_idx = idx % len(briefing_colors)
@@ -119,14 +149,14 @@ def show(data):
     
     st.markdown("---")
     
-    # 3. KPI 카드 (고도화된 디자인)
+    # 3. KPI 카드 (고도화된 디자인) — 2행 구성
     st.subheader("📊 핵심 KPI")
     col_s, col_p, col_u, col_r = st.columns(4)
     
     with col_s:
         st.markdown(f"""
         <div class="metric-card sales">
-            <div class="metric-label">💰 총 청구액</div>
+            <div class="metric-label">💰 총 청구액 (공급가액)</div>
             <div class="metric-value">{settlement_overview['총청구액']:,}</div>
             <div class="metric-unit">원</div>
         </div>
@@ -156,6 +186,58 @@ def show(data):
             <div class="metric-label">📈 수금률</div>
             <div class="metric-value">{settlement_overview['수금률']}%</div>
             <div class="metric-unit">집행률</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    st.markdown("")
+    
+    # ── KPI 2행: 영업이익 + 견적전환율 ──
+    profit_color = "#059669" if operating_profit['영업이익'] >= 0 else "#DC2626"
+    col_op, col_pay, col_margin, col_conv = st.columns(4)
+    
+    with col_op:
+        st.markdown(f"""
+        <div style="background: linear-gradient(135deg, #059669 0%, #047857 100%);
+                    border-radius: 12px; padding: 20px; text-align: center;
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.15); color: white;">
+            <div style="font-size: 13px; font-weight: 600; opacity: 0.9; margin-bottom: 8px;">💎 영업이익</div>
+            <div style="font-size: 28px; font-weight: 800; margin: 10px 0;">{operating_profit['영업이익']:,}</div>
+            <div style="font-size: 14px; opacity: 0.85;">원 (이익률 {operating_profit['이익률']}%)</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col_pay:
+        st.markdown(f"""
+        <div style="background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
+                    border-radius: 12px; padding: 20px; text-align: center;
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.15); color: white;">
+            <div style="font-size: 13px; font-weight: 600; opacity: 0.9; margin-bottom: 8px;">💸 총 지급액</div>
+            <div style="font-size: 28px; font-weight: 800; margin: 10px 0;">{operating_profit['지급액']:,}</div>
+            <div style="font-size: 14px; opacity: 0.85;">원</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col_margin:
+        margin_bg = "#059669" if operating_profit['이익률'] >= 30 else "#F59E0B" if operating_profit['이익률'] >= 15 else "#DC2626"
+        st.markdown(f"""
+        <div style="background: linear-gradient(135deg, {margin_bg} 0%, {margin_bg}DD 100%);
+                    border-radius: 12px; padding: 20px; text-align: center;
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.15); color: white;">
+            <div style="font-size: 13px; font-weight: 600; opacity: 0.9; margin-bottom: 8px;">📊 이익률</div>
+            <div style="font-size: 28px; font-weight: 800; margin: 10px 0;">{operating_profit['이익률']}%</div>
+            <div style="font-size: 14px; opacity: 0.85;">{'양호' if operating_profit['이익률'] >= 30 else '주의' if operating_profit['이익률'] >= 15 else '위험'}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col_conv:
+        conv_bg = "#2563EB" if conversion['전체전환율'] >= 60 else "#F59E0B" if conversion['전체전환율'] >= 30 else "#DC2626"
+        st.markdown(f"""
+        <div style="background: linear-gradient(135deg, {conv_bg} 0%, {conv_bg}DD 100%);
+                    border-radius: 12px; padding: 20px; text-align: center;
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.15); color: white;">
+            <div style="font-size: 13px; font-weight: 600; opacity: 0.9; margin-bottom: 8px;">🎯 견적→체결 전환율</div>
+            <div style="font-size: 28px; font-weight: 800; margin: 10px 0;">{conversion['전체전환율']}%</div>
+            <div style="font-size: 14px; opacity: 0.85;">{conversion['체결건수']}/{conversion['견적건수']}건 (대기 {conversion['대기건수']}건)</div>
         </div>
         """, unsafe_allow_html=True)
     
@@ -460,8 +542,8 @@ def show(data):
     st.markdown("---")
     
     # 6. 탭 구성
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
-        "📊 분석", "🔥 긴급", "👥 인력", "💼 고객", "💰 정산", "📅 캘린더", "📋 리포트", "🤖 AI 분석"
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
+        "📊 분석", "🔥 긴급", "👥 인력", "💼 고객", "💰 정산", "📅 캘린더", "📋 리포트", "🤖 AI 분석", "💎 수익분석"
     ])
     
     # [Tab 1] 분석 차트
@@ -635,6 +717,34 @@ def show(data):
             st.success("✅ 급한 현장 없음 (앞으로 7일)")
         
         st.markdown("---")
+        
+        # ── 견적 후 미체결 경과 건 ──
+        st.markdown('<div class="section-title">🧮 견적 후 미체결 확인 필요 (7일+)</div>', unsafe_allow_html=True)
+        if not stale_estimates.empty:
+            st.warning(f"⚠️ 견적 발송 후 7일 이상 체결되지 않은 건이 **{len(stale_estimates)}건** 있습니다.")
+            for _, row in stale_estimates.iterrows():
+                days = int(row.get('경과일', 0))
+                company = row.get('업체명', '-')
+                event = row.get('행사명', '-')
+                inq_id = row.get('문의ID', '-')
+                urgency_color = "#DC2626" if days >= 14 else "#F97316" if days >= 7 else "#EAB308"
+                st.markdown(f"""
+                <div style="background: white; border: 1px solid #E5E7EB; border-left: 4px solid {urgency_color};
+                            border-radius: 8px; padding: 12px; margin-bottom: 8px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <b>{company}</b> — {event}
+                            <span style="color:#9CA3AF; font-size:11px; margin-left:8px;">({inq_id})</span>
+                        </div>
+                        <span style="background:{urgency_color}; color:white; padding:3px 10px; border-radius:12px;
+                                    font-size:11px; font-weight:bold;">📅 {days}일 경과</span>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+        else:
+            st.success("✅ 모든 견적건이 정상 처리 중입니다.")
+        
+        st.markdown("---")
         st.markdown('<div class="section-title">💸 미수금 Top 5 업체</div>', unsafe_allow_html=True)
         
         unpaid_cos = ud.get_unpaid_companies(df_settlement, top_n=5)
@@ -732,6 +842,69 @@ def show(data):
             st.info("👥 배정 데이터가 없습니다.")
         
         st.markdown("---")
+        
+        # ── 직군별 배정 통계 ──
+        st.markdown('<div class="section-title">🔧 직군별 배정 통계 (Top 10)</div>', unsafe_allow_html=True)
+        if not role_stats.empty:
+            rs_col1, rs_col2 = st.columns([2, 1])
+            with rs_col1:
+                fig_role = px.bar(
+                    role_stats, x='배정횟수', y='직군',
+                    orientation='h', color='배정횟수',
+                    color_continuous_scale='Viridis', text='배정횟수'
+                )
+                fig_role.update_layout(
+                    margin=dict(l=100, r=10, t=10, b=10), height=350,
+                    showlegend=False, xaxis_title="배정 횟수", yaxis_title=""
+                )
+                fig_role.update_traces(textposition='outside')
+                st.plotly_chart(fig_role, use_container_width=True)
+            with rs_col2:
+                config = {"순위": st.column_config.NumberColumn("No.", format="%d"),
+                          "직군": st.column_config.TextColumn("직군"),
+                          "배정횟수": st.column_config.ProgressColumn("배정횟수", min_value=0, max_value=int(role_stats['배정횟수'].max()))}
+                if '총지급액' in role_stats.columns:
+                    config["총지급액"] = st.column_config.NumberColumn("총지급액", format="₩%d")
+                st.dataframe(role_stats, column_config=config, use_container_width=True, hide_index=True, height=350)
+        else:
+            st.info("🔧 직군 데이터가 없습니다.")
+        
+        st.markdown("---")
+        
+        # ── 팀 배정 현황 ──
+        st.markdown('<div class="section-title">🤝 팀 배정 현황</div>', unsafe_allow_html=True)
+        ts_c1, ts_c2, ts_c3, ts_c4 = st.columns(4)
+        ts_c1.metric("🏢 팀 배정", f"{team_stats['팀배정건수']}명")
+        ts_c2.metric("👤 개별 배정", f"{team_stats['개별배정건수']}명")
+        ts_c3.metric("🏷️ 팀 수", f"{team_stats['팀수']}개")
+        ts_c4.metric("👥 팀원", f"{team_stats.get('팀원수', 0)}명")
+        
+        if team_stats['팀배정건수'] > 0 and not df_dispatch.empty:
+            col_team = ud.find_col(df_dispatch, ["팀코드"])
+            if col_team:
+                team_df = df_dispatch[df_dispatch[col_team].astype(str).str.strip().ne('') & df_dispatch[col_team].astype(str).str.strip().ne('nan')]
+                if not team_df.empty:
+                    col_name = ud.find_col(team_df, ["인력명", "직원명"])
+                    col_pay_target = ud.find_col(team_df, ["결제대상"])
+                    col_event = ud.find_col(team_df, ["행사명"])
+                    display = []
+                    if col_name and col_event:
+                        for tc in team_df[col_team].unique():
+                            team_rows = team_df[team_df[col_team] == tc]
+                            leader = ""
+                            members = []
+                            for _, r in team_rows.iterrows():
+                                name = str(r.get(col_name, ''))
+                                if col_pay_target and str(r.get(col_pay_target, '')).strip() == 'Y':
+                                    leader = name
+                                else:
+                                    members.append(name)
+                            event = str(team_rows.iloc[0].get(col_event, '')) if col_event else ''
+                            display.append({"팀코드": tc, "행사": event, "팀장": leader, "팀원": ", ".join(members), "인원": len(team_rows)})
+                        if display:
+                            st.dataframe(pd.DataFrame(display), use_container_width=True, hide_index=True)
+        
+        st.markdown("---")
         st.markdown('<div class="section-title">🏆 가장 많이 파견된 인원 (Top 10)</div>', unsafe_allow_html=True)
         
         top_staff = ud.get_most_dispatched_staff(df_dispatch, top_n=10)
@@ -813,7 +986,8 @@ def show(data):
         with col_info1:
             st.metric("📋 총 계약건수", len(df_settlement) if not df_settlement.empty else 0)
         with col_info2:
-            _col_progress = ud.find_col(df_settlement, ["진행상황", "상태", "입금상태"]) if not df_settlement.empty else None
+            # 입금여부 컬럼 우선 사용
+            _col_progress = ud.find_col(df_settlement, ["입금여부", "진행상황", "상태", "입금상태"]) if not df_settlement.empty else None
             paid_count = len(df_settlement[df_settlement[_col_progress].astype(str).str.contains('완료', na=False)]) if _col_progress else 0
             st.metric("✅ 입금완료", paid_count)
         with col_info3:
@@ -1273,3 +1447,119 @@ def show(data):
             else:
                 st.info("💡 고객 분석을 위한 데이터가 필요합니다.")
 
+    # [Tab 9] 수익 분석
+    with tab9:
+        st.markdown('<div class="section-title">💎 수익성 분석 (영업이익)</div>', unsafe_allow_html=True)
+        st.caption("공급가액 - 지급액 = 영업이익")
+        
+        # ── 핵심 수익 지표 ──
+        pr_c1, pr_c2, pr_c3, pr_c4 = st.columns(4)
+        pr_c1.metric("📦 공급가액", f"₩{operating_profit['공급가액']:,}")
+        pr_c2.metric("💸 총 지급액", f"₩{operating_profit['지급액']:,}")
+        
+        profit_delta = f"{operating_profit['이익률']}%" if operating_profit['이익률'] != 0 else "0%"
+        pr_c3.metric("💎 영업이익", f"₩{operating_profit['영업이익']:,}", delta=profit_delta)
+        pr_c4.metric("📊 이익률", f"{operating_profit['이익률']}%")
+        
+        st.markdown("---")
+        
+        # ── 공급가액 vs 지급액 비교 차트 ──
+        st.markdown("##### 📊 공급가액 vs 지급액 비교")
+        fig_profit = go.Figure()
+        fig_profit.add_trace(go.Bar(
+            x=['공급가액', '지급액', '영업이익'],
+            y=[operating_profit['공급가액'], operating_profit['지급액'], operating_profit['영업이익']],
+            marker_color=['#3B82F6', '#EF4444', '#10B981' if operating_profit['영업이익'] >= 0 else '#DC2626'],
+            text=[f"₩{operating_profit['공급가액']:,}", f"₩{operating_profit['지급액']:,}", f"₩{operating_profit['영업이익']:,}"],
+            textposition='outside'
+        ))
+        fig_profit.update_layout(
+            margin=dict(l=10, r=10, t=30, b=10), height=350,
+            showlegend=False, yaxis_title="금액(원)", yaxis_tickformat=","
+        )
+        st.plotly_chart(fig_profit, use_container_width=True)
+        
+        st.markdown("---")
+        
+        # ── 견적 → 체결 전환 분석 ──
+        st.markdown("##### 🎯 견적 → 체결 전환율 분석")
+        conv_c1, conv_c2, conv_c3, conv_c4 = st.columns(4)
+        conv_c1.metric("📋 견적 발송", f"{conversion['견적건수']}건")
+        conv_c2.metric("📝 체결 완료", f"{conversion['체결건수']}건")
+        conv_c3.metric("🎯 전환율", f"{conversion['전체전환율']}%")
+        conv_c4.metric("⏳ 대기 중", f"{conversion['대기건수']}건")
+        
+        if conversion['견적건수'] > 0:
+            fig_conv = go.Figure(data=[go.Pie(
+                labels=['체결', '대기중', '미체결'],
+                values=[
+                    conversion['체결건수'],
+                    conversion['대기건수'],
+                    max(0, conversion['견적건수'] - conversion['체결건수'] - conversion['대기건수'])
+                ],
+                marker=dict(colors=['#10B981', '#F59E0B', '#EF4444']),
+                hole=.4,
+                textinfo='label+percent'
+            )])
+            fig_conv.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=300)
+            st.plotly_chart(fig_conv, use_container_width=True)
+        
+        # ── 미체결 경과 건 상세 ──
+        if not stale_estimates.empty:
+            st.markdown("---")
+            st.markdown("##### ⏰ 견적 후 미체결 경과 건")
+            st.warning(f"견적 발송 후 7일 이상 미체결 건이 {len(stale_estimates)}건 있습니다. 확인 필요!")
+            st.dataframe(stale_estimates, use_container_width=True, hide_index=True)
+        
+        st.markdown("---")
+        
+        # ── 직군별 수익성 ──
+        if not role_stats.empty and '총지급액' in role_stats.columns:
+            st.markdown("##### 🔧 직군별 지급액 분포")
+            fig_role_cost = px.pie(
+                role_stats[role_stats['총지급액'] > 0],
+                values='총지급액', names='직군',
+                color_discrete_sequence=px.colors.qualitative.Set3
+            )
+            fig_role_cost.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=350)
+            st.plotly_chart(fig_role_cost, use_container_width=True)
+        
+        # ── 정산 건별 이익 상세 ──
+        if not df_settlement.empty:
+            st.markdown("---")
+            st.markdown("##### 📋 건별 이익 현황")
+            
+            col_supply_s = ud.find_col(df_settlement, ["공급가액"])
+            col_payment_s = ud.find_col(df_settlement, ["지급액"])
+            col_profit_s = ud.find_col(df_settlement, ["이익"])
+            col_client_s = ud.find_col(df_settlement, ["업체", "업체명"])
+            col_event_s = ud.find_col(df_settlement, ["현장명", "행사명"])
+            
+            profit_cols = []
+            if col_client_s: profit_cols.append(col_client_s)
+            if col_event_s: profit_cols.append(col_event_s)
+            if col_supply_s: profit_cols.append(col_supply_s)
+            if col_payment_s: profit_cols.append(col_payment_s)
+            if col_profit_s: profit_cols.append(col_profit_s)
+            
+            if len(profit_cols) >= 3:
+                profit_df = df_settlement[profit_cols].copy()
+                # 숫자 변환
+                for nc in [col_supply_s, col_payment_s, col_profit_s]:
+                    if nc and nc in profit_df.columns:
+                        profit_df[nc] = profit_df[nc].apply(ud.safe_int)
+                
+                # 이익 컬럼이 없으면 계산
+                if not col_profit_s and col_supply_s and col_payment_s:
+                    profit_df['이익'] = profit_df[col_supply_s] - profit_df[col_payment_s]
+                
+                # 비어있지 않은 행만
+                if col_supply_s:
+                    profit_df = profit_df[profit_df[col_supply_s] > 0]
+                
+                if not profit_df.empty:
+                    st.dataframe(profit_df, use_container_width=True, hide_index=True)
+                else:
+                    st.info("건별 이익 데이터가 없습니다.")
+            else:
+                st.info("정산 시트에 공급가액/지급액 컬럼이 필요합니다.")

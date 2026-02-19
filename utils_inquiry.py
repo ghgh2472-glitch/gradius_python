@@ -42,6 +42,7 @@ class InquiryParser:
             "date_start": "", "date_end": "", 
             "evt_time": "", "headcount": "", 
             "service_type": "", "pay": "",
+            "dress": "", "meal": "", "parking": "",
             "note_detail": ""
         }
         
@@ -65,8 +66,8 @@ class InquiryParser:
             "headcount": [r'요청인원수\s*[:]\s*(.*)', r'인원\s*[:]\s*(.*)', r'인원수\s*[:]\s*(.*)'],
             "pay": [r'페이\s*[:]\s*(.*)', r'예산\s*[:]\s*(.*)', r'금액\s*[:]\s*(.*)'],
             
-            # 비고로 보낼 항목들
-            "attire": [r'복장\s*[:]\s*(.*)'],
+            # 현장 조건 (개별 저장)
+            "dress": [r'복장\s*[:]\s*(.*)'],
             "meal": [r'식사\s*[:]\s*(.*)'],
             "parking": [r'주차\s*[:]\s*(.*)'],
             "extra_note": [r'특이사항\s*[:]\s*(.*)']
@@ -86,13 +87,20 @@ class InquiryParser:
                     
                     if key == 'date_raw':
                         raw_date = val
+                    elif key == 'extra_note':
+                        # 특이사항은 해당 라인 이후 모든 텍스트 캡처 (멀티라인)
+                        _note_start = text.find(match.group(0))
+                        if _note_start >= 0:
+                            _after = text[_note_start + len(match.group(0)):].strip()
+                            # 남은 텍스트에서 다른 키워드 패턴 전까지 수집
+                            extracted['note_detail'] = (val + '\n' + _after).strip() if _after else val
+                        else:
+                            extracted['note_detail'] = val
                     elif key in extracted:
                         extracted[key] = val
                     else:
-                        # 비고란 합치기
-                        label_map = {"attire": "복장", "meal": "식사", "parking": "주차", "extra_note": "추가요청"}
                         if val:
-                            details.append(f"- {label_map.get(key, key)}: {val}")
+                            details.append(f"- {key}: {val}")
                     break
         
         # 3. [고도화] 날짜 분리 및 스마트 변환
@@ -107,8 +115,8 @@ class InquiryParser:
                 extracted['date_start'] = formatted
                 extracted['date_end'] = formatted
                 
-        # 4. 상세 내용 정리
-        if details:
+        # 4. 상세 내용 정리 (note_detail이 비어있을 때만 details로 덮어쓰기)
+        if details and not extracted['note_detail']:
             extracted['note_detail'] = "\n".join(details)
             
         return extracted

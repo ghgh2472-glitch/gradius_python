@@ -10,6 +10,7 @@ import page_staff_new as page_staff     # 4단계: 인원배정 (고도화 버�
 import page_attendance # 5단계: 출석부
 import page_settlement  # 6단계: 정산
 import page_project_detail  # 프로젝트 상세확인
+import page_guide  # 사용 가이드
 
 # 데이터 모듈 임포트
 import data_loader as db
@@ -89,15 +90,16 @@ with st.sidebar:
     menu = st.radio(
         "업무 선택",
         [
-            "� 경영 대시보드",
-            "�📞 문의 접수 및 관리",
+            "🚀 경영 대시보드",
+            "📞 문의 접수 및 관리",
             "🧮 견적 통합 관리",
             "📝 계약 관리 및 승인",
             "👷 인원 배정 관리",
             "📋 출석부 관리",
             "💰 정산 및 급여 관리",
-            "� 프로젝트 상세확인",
-            "�🚌 기타 (준비중)"
+            "🔍 프로젝트 상세확인",
+            "📘 사용 가이드",
+            "🚌 기타 (준비중)"
         ],
         index=0
     )
@@ -158,6 +160,9 @@ elif "정산" in menu:
 
 elif "상세확인" in menu:
     page_project_detail.show(data)
+
+elif "가이드" in menu:
+    page_guide.show(data)
 
 else:
     st.info("🚧 추가 기능은 현재 개발 중입니다. (Coming Soon)")

@@ -306,8 +306,70 @@ def show_settlement_overview():
         st.warning("⚠️ 표시할 컬럼이 없습니다")
 
 
+def update_payment_and_profit(inquiry_id, total_payment, supply_amount=None):
+    """지급액과 이익을 계약건은청구금액적기 시트에 업데이트
+    
+    Args:
+        inquiry_id: 문의ID
+        total_payment: 총 지급액 (인력 급여 합계)
+        supply_amount: 공급가액 (None이면 시트에서 읽어옴)
+    """
+    try:
+        client = db.get_connection()
+        if not client:
+            return False
+        
+        sh = client.open_by_key(db.SHEET_ID)
+        wks = sh.worksheet("계약건은청구금액적기")
+        headers = wks.row_values(1)
+        all_records = wks.get_all_records()
+        
+        target_row = None
+        current_record = None
+        for idx, record in enumerate(all_records, start=2):
+            if str(record.get('문의ID', '')).strip() == str(inquiry_id).strip():
+                target_row = idx
+                current_record = record
+                break
+        
+        if not target_row:
+            return False
+        
+        # 컬럼 인덱스 찾기
+        col_map = {}
+        for i, h in enumerate(headers, 1):
+            h_clean = str(h).strip()
+            if h_clean == '지급액':
+                col_map['지급액'] = i
+            elif h_clean == '이익':
+                col_map['이익'] = i
+            elif h_clean == '공급가액':
+                col_map['공급가액'] = i
+        
+        # 공급가액이 없으면 현재 레코드에서 읽기
+        if supply_amount is None and current_record:
+            try:
+                supply_amount = int(float(current_record.get('공급가액', 0) or 0))
+            except:
+                supply_amount = 0
+        
+        # 지급액 업데이트
+        if '지급액' in col_map:
+            wks.update_cell(target_row, col_map['지급액'], int(total_payment))
+        
+        # 이익 자동 계산 (공급가액 - 지급액)
+        if '이익' in col_map and supply_amount is not None:
+            profit = int(supply_amount) - int(total_payment)
+            wks.update_cell(target_row, col_map['이익'], profit)
+        
+        return True
+    except Exception as e:
+        print(f"지급액/이익 업데이트 실패: {e}")
+        return False
+
+
 def _direct_save_settlement(inquiry_id, paid, balance, status):
-    """받은금액/잔액/진행상황을 직접 저장 (data_editor 연동)"""
+    """받은금액/잔액/입금여부를 직접 저장 (data_editor 연동)"""
     try:
         client = db.get_connection()
         if not client:
@@ -329,14 +391,17 @@ def _direct_save_settlement(inquiry_id, paid, balance, status):
                 col_map['받은금액'] = i
             elif h == '잔액':
                 col_map['잔액'] = i
+            elif h == '입금여부':
+                col_map['입금여부'] = i
             elif h == '진행상황':
                 col_map['진행상황'] = i
         if '받은금액' in col_map:
             wks.update_cell(target_row, col_map['받은금액'], int(paid))
         if '잔액' in col_map:
             wks.update_cell(target_row, col_map['잔액'], int(balance))
-        if '진행상황' in col_map and status:
-            wks.update_cell(target_row, col_map['진행상황'], status)
+        # 입금여부 컬럼 업데이트 (분리된 상태 관리)
+        if '입금여부' in col_map and status:
+            wks.update_cell(target_row, col_map['입금여부'], status)
         return True
     except Exception as e:
         st.error(f"저장 실패: {e}")
@@ -344,7 +409,7 @@ def _direct_save_settlement(inquiry_id, paid, balance, status):
 
 
 def save_payment_record(inquiry_id, total_paid, total_invoice):
-    """입금 기록을 Google Sheets에 저장"""
+    """입금 기록을 Google Sheets에 저장 (입금여부 컬럼 활용)"""
     try:
         # NaN 값 처리
         total_paid = 0 if pd.isna(total_paid) else float(total_paid)
@@ -370,43 +435,36 @@ def save_payment_record(inquiry_id, total_paid, total_invoice):
             st.error(f"❌ 문의ID '{inquiry_id}'를 찾을 수 없습니다.")
             return False
         
-        # 받은금액 컬럼 찾기
+        # 컬럼 인덱스 매핑
         headers = wks.row_values(1)
-        paid_col_idx = None
+        col_map = {}
         for idx, header in enumerate(headers, start=1):
-            if '받은금액' in str(header):
-                paid_col_idx = idx
-                break
-        
-        if not paid_col_idx:
-            st.error("❌ '받은금액' 컬럼을 찾을 수 없습니다.")
-            return False
+            h = str(header).strip()
+            if '받은금액' in h:
+                col_map['받은금액'] = idx
+            elif h == '잔액':
+                col_map['잔액'] = idx
+            elif h == '입금여부':
+                col_map['입금여부'] = idx
         
         # 받은금액 업데이트
-        wks.update_cell(target_row, paid_col_idx, int(total_paid))
+        if '받은금액' in col_map:
+            wks.update_cell(target_row, col_map['받은금액'], int(total_paid))
         
-        # 잔액 컬럼 찾기 및 업데이트
-        balance_col_idx = None
-        for idx, header in enumerate(headers, start=1):
-            if header == '잔액':
-                balance_col_idx = idx
-                break
+        # 잔액 업데이트
+        remaining = int(total_invoice - total_paid)
+        if '잔액' in col_map:
+            wks.update_cell(target_row, col_map['잔액'], remaining)
         
-        if balance_col_idx:
-            remaining = int(total_invoice - total_paid)
-            wks.update_cell(target_row, balance_col_idx, remaining)
-        
-        # 진행상황 컬럼 찾기 및 업데이트
-        status_col_idx = None
-        for idx, header in enumerate(headers, start=1):
-            if header == '진행상황':
-                status_col_idx = idx
-                break
-        
-        if status_col_idx:
-            # 잔액이 0 이하면 "입금완료", 아니면 "부분입금"
-            status = "입금완료" if (total_invoice - total_paid) <= 0 else "부분입금"
-            wks.update_cell(target_row, status_col_idx, status)
+        # 입금여부 컬럼 업데이트 (진행상황 대신)
+        if '입금여부' in col_map:
+            if remaining <= 0:
+                status = "입금완료"
+            elif total_paid > 0:
+                status = "부분입금"
+            else:
+                status = "미입금"
+            wks.update_cell(target_row, col_map['입금여부'], status)
         
         return True
     except Exception as e:
@@ -733,7 +791,20 @@ def show_settlement_detail(data):
         # 정산 완료 버튼
         if cur_status == '완료':
             st.divider()
+            
+            # 배정기록에서 총 지급액 계산
+            total_payment = 0
+            if not assignment_df.empty:
+                total_col = '총지급액' if '총지급액' in assignment_df.columns else None
+                if total_col:
+                    total_payment = int(assignment_df[total_col].astype(float).sum())
+            
+            st.info(f"💰 총 지급액: **{total_payment:,}원** | 예상 이익: **{summary['매출'] - total_payment:,}원**")
+            
             if st.button("🏁 최종 정산 완료 (프로젝트 종료)", type="primary"):
+                # 지급액 / 이익 업데이트
+                update_payment_and_profit(inq_id_for_update, total_payment, summary['매출'])
+                # 상태 업데이트
                 db.update_status(inq_id_for_update, sc.STATUS_FLOW[6])  # '정산완료'
                 st.cache_data.clear()
                 st.balloons(); st.success("모든 정산이 완료되었습니다!"); st.rerun()

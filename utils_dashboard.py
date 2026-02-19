@@ -710,10 +710,10 @@ def get_upcoming_dispatch_info(df_dispatch, df_inq, days=7):
         return pd.DataFrame()
 
 def get_payment_status_breakdown(df_settlement):
-    """정산 상태별 분류 (입금완료, 부분입금, 미수금)"""
+    """정산 상태별 분류 (입금완료, 부분입금, 미수금) - 입금여부 컬럼 우선 사용"""
     if df_settlement.empty: return {}
     
-    col_status = find_col(df_settlement, ["진행상황", "상태", "입금상태"])
+    col_status = find_col(df_settlement, ["입금여부", "진행상황", "상태", "입금상태"])
     
     if not col_status: return {}
     
@@ -723,6 +723,172 @@ def get_payment_status_breakdown(df_settlement):
     except Exception as e:
         print(f"Status breakdown error: {e}")
         return {}
+
+
+def get_operating_profit(df_settlement, df_dispatch):
+    """영업이익 계산: 공급가액 합계 - 총지급액 합계"""
+    total_supply = 0
+    total_payment = 0
+    
+    # 1) 정산 시트에서 공급가액 합계
+    if not df_settlement.empty:
+        col_supply = find_col(df_settlement, ["공급가액"])
+        col_payment_s = find_col(df_settlement, ["지급액"])
+        if col_supply:
+            total_supply = df_settlement[col_supply].apply(safe_int).sum()
+        if col_payment_s:
+            total_payment = df_settlement[col_payment_s].apply(safe_int).sum()
+    
+    # 2) 지급액이 정산 시트에 없으면 배정기록에서 총지급액 합산
+    if total_payment == 0 and not df_dispatch.empty:
+        col_total_pay = find_col(df_dispatch, ["총지급액", "지급액"])
+        if col_total_pay:
+            total_payment = df_dispatch[col_total_pay].apply(safe_int).sum()
+    
+    profit = total_supply - total_payment
+    margin_rate = round(profit / total_supply * 100, 1) if total_supply > 0 else 0
+    
+    return {
+        "공급가액": total_supply,
+        "지급액": total_payment,
+        "영업이익": profit,
+        "이익률": margin_rate
+    }
+
+
+def get_stale_estimates(df_inq, days_threshold=7):
+    """견적 작성 후 N일 이상 체결 안 된 건 목록"""
+    if df_inq.empty: return pd.DataFrame()
+    
+    col_status = find_col(df_inq, ["체결", "상태"])
+    col_date = find_col(df_inq, ["작성일", "문의날짜", "날짜"])
+    col_client = find_col(df_inq, ["업체명", "고객명"])
+    col_event = find_col(df_inq, ["행사명"])
+    col_id = find_col(df_inq, ["문의ID", "ID", "관리번호"])
+    
+    if not col_status or not col_date: return pd.DataFrame()
+    
+    try:
+        df = df_inq[df_inq[col_status].astype(str).str.strip() == '견적'].copy()
+        if df.empty: return pd.DataFrame()
+        
+        df['_date'] = pd.to_datetime(df[col_date], errors='coerce')
+        df = df.dropna(subset=['_date'])
+        if df.empty: return pd.DataFrame()
+        
+        today = datetime.now()
+        df['경과일'] = (today - df['_date']).dt.days
+        df = df[df['경과일'] >= days_threshold]
+        if df.empty: return pd.DataFrame()
+        
+        df = df.sort_values('경과일', ascending=False)
+        
+        result_cols = {}
+        if col_id: result_cols['문의ID'] = col_id
+        if col_client: result_cols['업체명'] = col_client
+        if col_event: result_cols['행사명'] = col_event
+        result_cols['경과일'] = '경과일'
+        
+        res = df[list(result_cols.values())].copy()
+        res.columns = list(result_cols.keys())
+        return res.head(10)
+    except Exception as e:
+        print(f"Stale estimates error: {e}")
+        return pd.DataFrame()
+
+
+def get_estimate_conversion_rate(df_inq):
+    """견적 → 체결 전환율 (월별 + 전체)"""
+    if df_inq.empty: return {"전체전환율": 0, "견적건수": 0, "체결건수": 0, "대기건수": 0}
+    
+    col_status = find_col(df_inq, ["체결", "상태"])
+    if not col_status: return {"전체전환율": 0, "견적건수": 0, "체결건수": 0, "대기건수": 0}
+    
+    try:
+        statuses = df_inq[col_status].astype(str).str.strip()
+        
+        # 견적 단계를 거친 건 = 현재 견적 + 체결 이후 + 미체결
+        estimate_passed = statuses.isin(['견적', '체결', '배정완료', '진행중', '완료', '정산완료', '미체결'])
+        total_estimated = int(estimate_passed.sum())
+        
+        # 체결된 건 (체결 이후 모든 단계)
+        contracted = statuses.isin(['체결', '배정완료', '진행중', '완료', '정산완료'])
+        total_contracted = int(contracted.sum())
+        
+        # 아직 견적 대기 중인 건
+        waiting = int((statuses == '견적').sum())
+        
+        rate = round(total_contracted / total_estimated * 100, 1) if total_estimated > 0 else 0
+        
+        return {
+            "전체전환율": rate,
+            "견적건수": total_estimated,
+            "체결건수": total_contracted,
+            "대기건수": waiting
+        }
+    except:
+        return {"전체전환율": 0, "견적건수": 0, "체결건수": 0, "대기건수": 0}
+
+
+def get_role_statistics(df_dispatch):
+    """직군별 배정 통계 (가장 많이 배정된 직군 순위)"""
+    if df_dispatch.empty: return pd.DataFrame()
+    
+    col_role = find_col(df_dispatch, ["직무", "직급", "직책", "역할"])
+    if not col_role: return pd.DataFrame()
+    
+    try:
+        df = df_dispatch.copy()
+        df[col_role] = df[col_role].fillna('기타').astype(str).str.strip()
+        df = df[df[col_role] != '']
+        df = df[df[col_role] != '기타']
+        
+        ranking = df[col_role].value_counts().reset_index()
+        ranking.columns = ['직군', '배정횟수']
+        ranking = ranking.head(10).reset_index(drop=True)
+        ranking['순위'] = ranking.index + 1
+        
+        # 총지급액 집계
+        col_pay = find_col(df_dispatch, ["총지급액", "지급액"])
+        if col_pay:
+            pay_by_role = df.groupby(col_role)[col_pay].apply(lambda x: x.apply(safe_int).sum())
+            ranking['총지급액'] = ranking['직군'].map(pay_by_role).fillna(0).astype(int)
+        
+        return ranking[['순위', '직군', '배정횟수'] + (['총지급액'] if '총지급액' in ranking.columns else [])]
+    except Exception as e:
+        print(f"Role statistics error: {e}")
+        return pd.DataFrame()
+
+
+def get_team_dispatch_stats(df_dispatch):
+    """팀 배정 통계"""
+    if df_dispatch.empty: return {"팀배정건수": 0, "개별배정건수": 0, "팀수": 0, "팀원수": 0}
+    
+    col_team = find_col(df_dispatch, ["팀코드"])
+    if not col_team: return {"팀배정건수": 0, "개별배정건수": 0, "팀수": 0, "팀원수": 0}
+    
+    try:
+        team_mask = df_dispatch[col_team].astype(str).str.strip().ne('') & df_dispatch[col_team].astype(str).str.strip().ne('nan')
+        team_count = int(team_mask.sum())
+        individual_count = len(df_dispatch) - team_count
+        
+        unique_teams = df_dispatch.loc[team_mask, col_team].nunique()
+        
+        col_pay_target = find_col(df_dispatch, ["결제대상"])
+        team_leaders = 0
+        if col_pay_target:
+            team_leaders = int((df_dispatch.loc[team_mask, col_pay_target].astype(str).str.strip() == 'Y').sum())
+        
+        return {
+            "팀배정건수": team_count,
+            "개별배정건수": individual_count,
+            "팀수": int(unique_teams),
+            "팀장수": team_leaders,
+            "팀원수": team_count - team_leaders
+        }
+    except Exception as e:
+        print(f"Team stats error: {e}")
+        return {"팀배정건수": 0, "개별배정건수": 0, "팀수": 0, "팀원수": 0}
 
 # ---------------------------------------------------------
 # 8. 자동화 리포트 생성
