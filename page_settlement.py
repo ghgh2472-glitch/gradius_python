@@ -236,7 +236,7 @@ def show_settlement_overview():
                 elif c == '부가세':
                     editable_cols[c] = st.column_config.NumberColumn("부가세", format="%d", disabled=True)
                 elif c == '입금여부':
-                    editable_cols[c] = st.column_config.SelectboxColumn("🏦입금", options=["", "미입금", "부분입금", "입금완료"], width="small")
+                    editable_cols[c] = st.column_config.SelectboxColumn("🏦입금", options=["", "미입금", "부분입금", "입금완료"], width="small", help="받은금액 수정 시 자동 변경")
                 elif c == '세금계산서 발행여부':
                     editable_cols[c] = st.column_config.SelectboxColumn("🧾계산서", options=["", "미발행", "발행요청", "발행완료"], width="small")
                 elif c == '지급액':
@@ -244,7 +244,7 @@ def show_settlement_overview():
                 elif c == '이익':
                     editable_cols[c] = st.column_config.NumberColumn("📈이익", format="%d", disabled=True, help="공급가액 - 지급액 (자동 계산)")
                 elif c == '진행상황':
-                    editable_cols[c] = st.column_config.SelectboxColumn("진행상황", options=["계약체결", "미입금", "부분입금", "입금완료", "정산완료"])
+                    editable_cols[c] = st.column_config.SelectboxColumn("📌진행", options=["계약체결", "행사준비", "행사종료", "정산완료"], help="프로젝트 단계")
                 else:
                     editable_cols[c] = st.column_config.Column(c, disabled=True)
             
@@ -284,16 +284,14 @@ def show_settlement_overview():
                             if paid_changed:
                                 if _bal_v <= 0:
                                     _deposit_v = "입금완료"
-                                    _status_v = "입금완료"
                                 elif _paid_v > 0:
                                     _deposit_v = "부분입금"
-                                    _status_v = "부분입금"
                                 else:
                                     _deposit_v = "미입금"
-                                    _status_v = "미입금"
                             else:
                                 _deposit_v = str(curr.get('입금여부', ''))
-                                _status_v = str(curr.get('진행상황', ''))
+                            # 진행상황은 사용자가 직접 선택 (입금여부와 독립)
+                            _status_v = str(curr.get('진행상황', ''))
                             
                             _tax_inv_v = str(curr.get('세금계산서 발행여부', ''))
                             _payout_v = int(curr.get('지급액', 0))
@@ -475,18 +473,17 @@ def save_payment_record(inquiry_id, total_paid, total_invoice):
         
         remaining_amt = total_invoice - total_paid
         if remaining_amt <= 0:
-            auto_status = "입금완료"
+            auto_deposit = "입금완료"
         elif total_paid > 0:
-            auto_status = "부분입금"
+            auto_deposit = "부분입금"
         else:
-            auto_status = "미입금"
+            auto_deposit = "미입금"
         
         from gspread.cell import Cell
         extra_cells = []
-        if '진행상황' in col_indices:
-            extra_cells.append(Cell(row=target_row, col=col_indices['진행상황'], value=auto_status))
+        # 입금여부만 자동 변경 (진행상황은 프로젝트 단계이므로 건드리지 않음)
         if '입금여부' in col_indices:
-            extra_cells.append(Cell(row=target_row, col=col_indices['입금여부'], value=auto_status))
+            extra_cells.append(Cell(row=target_row, col=col_indices['입금여부'], value=auto_deposit))
         if extra_cells:
             wks.update_cells(extra_cells, value_input_option='RAW')
         
