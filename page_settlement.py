@@ -194,14 +194,20 @@ def show_settlement_overview():
     # 입금완료 / 미수금 / 전체 서브탭
     st.markdown("### 📋 전체 계약 정산 현황")
     
-    display_cols = ['문의ID', '업체', '현장명', '공급가액', '부가세', '받은금액', '잔액', '진행상황']
+    display_cols = ['문의ID', '업체', '현장명', '청구금액', '공급가액', '부가세', '받은금액', '잔액',
+                     '입금여부', '세금계산서 발행여부', '지급액', '이익', '진행상황']
     available_cols = [c for c in display_cols if c in settlement_df.columns]
     
     if available_cols:
         full_edit_df = settlement_df[available_cols].copy()
-        for nc in ['공급가액', '부가세', '받은금액', '잔액']:
+        for nc in ['청구금액', '공급가액', '부가세', '받은금액', '잔액', '지급액', '이익']:
             if nc in full_edit_df.columns:
                 full_edit_df[nc] = pd.to_numeric(full_edit_df[nc], errors='coerce').fillna(0).astype(int)
+        
+        # 청구금액이 0이면 공급가액+부가세로 채움
+        if '청구금액' in full_edit_df.columns and '공급가액' in full_edit_df.columns and '부가세' in full_edit_df.columns:
+            mask_no_inv = full_edit_df['청구금액'] == 0
+            full_edit_df.loc[mask_no_inv, '청구금액'] = full_edit_df.loc[mask_no_inv, '공급가액'] + full_edit_df.loc[mask_no_inv, '부가세']
         
         # 잔액이 없으면 자동 계산
         if '잔액' in full_edit_df.columns and '공급가액' in full_edit_df.columns and '부가세' in full_edit_df.columns and '받은금액' in full_edit_df.columns:
@@ -220,11 +226,25 @@ def show_settlement_overview():
             editable_cols = {}
             for c in available_cols:
                 if c == '받은금액':
-                    editable_cols[c] = st.column_config.NumberColumn(c, min_value=0, step=10000, format="%d")
+                    editable_cols[c] = st.column_config.NumberColumn("💵받은금액", min_value=0, step=10000, format="%d")
                 elif c == '잔액':
-                    editable_cols[c] = st.column_config.NumberColumn(c, min_value=0, format="%d", disabled=True, help="받은금액 수정 시 자동 계산됩니다")
+                    editable_cols[c] = st.column_config.NumberColumn("잔액", min_value=0, format="%d", disabled=True, help="받은금액 수정 시 자동 계산")
+                elif c == '청구금액':
+                    editable_cols[c] = st.column_config.NumberColumn("💰청구금액", format="%d", disabled=True)
+                elif c == '공급가액':
+                    editable_cols[c] = st.column_config.NumberColumn("공급가액", format="%d", disabled=True)
+                elif c == '부가세':
+                    editable_cols[c] = st.column_config.NumberColumn("부가세", format="%d", disabled=True)
+                elif c == '입금여부':
+                    editable_cols[c] = st.column_config.SelectboxColumn("🏦입금", options=["", "미입금", "부분입금", "입금완료"], width="small")
+                elif c == '세금계산서 발행여부':
+                    editable_cols[c] = st.column_config.SelectboxColumn("🧾계산서", options=["", "미발행", "발행요청", "발행완료"], width="small")
+                elif c == '지급액':
+                    editable_cols[c] = st.column_config.NumberColumn("💸지급액", min_value=0, step=10000, format="%d", help="인력 급여 합계")
+                elif c == '이익':
+                    editable_cols[c] = st.column_config.NumberColumn("📈이익", format="%d", disabled=True, help="공급가액 - 지급액 (자동 계산)")
                 elif c == '진행상황':
-                    editable_cols[c] = st.column_config.SelectboxColumn(c, options=["미입금", "부분입금", "입금완료"])
+                    editable_cols[c] = st.column_config.SelectboxColumn("진행상황", options=["계약체결", "미입금", "부분입금", "입금완료", "정산완료"])
                 else:
                     editable_cols[c] = st.column_config.Column(c, disabled=True)
             
@@ -243,32 +263,51 @@ def show_settlement_overview():
                     orig = df_view.reset_index(drop=True).iloc[idx]
                     curr = edited.iloc[idx]
                     
-                    # 받은금액이 변경되면 잔액 자동 재계산
+                    # 변경 감지: 각 편집 가능 필드 체크
                     paid_changed = ('받은금액' in orig.index and int(orig['받은금액']) != int(curr['받은금액']))
                     status_changed = ('진행상황' in orig.index and str(orig['진행상황']) != str(curr['진행상황']))
+                    deposit_changed = ('입금여부' in orig.index and str(orig['입금여부']) != str(curr.get('입금여부', '')))
+                    tax_inv_changed = ('세금계산서 발행여부' in orig.index and str(orig['세금계산서 발행여부']) != str(curr.get('세금계산서 발행여부', '')))
+                    payout_changed = ('지급액' in orig.index and int(orig['지급액']) != int(curr.get('지급액', 0)))
                     
-                    if paid_changed or status_changed:
+                    any_changed = paid_changed or status_changed or deposit_changed or tax_inv_changed or payout_changed
+                    
+                    if any_changed:
                         inq_id_edit = str(curr.get('문의ID', '')).strip()
                         if inq_id_edit:
                             _paid_v = int(curr.get('받은금액', 0))
-                            # 잔액 자동 계산: 공급가액 + 부가세 - 받은금액
                             _supply = int(curr.get('공급가액', 0))
                             _tax = int(curr.get('부가세', 0))
                             _bal_v = max(0, _supply + _tax - _paid_v)
-                            # 진행상황 자동 결정
+                            
+                            # 입금여부 자동 결정 (받은금액 변경 시)
                             if paid_changed:
                                 if _bal_v <= 0:
+                                    _deposit_v = "입금완료"
                                     _status_v = "입금완료"
                                 elif _paid_v > 0:
+                                    _deposit_v = "부분입금"
                                     _status_v = "부분입금"
                                 else:
+                                    _deposit_v = "미입금"
                                     _status_v = "미입금"
                             else:
+                                _deposit_v = str(curr.get('입금여부', ''))
                                 _status_v = str(curr.get('진행상황', ''))
-                            _direct_save_settlement(inq_id_edit, _paid_v, _bal_v, _status_v)
+                            
+                            _tax_inv_v = str(curr.get('세금계산서 발행여부', ''))
+                            _payout_v = int(curr.get('지급액', 0))
+                            # 이익 자동 계산: 공급가액 - 지급액
+                            _profit_v = _supply - _payout_v if _payout_v > 0 else 0
+                            
+                            _direct_save_settlement(
+                                inq_id_edit, _paid_v, _bal_v, _status_v,
+                                deposit=_deposit_v, tax_invoice=_tax_inv_v,
+                                payout=_payout_v, profit=_profit_v
+                            )
                             _save_count += 1
                 if _save_count > 0:
-                    st.success(f"✅ {_save_count}건 저장 완료! (잔액 자동 계산 적용)")
+                    st.success(f"✅ {_save_count}건 저장 완료! (잔액·입금여부·이익 자동 계산 적용)")
                     db.invalidate_data()
                 else:
                     st.info("변경된 데이터가 없습니다.")
@@ -306,8 +345,20 @@ def show_settlement_overview():
         st.warning("⚠️ 표시할 컬럼이 없습니다")
 
 
-def _direct_save_settlement(inquiry_id, paid, balance, status):
-    """받은금액/잔액/진행상황을 직접 저장 (data_editor 연동)"""
+def _direct_save_settlement(inquiry_id, paid, balance, status,
+                            deposit='', tax_invoice='', payout=0, profit=0):
+    """정산 필드를 직접 저장 (data_editor 연동)
+    
+    Args:
+        inquiry_id: 문의ID
+        paid: 받은금액
+        balance: 잔액
+        status: 진행상황
+        deposit: 입금여부 (미입금/부분입금/입금완료)
+        tax_invoice: 세금계산서 발행여부 (미발행/발행요청/발행완료)
+        payout: 지급액
+        profit: 이익
+    """
     try:
         client = db.get_connection()
         if not client:
@@ -323,20 +374,37 @@ def _direct_save_settlement(inquiry_id, paid, balance, status):
                 break
         if not target_row:
             return False
+        
+        # 헤더 → 컬럼인덱스 매핑
         col_map = {}
+        header_targets = ['받은금액', '잔액', '진행상황', '입금여부', '세금계산서 발행여부', '지급액', '이익']
         for i, h in enumerate(headers, 1):
-            if '받은금액' in str(h):
+            h_clean = str(h).strip()
+            if h_clean in header_targets:
+                col_map[h_clean] = i
+            elif '받은금액' in h_clean:
                 col_map['받은금액'] = i
-            elif h == '잔액':
-                col_map['잔액'] = i
-            elif h == '진행상황':
-                col_map['진행상황'] = i
+        
+        # 일괄 업데이트 (Cell 객체 사용으로 API 호출 최소화)
+        from gspread.cell import Cell
+        cells = []
         if '받은금액' in col_map:
-            wks.update_cell(target_row, col_map['받은금액'], int(paid))
+            cells.append(Cell(row=target_row, col=col_map['받은금액'], value=int(paid)))
         if '잔액' in col_map:
-            wks.update_cell(target_row, col_map['잔액'], int(balance))
+            cells.append(Cell(row=target_row, col=col_map['잔액'], value=int(balance)))
         if '진행상황' in col_map and status:
-            wks.update_cell(target_row, col_map['진행상황'], status)
+            cells.append(Cell(row=target_row, col=col_map['진행상황'], value=str(status)))
+        if '입금여부' in col_map and deposit:
+            cells.append(Cell(row=target_row, col=col_map['입금여부'], value=str(deposit)))
+        if '세금계산서 발행여부' in col_map and tax_invoice:
+            cells.append(Cell(row=target_row, col=col_map['세금계산서 발행여부'], value=str(tax_invoice)))
+        if '지급액' in col_map and payout:
+            cells.append(Cell(row=target_row, col=col_map['지급액'], value=int(payout)))
+        if '이익' in col_map:
+            cells.append(Cell(row=target_row, col=col_map['이익'], value=int(profit)))
+        
+        if cells:
+            wks.update_cells(cells, value_input_option='RAW')
         return True
     except Exception as e:
         st.error(f"저장 실패: {e}")
@@ -396,17 +464,31 @@ def save_payment_record(inquiry_id, total_paid, total_invoice):
             remaining = int(total_invoice - total_paid)
             wks.update_cell(target_row, balance_col_idx, remaining)
         
-        # 진행상황 컬럼 찾기 및 업데이트
-        status_col_idx = None
+        # 진행상황 + 입금여부 컬럼 찾기 및 업데이트
+        col_indices = {}
         for idx, header in enumerate(headers, start=1):
-            if header == '진행상황':
-                status_col_idx = idx
-                break
+            h = str(header).strip()
+            if h == '진행상황':
+                col_indices['진행상황'] = idx
+            elif h == '입금여부':
+                col_indices['입금여부'] = idx
         
-        if status_col_idx:
-            # 잔액이 0 이하면 "입금완료", 아니면 "부분입금"
-            status = "입금완료" if (total_invoice - total_paid) <= 0 else "부분입금"
-            wks.update_cell(target_row, status_col_idx, status)
+        remaining_amt = total_invoice - total_paid
+        if remaining_amt <= 0:
+            auto_status = "입금완료"
+        elif total_paid > 0:
+            auto_status = "부분입금"
+        else:
+            auto_status = "미입금"
+        
+        from gspread.cell import Cell
+        extra_cells = []
+        if '진행상황' in col_indices:
+            extra_cells.append(Cell(row=target_row, col=col_indices['진행상황'], value=auto_status))
+        if '입금여부' in col_indices:
+            extra_cells.append(Cell(row=target_row, col=col_indices['입금여부'], value=auto_status))
+        if extra_cells:
+            wks.update_cells(extra_cells, value_input_option='RAW')
         
         return True
     except Exception as e:
