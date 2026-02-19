@@ -998,27 +998,32 @@ def save_candidates_batch(inquiry_id: str, event_name: str, candidates: list):
                 if not account: account = staff_info.get('계좌번호', '')
             
             batch_rows.append([
-                assign_id,                          # 배정ID
-                str(inquiry_id),                    # 문의ID
-                str(event_name),                    # 행사명
-                staff_name,                         # 인력명
-                c.get('구분', '외부'),              # 구분
-                c.get('직무', ''),                  # 직무 (후보 단계에서는 빈칸 가능)
-                contact,                            # 연락처
-                ssn,                                # 주민등록번호
-                bank,                               # 은행명
-                account,                            # 계좌번호
-                c.get('지급단가', ''),              # 지급단가
-                c.get('근무일수', ''),              # 근무일수
-                c.get('총지급액', ''),              # 총지급액
-                ASSIGN_STATUS_CANDIDATE,            # 지급상태 = '후보'
-                now_str,                            # 배정일시
-                '',                                 # 근무일자 (후보 단계에서는 빈칸)
+                assign_id,                          # A: 배정ID
+                str(inquiry_id),                    # B: 문의ID
+                str(event_name),                    # C: 행사명
+                staff_name,                         # D: 인력명
+                c.get('구분', '외부'),              # E: 구분
+                c.get('직무', ''),                  # F: 직무 (후보 단계에서는 빈칸 가능)
+                contact,                            # G: 연락처
+                ssn,                                # H: 주민등록번호
+                bank,                               # I: 은행명
+                account,                            # J: 계좌번호
+                c.get('지급단가', ''),              # K: 지급단가
+                c.get('근무일수', ''),              # L: 근무일수
+                c.get('총지급액', ''),              # M: 총지급액
+                ASSIGN_STATUS_CANDIDATE,            # N: 지급상태 = '후보'
+                now_str,                            # O: 배정일시
+                '',                                 # P: 투입시작일
+                '',                                 # Q: 투입종료일
+                '',                                 # R: 메모
+                '',                                 # S: 근무일자
+                c.get('팀코드', ''),                # T: 팀코드
+                c.get('결제대상', 'Y'),             # U: 결제대상
             ])
         
-        # 한 번의 API 호출로 배치 저장
+        # 한 번의 API 호출로 배치 저장 (A~U: 21컬럼)
         if batch_rows:
-            cell_range = f'A{next_row}:P{next_row + len(batch_rows) - 1}'
+            cell_range = f'A{next_row}:U{next_row + len(batch_rows) - 1}'
             _invalidate_assign_ctx()
             wks.update(cell_range, batch_rows, value_input_option='RAW')
             print(f"[Batch] Saved {len(batch_rows)} candidates for {inquiry_id}")

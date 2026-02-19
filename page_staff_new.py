@@ -444,155 +444,277 @@ def _step1_candidate_pool(sel_id, sel, df_staff, role_status, est_items):
 
         if 'assign_cart' not in st.session_state:
             st.session_state.assign_cart = []
+        if 'team_members' not in st.session_state:
+            st.session_state.team_members = []
 
-        # ── 본사 인력 ──
-        st.markdown("##### 🏢 본사 인원")
-        hq_cols = st.columns(min(len(db.HQ_STAFF) + 1, 5))
-        for i, hq in enumerate(db.HQ_STAFF):
-            with hq_cols[i % len(hq_cols)]:
-                if st.button(f"➕ {hq['이름']}", key=f"hq_{hq['이름']}", use_container_width=True):
+        # ══ 배정 유형 선택: 개별 / 팀 ══
+        assign_type = st.radio("배정 유형", ["개별 배정", "👥 팀 배정"], horizontal=True, key="assign_type")
+        st.divider()
+
+        if assign_type == "👥 팀 배정":
+            _render_team_assignment_ui(df_staff, role_status)
+        else:
+            _render_individual_assignment_ui(sel, df_staff, role_status)
+
+
+def _render_team_assignment_ui(df_staff, role_status):
+    """팀 배정 모드 UI — 팀장 검색 + 팀원 수기 입력"""
+
+    # 직군 선택 (공통)
+    role_options = [rs['role'] for rs in role_status] if role_status else []
+    role_options.append("기타 (직접입력)")
+    col_role, col_custom = st.columns([2, 1])
+    with col_role:
+        sel_role = st.selectbox("배정 직군", role_options, key="team_assign_role")
+    with col_custom:
+        if sel_role == "기타 (직접입력)":
+            sel_role = st.text_input("직군명 입력", key="team_custom_role")
+        else:
+            st.empty()
+
+    role_info = next((rs for rs in role_status if rs['role'] == sel_role), None)
+    default_rate = role_info['pay_rate'] if role_info else 100000
+    default_days = role_info['days'] if role_info else 1
+
+    st.markdown("##### 👤 팀장 선택 (STAFF에서 검색)")
+    leader_search = st.text_input("🔍 팀장 이름 검색", placeholder="예: 강정호", key="leader_search")
+
+    selected_leader = None
+    if leader_search:
+        mask = df_staff['이름'].astype(str).str.contains(leader_search, na=False, case=False)
+        leaders = df_staff[mask].head(10)
+        if not leaders.empty:
+            leader_options = {
+                idx: f"{row.get('이름', '')} | {row.get('성별', '-')} | {row.get('가능직무', '-')}"
+                for idx, row in leaders.iterrows()
+            }
+            sel_leader_idx = st.selectbox(
+                "팀장 선택", list(leader_options.keys()),
+                format_func=lambda x: leader_options[x], key="sel_leader")
+            selected_leader = leaders.loc[sel_leader_idx]
+            st.success(f"✅ 팀장: **{selected_leader.get('이름', '')}**")
+        else:
+            st.warning("검색 결과가 없습니다.")
+
+    st.markdown("##### 👥 팀원 추가 (수기 입력)")
+    st.caption("팀원은 STAFF에 없어도 됩니다. 이름만 입력하세요.")
+
+    col_add, col_btn = st.columns([3, 1])
+    with col_add:
+        new_member = st.text_input("팀원 이름", placeholder="예: 김철수", key="new_member", label_visibility="collapsed")
+    with col_btn:
+        if st.button("➕ 추가", key="add_member"):
+            if new_member.strip():
+                st.session_state.team_members.append(new_member.strip())
+                st.rerun()
+
+    if st.session_state.team_members:
+        st.markdown(f"**현재 팀원:** {len(st.session_state.team_members)}명")
+        for i, member in enumerate(st.session_state.team_members):
+            mc1, mc2 = st.columns([4, 1])
+            mc1.write(f"• {member}")
+            if mc2.button("🗑️", key=f"del_member_{i}"):
+                st.session_state.team_members.pop(i)
+                st.rerun()
+
+    st.divider()
+
+    col_rate, col_days = st.columns(2)
+    with col_rate:
+        team_rate = st.number_input("인당 단가 (원/일)", value=default_rate, step=10000, key="team_rate")
+    with col_days:
+        team_days = st.number_input("근무일수", value=default_days, min_value=1, key="team_days")
+
+    team_size = 1 + len(st.session_state.team_members)
+    team_total = team_rate * team_days * team_size
+
+    st.info(f"""
+    📊 **팀 합계**
+    - 팀 인원: {team_size}명 (팀장 1 + 팀원 {len(st.session_state.team_members)})
+    - 총 지급액: **{team_total:,}원** → 팀장 계좌로 지급
+    """)
+
+    if st.button("✅ 팀 배정 추가", type="primary", use_container_width=True, key="add_team"):
+        if selected_leader is None:
+            st.error("팀장을 선택해주세요.")
+        else:
+            from uuid import uuid4
+            team_code = f"T-{datetime.now().strftime('%y%m%d')}-{str(uuid4())[:4]}"
+            leader_name = selected_leader.get('이름', '')
+
+            # 팀장 추가 (결제대상 = Y)
+            st.session_state.assign_cart.append({
+                '인력명': leader_name, '구분': '팀장',
+                '직무': sel_role, '지급단가': int(team_rate),
+                '근무일수': int(team_days), '총지급액': int(team_rate * team_days),
+                '팀코드': team_code, '결제대상': 'Y',
+            })
+
+            # 팀원 추가 (결제대상 = N)
+            for member in st.session_state.team_members:
+                st.session_state.assign_cart.append({
+                    '인력명': member, '구분': '팀원',
+                    '직무': sel_role, '지급단가': int(team_rate),
+                    '근무일수': int(team_days), '총지급액': int(team_rate * team_days),
+                    '팀코드': team_code, '결제대상': 'N',
+                })
+
+            st.session_state.team_members = []
+            st.success(f"✅ {leader_name}팀 ({team_size}명) 배정 추가!")
+            st.rerun()
+
+
+def _render_individual_assignment_ui(sel, df_staff, role_status):
+    """개별 배정 모드 UI — 본사 인원 + 외부 인력 검색"""
+
+    # ── 본사 인력 ──
+    st.markdown("##### 🏢 본사 인원")
+    hq_cols = st.columns(min(len(db.HQ_STAFF) + 1, 5))
+    for i, hq in enumerate(db.HQ_STAFF):
+        with hq_cols[i % len(hq_cols)]:
+            if st.button(f"➕ {hq['이름']}", key=f"hq_{hq['이름']}", use_container_width=True):
+                st.session_state.assign_cart.append({
+                    '인력명': hq['이름'], '구분': '본사',
+                    '직무': hq['직무'], '지급단가': 0, '근무일수': 1, '총지급액': 0,
+                })
+                st.rerun()
+
+    # ── 외부 인력 검색 ──
+    st.markdown("##### 👥 외부 인력 검색")
+    col_name, col_gender = st.columns([3, 1])
+    with col_name:
+        search_q = st.text_input("🔍 이름 / 지역 / 직무 검색", placeholder="예: 김, 서울, 경호",
+                                 key="staff_search")
+    with col_gender:
+        gender_f = st.radio("성별", ["전체", "M", "F"], horizontal=True, key="gender_f")
+
+    with st.expander("🔧 상세 필터", expanded=False):
+        fc1, fc2, fc3 = st.columns(3)
+        with fc1:
+            age_filter = st.multiselect("연령대", ["20대", "30대", "40대", "50대↑"], key="age_f")
+            rec_filter = st.multiselect("추천도", ["우선투입", "일반", "보류"], key="rec_f")
+        with fc2:
+            role_filter = st.text_input("가능직무", placeholder="예: 경호, 안내", key="role_f")
+            region_filter = st.text_input("이동가능지역", placeholder="예: 서울, 경기", key="region_f")
+        with fc3:
+            min_height = st.number_input("최소 키(cm)", min_value=0, value=0, step=5, key="height_f")
+            min_score = st.number_input("최소 총점", min_value=0, value=0, step=10, key="score_f")
+            ec1, ec2 = st.columns(2)
+            with ec1:
+                english_f = st.selectbox("영어", ["무관", "가능"], key="eng_f")
+            with ec2:
+                driving_f = st.selectbox("운전", ["무관", "가능"], key="drv_f")
+
+    col_ai, col_manual = st.columns(2)
+    do_ai = col_ai.button("🤖 AI 추천", use_container_width=True, type="primary", key="ai_btn")
+    do_search = col_manual.button("🔍 검색", use_container_width=True, key="search_btn")
+
+    if do_ai or do_search:
+        with st.spinner("인력을 검색 중..."):
+            if do_ai:
+                from smart_assignment import SmartAssignment
+                dispatch_data = db.get_dispatch()
+                df_dispatch = dispatch_data.get('dispatch', pd.DataFrame())
+                location = str(sel.get('장소', ''))
+                g_val = gender_f if gender_f != "전체" else None
+                # 필요 직군 중 미충원 1순위 자동 선택
+                auto_role = None
+                for rs in (role_status or []):
+                    if rs['assigned'] < rs['needed']:
+                        auto_role = rs['role']
+                        break
+                result = SmartAssignment.ai_recommend(
+                    staff_df=df_staff, dispatch_df=df_dispatch,
+                    job_type=auto_role, location=location.split()[0] if location else None,
+                    gender=g_val, top_n=20)
+            else:
+                result = _search_staff(
+                    df_staff, search_q, gender_f, age_filter, rec_filter,
+                    role_filter, region_filter, min_height, min_score,
+                    english_f, driving_f)
+
+            st.session_state.search_results = result
+            st.session_state.search_done = True
+
+    # 검색 결과
+    if st.session_state.get('search_done') and not st.session_state.get('search_results', pd.DataFrame()).empty:
+        results = st.session_state.search_results
+        st.markdown(f"**{len(results)}명 검색됨** — 체크하여 후보풀에 추가")
+
+        selected_indices = []
+        for idx, row in results.reset_index(drop=True).iterrows():
+            name = row.get('이름', 'N/A')
+            gender = row.get('성별', '-')
+            age = row.get('나이', '-')
+            region = row.get('이동가능지역', row.get('거주지', '-'))
+            role = row.get('가능직무', '-')
+            height = row.get('키', '-')
+            score = row.get('총점', '-')
+            recommend = row.get('추천도', '-')
+            ai_score = row.get('AI점수', '')
+            ai_txt = f" · AI:{ai_score}" if ai_score != '' else ''
+
+            label = (f"{name}  |  {gender}/{age}  |  📍{region}  |  🔧{role}  "
+                     f"|  📏{height}cm  |  ⭐{score}  |  {recommend}{ai_txt}")
+
+            if st.checkbox(label, key=f"staff_sel_{idx}"):
+                selected_indices.append(idx)
+
+        if selected_indices:
+            if st.button(f"✅ 선택한 {len(selected_indices)}명 후보풀에 추가",
+                         type="primary", use_container_width=True, key="add_to_pool"):
+                for si in selected_indices:
+                    row = results.iloc[si]
                     st.session_state.assign_cart.append({
-                        '인력명': hq['이름'], '구분': '본사',
-                        '직무': hq['직무'], '지급단가': 0, '근무일수': 1, '총지급액': 0,
+                        '인력명': row.get('이름', ''), '구분': '외부',
+                        '직무': '', '지급단가': 0, '근무일수': 0, '총지급액': 0,
                     })
-                    st.rerun()
+                st.rerun()
 
-        # ── 외부 인력 검색 ──
-        st.markdown("##### 👥 외부 인력 검색")
-        col_name, col_gender = st.columns([3, 1])
-        with col_name:
-            search_q = st.text_input("🔍 이름 / 지역 / 직무 검색", placeholder="예: 김, 서울, 경호",
-                                     key="staff_search")
-        with col_gender:
-            gender_f = st.radio("성별", ["전체", "M", "F"], horizontal=True, key="gender_f")
+    # ── 신규 인력 직접 입력 ──
+    st.markdown("##### ✍️ 신규 인력 직접 입력")
+    st.caption("💡 인력풀에 없는 신규 인력을 등록하고 바로 후보풀에 추가합니다.")
+    with st.expander("➕ 신규 인력 입력", expanded=False):
+        nc1, nc2, nc3 = st.columns([1.5, 1, 0.8])
+        with nc1:
+            new_name = st.text_input("이름 *", placeholder="홍길동", key="new_staff_name")
+        with nc2:
+            new_phone = st.text_input("연락처", placeholder="010-0000-0000", key="new_staff_phone")
+        with nc3:
+            new_gender = st.selectbox("성별", ["M", "F"], key="new_staff_gender")
 
-        with st.expander("🔧 상세 필터", expanded=False):
-            fc1, fc2, fc3 = st.columns(3)
-            with fc1:
-                age_filter = st.multiselect("연령대", ["20대", "30대", "40대", "50대↑"], key="age_f")
-                rec_filter = st.multiselect("추천도", ["우선투입", "일반", "보류"], key="rec_f")
-            with fc2:
-                role_filter = st.text_input("가능직무", placeholder="예: 경호, 안내", key="role_f")
-                region_filter = st.text_input("이동가능지역", placeholder="예: 서울, 경기", key="region_f")
-            with fc3:
-                min_height = st.number_input("최소 키(cm)", min_value=0, value=0, step=5, key="height_f")
-                min_score = st.number_input("최소 총점", min_value=0, value=0, step=10, key="score_f")
-                ec1, ec2 = st.columns(2)
-                with ec1:
-                    english_f = st.selectbox("영어", ["무관", "가능"], key="eng_f")
-                with ec2:
-                    driving_f = st.selectbox("운전", ["무관", "가능"], key="drv_f")
+        nc4, nc5, nc6 = st.columns([1.5, 1, 0.8])
+        with nc4:
+            new_job = st.text_input("가능직무", placeholder="경호, 안내", key="new_staff_job")
+        with nc5:
+            new_region = st.text_input("지역", placeholder="서울, 경기", key="new_staff_region")
+        with nc6:
+            new_age = st.number_input("나이", min_value=18, max_value=70, value=30, key="new_staff_age")
 
-        col_ai, col_manual = st.columns(2)
-        do_ai = col_ai.button("🤖 AI 추천", use_container_width=True, type="primary", key="ai_btn")
-        do_search = col_manual.button("🔍 검색", use_container_width=True, key="search_btn")
+        _save_to_staff = st.checkbox("STAFF 시트에도 등록", value=True, key="save_new_to_staff")
 
-        if do_ai or do_search:
-            with st.spinner("인력을 검색 중..."):
-                if do_ai:
-                    from smart_assignment import SmartAssignment
-                    dispatch_data = db.get_dispatch()
-                    df_dispatch = dispatch_data.get('dispatch', pd.DataFrame())
-                    location = str(sel.get('장소', ''))
-                    g_val = gender_f if gender_f != "전체" else None
-                    # 필요 직군 중 미충원 1순위 자동 선택
-                    auto_role = None
-                    for rs in (role_status or []):
-                        if rs['assigned'] < rs['needed']:
-                            auto_role = rs['role']
-                            break
-                    result = SmartAssignment.ai_recommend(
-                        staff_df=df_staff, dispatch_df=df_dispatch,
-                        job_type=auto_role, location=location.split()[0] if location else None,
-                        gender=g_val, top_n=20)
-                else:
-                    result = _search_staff(
-                        df_staff, search_q, gender_f, age_filter, rec_filter,
-                        role_filter, region_filter, min_height, min_score,
-                        english_f, driving_f)
-
-                st.session_state.search_results = result
-                st.session_state.search_done = True
-
-        # 검색 결과
-        if st.session_state.get('search_done') and not st.session_state.get('search_results', pd.DataFrame()).empty:
-            results = st.session_state.search_results
-            st.markdown(f"**{len(results)}명 검색됨** — 체크하여 후보풀에 추가")
-
-            selected_indices = []
-            for idx, row in results.reset_index(drop=True).iterrows():
-                name = row.get('이름', 'N/A')
-                gender = row.get('성별', '-')
-                age = row.get('나이', '-')
-                region = row.get('이동가능지역', row.get('거주지', '-'))
-                role = row.get('가능직무', '-')
-                height = row.get('키', '-')
-                score = row.get('총점', '-')
-                recommend = row.get('추천도', '-')
-                ai_score = row.get('AI점수', '')
-                ai_txt = f" · AI:{ai_score}" if ai_score != '' else ''
-
-                label = (f"{name}  |  {gender}/{age}  |  📍{region}  |  🔧{role}  "
-                         f"|  📏{height}cm  |  ⭐{score}  |  {recommend}{ai_txt}")
-
-                if st.checkbox(label, key=f"staff_sel_{idx}"):
-                    selected_indices.append(idx)
-
-            if selected_indices:
-                if st.button(f"✅ 선택한 {len(selected_indices)}명 후보풀에 추가",
-                             type="primary", use_container_width=True, key="add_to_pool"):
-                    for si in selected_indices:
-                        row = results.iloc[si]
-                        st.session_state.assign_cart.append({
-                            '인력명': row.get('이름', ''), '구분': '외부',
-                            '직무': '', '지급단가': 0, '근무일수': 0, '총지급액': 0,
-                        })
-                    st.rerun()
-
-        # ── 신규 인력 직접 입력 ──
-        st.markdown("##### ✍️ 신규 인력 직접 입력")
-        st.caption("💡 인력풀에 없는 신규 인력을 등록하고 바로 후보풀에 추가합니다.")
-        with st.expander("➕ 신규 인력 입력", expanded=False):
-            nc1, nc2, nc3 = st.columns([1.5, 1, 0.8])
-            with nc1:
-                new_name = st.text_input("이름 *", placeholder="홍길동", key="new_staff_name")
-            with nc2:
-                new_phone = st.text_input("연락처", placeholder="010-0000-0000", key="new_staff_phone")
-            with nc3:
-                new_gender = st.selectbox("성별", ["M", "F"], key="new_staff_gender")
-
-            nc4, nc5, nc6 = st.columns([1.5, 1, 0.8])
-            with nc4:
-                new_job = st.text_input("가능직무", placeholder="경호, 안내", key="new_staff_job")
-            with nc5:
-                new_region = st.text_input("지역", placeholder="서울, 경기", key="new_staff_region")
-            with nc6:
-                new_age = st.number_input("나이", min_value=18, max_value=70, value=30, key="new_staff_age")
-
-            _save_to_staff = st.checkbox("STAFF 시트에도 등록", value=True, key="save_new_to_staff")
-
-            if st.button("✅ 후보풀에 추가", type="primary", use_container_width=True, key="add_new_staff_btn"):
-                if not new_name.strip():
-                    st.warning("이름을 입력해주세요.")
-                else:
-                    st.session_state.assign_cart.append({
-                        '인력명': new_name.strip(), '구분': '외부',
-                        '직무': new_job if new_job else '', '지급단가': 0, '근무일수': 0, '총지급액': 0,
-                    })
-                    if _save_to_staff:
-                        staff_data = {
-                            '이름': new_name.strip(), '연락처': new_phone.strip() if new_phone else '',
-                            '성별': new_gender, '나이': str(new_age),
-                            '가능직무': new_job, '이동가능지역': new_region.strip() if new_region else '',
-                            '추천도': '일반',
-                        }
-                        if db.add_new_staff(staff_data):
-                            st.success(f"✅ {new_name} — 후보 추가 + STAFF 등록 완료!")
-                        else:
-                            st.warning(f"⚠️ {new_name} — 후보 추가됨 (STAFF 등록 실패)")
+        if st.button("✅ 후보풀에 추가", type="primary", use_container_width=True, key="add_new_staff_btn"):
+            if not new_name.strip():
+                st.warning("이름을 입력해주세요.")
+            else:
+                st.session_state.assign_cart.append({
+                    '인력명': new_name.strip(), '구분': '외부',
+                    '직무': new_job if new_job else '', '지급단가': 0, '근무일수': 0, '총지급액': 0,
+                })
+                if _save_to_staff:
+                    staff_data = {
+                        '이름': new_name.strip(), '연락처': new_phone.strip() if new_phone else '',
+                        '성별': new_gender, '나이': str(new_age),
+                        '가능직무': new_job, '이동가능지역': new_region.strip() if new_region else '',
+                        '추천도': '일반',
+                    }
+                    if db.add_new_staff(staff_data):
+                        st.success(f"✅ {new_name} — 후보 추가 + STAFF 등록 완료!")
                     else:
-                        st.success(f"✅ {new_name} — 후보풀에 추가!")
-                    st.rerun()
+                        st.warning(f"⚠️ {new_name} — 후보 추가됨 (STAFF 등록 실패)")
+                else:
+                    st.success(f"✅ {new_name} — 후보풀에 추가!")
+                st.rerun()
 
     # ── 오른쪽: 후보풀 (로컬 대기 + 서버 저장됨) ──
     with col_right:
@@ -603,10 +725,21 @@ def _step1_candidate_pool(sel_id, sel, df_staff, role_status, est_items):
         if cart:
             st.markdown(f"##### 🕐 등록 대기 ({len(cart)}명)")
             cart_df = pd.DataFrame(cart)
-            display_cart_cols = ['인력명', '구분']
+            display_cart_cols = ['인력명', '구분', '팀코드']
             avail_cart = [c for c in display_cart_cols if c in cart_df.columns]
             st.dataframe(cart_df[avail_cart], use_container_width=True, hide_index=True,
                          height=min(180, 35 * len(cart) + 38))
+
+            # 팀별 요약 (카트에 팀 배정이 있을 때)
+            if '팀코드' in cart_df.columns:
+                team_cart = cart_df[cart_df['팀코드'].astype(str).str.strip() != '']
+                if not team_cart.empty:
+                    for tc in team_cart['팀코드'].unique():
+                        tc_df = team_cart[team_cart['팀코드'] == tc]
+                        leader = tc_df[tc_df['구분'] == '팀장']
+                        leader_name = leader['인력명'].iloc[0] if not leader.empty else '?'
+                        total = int(tc_df['총지급액'].sum()) if '총지급액' in tc_df.columns else 0
+                        st.caption(f"👥 {leader_name}팀 ({len(tc_df)}명) — ₩{total:,}")
 
             for ci_idx in range(len(cart)):
                 item = cart[ci_idx]
@@ -691,10 +824,22 @@ def _step1_candidate_pool(sel_id, sel, df_staff, role_status, est_items):
             if not confirmed.empty:
                 name_col = _col(confirmed, '인력명', '이름')
                 st.markdown(f"##### ✅ 확정 인력 ({len(confirmed)}명)")
-                display_cols = ['인력명', '이름', '직무', '역할', '지급단가', '단가', '근무일수', '일수']
+                display_cols = ['인력명', '이름', '직무', '역할', '팀코드', '지급단가', '단가', '근무일수', '일수']
                 avail = [c for c in display_cols if c in confirmed.columns]
                 st.dataframe(confirmed[avail], use_container_width=True, hide_index=True,
                              height=min(200, 35 * len(confirmed) + 38))
+
+                # 팀별 요약 표시
+                if '팀코드' in confirmed.columns:
+                    team_confirmed = confirmed[confirmed['팀코드'].astype(str).str.strip() != '']
+                    if not team_confirmed.empty:
+                        st.markdown("##### 👥 팀 배정 요약")
+                        for tc in team_confirmed['팀코드'].unique():
+                            tc_members = team_confirmed[team_confirmed['팀코드'] == tc]
+                            leader = tc_members[tc_members['구분'].astype(str) == '팀장'] if '구분' in tc_members.columns else pd.DataFrame()
+                            leader_name = leader['인력명'].iloc[0] if not leader.empty and '인력명' in leader.columns else '?'
+                            tc_total = int(pd.to_numeric(tc_members.get('총지급액', 0), errors='coerce').sum())
+                            st.info(f"👤 **{leader_name}팀** ({len(tc_members)}명) — 합계: ₩{tc_total:,} → 팀장 지급")
 
 
 # ──────────────────────────────────────────────────────────
