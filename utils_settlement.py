@@ -211,13 +211,15 @@ class SettlementBrain:
         </div>
         </body></html>"""
 
-    def get_payslip_html(self, staff_name, project_name, pay, days, total, tax_rate=0.033, meal=0, transport=0):
-        """급여명세서 HTML — tax_rate: 0.033 (3.3%) 또는 0.009 (0.9%), meal/transport: 부대비용"""
+    def get_payslip_html(self, staff_name, project_name, pay, days, total, tax_rate=0.033, meal=0, transport=0, overtime=0, etc_cost=0):
+        """급여명세서 HTML — tax_rate: 0.033 (3.3%) 또는 0.009 (0.9%), meal/transport/overtime/etc_cost: 부대비용"""
         tax_rate = float(tax_rate) if tax_rate else 0.033
         meal = int(meal) if meal else 0
         transport = int(transport) if transport else 0
+        overtime = int(overtime) if overtime else 0
+        etc_cost = int(etc_cost) if etc_cost else 0
         base_pay = int(pay) * int(days)
-        gross = base_pay + meal + transport  # total 대신 직접 계산
+        gross = base_pay + meal + transport + overtime + etc_cost  # 모든 수당 포함
         tax = int(gross * tax_rate)
         net = gross - tax
         tax_pct = f"{tax_rate * 100:.1f}%"
@@ -238,6 +240,20 @@ class SettlementBrain:
                 <td style="padding:8px; border:1px solid #ddd;">🚗 교통비</td>
                 <td style="padding:8px; border:1px solid #ddd;">교통비 지급</td>
                 <td style="padding:8px; border:1px solid #ddd; text-align:right;">{transport:,}원</td>
+            </tr>"""
+        if overtime > 0:
+            extra_rows += f"""
+            <tr>
+                <td style="padding:8px; border:1px solid #ddd;">⏰ 연장수당</td>
+                <td style="padding:8px; border:1px solid #ddd;">연장근무 수당</td>
+                <td style="padding:8px; border:1px solid #ddd; text-align:right;">{overtime:,}원</td>
+            </tr>"""
+        if etc_cost > 0:
+            extra_rows += f"""
+            <tr>
+                <td style="padding:8px; border:1px solid #ddd;">🏨 기타(숙박등)</td>
+                <td style="padding:8px; border:1px solid #ddd;">기타 비용</td>
+                <td style="padding:8px; border:1px solid #ddd; text-align:right;">{etc_cost:,}원</td>
             </tr>"""
         # 부대비용 있으면 소계 행 추가
         subtotal_row = ""
