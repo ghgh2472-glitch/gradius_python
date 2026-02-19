@@ -27,8 +27,19 @@ def apply_styles():
     st.markdown("""
     <style>
         .block-container { max-width: 1400px; padding-top: 1rem; }
-        .stTabs [data-baseweb="tab-list"] button {
-            font-size: 15px; font-weight: 700; padding: 10px 20px;
+        /* radio-as-tabs styling */
+        div[data-testid="stRadio"] > div[role="radiogroup"] {
+            gap: 0; display: flex; flex-wrap: wrap;
+        }
+        div[data-testid="stRadio"] > div[role="radiogroup"] > label {
+            background: #f0f2f6; border: 1px solid #d1d5db; padding: 8px 20px;
+            cursor: pointer; font-weight: 700; font-size: 14px;
+            border-radius: 0; margin: 0 -1px 0 0;
+        }
+        div[data-testid="stRadio"] > div[role="radiogroup"] > label:first-child { border-radius: 8px 0 0 8px; }
+        div[data-testid="stRadio"] > div[role="radiogroup"] > label:last-child { border-radius: 0 8px 8px 0; }
+        div[data-testid="stRadio"] > div[role="radiogroup"] > label[data-checked="true"] {
+            background: #0f766e; color: white; border-color: #0f766e;
         }
         .stButton>button { border-radius: 8px; font-weight: 700; font-size: 13px; }
         .section-title {
@@ -412,19 +423,16 @@ def tab_assignment(data):
     # ================================================================
     # 3단계 서브탭
     # ================================================================
-    step1, step2, step3 = st.tabs([
-        "① 후보 등록",
-        "② 직군별 배정",
-        "③ 확정 & 일정관리"
-    ])
+    _sub_tabs = ["① 후보 등록", "② 직군별 배정", "③ 확정 & 일정관리"]
+    _active_step = st.radio("step", _sub_tabs, key="_staff_sub_tab", horizontal=True, label_visibility="collapsed")
 
-    with step1:
+    if _active_step == _sub_tabs[0]:
         _step1_candidate_pool(sel_id, sel, df_staff, role_status, est_items)
 
-    with step2:
+    elif _active_step == _sub_tabs[1]:
         _step2_role_assignment(sel_id, sel, role_status, start_d, end_d, df_inq, df_staff)
 
-    with step3:
+    elif _active_step == _sub_tabs[2]:
         _step3_confirm_and_schedule(sel_id, sel, role_status, is_long_term, start_d, end_d)
 
 
@@ -2230,12 +2238,14 @@ def show(data):
     c3.metric("🏢 본사 투입", f"{hq_count}명")
     c4.metric("👥 외부 인력", f"{ext_count}명")
 
-    tab1, tab2, tab3, tab4 = st.tabs(["🎯 인력배정", "📋 출석/근무", "⭐ 평가", "💰 지급"])
-    with tab1:
+    _main_tabs = ["🎯 인력배정", "📋 출석/근무", "⭐ 평가", "💰 지급"]
+    _active = st.radio("main", _main_tabs, key="_staff_main_tab", horizontal=True, label_visibility="collapsed")
+    st.markdown("---")
+    if _active == _main_tabs[0]:
         tab_assignment(data)
-    with tab2:
+    elif _active == _main_tabs[1]:
         tab_attendance(data)
-    with tab3:
+    elif _active == _main_tabs[2]:
         tab_evaluation(data)
-    with tab4:
+    elif _active == _main_tabs[3]:
         tab_payment(data)

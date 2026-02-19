@@ -19,6 +19,20 @@ def apply_styles():
         .metric-val { font-size: 24px; font-weight: 800; color: #111827; }
         .profit-val { color: #16a34a; }
         .cost-val { color: #dc2626; }
+        /* radio-as-tabs */
+        div[data-testid="stRadio"] > div[role="radiogroup"] {
+            gap: 0; display: flex; flex-wrap: wrap;
+        }
+        div[data-testid="stRadio"] > div[role="radiogroup"] > label {
+            background: #f0f2f6; border: 1px solid #d1d5db; padding: 8px 20px;
+            cursor: pointer; font-weight: 700; font-size: 14px;
+            border-radius: 0; margin: 0 -1px 0 0;
+        }
+        div[data-testid="stRadio"] > div[role="radiogroup"] > label:first-child { border-radius: 8px 0 0 8px; }
+        div[data-testid="stRadio"] > div[role="radiogroup"] > label:last-child { border-radius: 0 8px 8px 0; }
+        div[data-testid="stRadio"] > div[role="radiogroup"] > label[data-checked="true"] {
+            background: #0f766e; color: white; border-color: #0f766e;
+        }
     </style>
     """, unsafe_allow_html=True)
 
@@ -27,19 +41,15 @@ def show(data):
     st.title("💰 정산 및 급여 관리 (Settlement)")
 
     # 탭 생성: 전체 현황 vs 개별 정산 vs 세금계산서
-    tab_overview, tab_detail, tab_tax = st.tabs([
-        "📊 전체 정산 현황", 
-        "🔍 계약별 상세 정산",
-        "📄 세금계산서 관리"
-    ])
-    
-    with tab_overview:
+    _stl_tabs = ["📊 전체 정산 현황", "🔍 계약별 상세 정산", "📄 세금계산서 관리"]
+    _active = st.radio("settlement", _stl_tabs, key="_settlement_tab", horizontal=True, label_visibility="collapsed")
+    st.markdown("---")
+
+    if _active == _stl_tabs[0]:
         show_settlement_overview()
-    
-    with tab_detail:
+    elif _active == _stl_tabs[1]:
         show_settlement_detail(data)
-    
-    with tab_tax:
+    elif _active == _stl_tabs[2]:
         show_tax_invoice_management()
 
 
@@ -713,9 +723,10 @@ def show_settlement_detail(data):
     # --------------------------------------------------------------------------
     # 정산 탭
     # --------------------------------------------------------------------------
-    tab_c, tab_s = st.tabs(["🏢 업체 정산", "👷 인력 급여 정산"])
+    _detail_tabs = ["🏢 업체 정산", "👷 인력 급여 정산"]
+    _active_detail = st.radio("detail", _detail_tabs, key=f"_detail_tab_{inq_id}", horizontal=True, label_visibility="collapsed")
 
-    with tab_c:
+    if _active_detail == _detail_tabs[0]:
         c1, c2 = st.columns(2)
         with c1:
             st.subheader("거래명세서 발행")
@@ -798,7 +809,7 @@ def show_settlement_detail(data):
             elif cur_status == '완료':
                 st.success("✅ 현장 완료 — 아래 인력 급여 탭에서 지급 후 정산 완료 처리하세요.")
 
-    with tab_s:
+    if _active_detail == _detail_tabs[1]:
         # 공제 방식 선택 (일괄 기본값)
         tax_opt_col, sep_info_col = st.columns([1.5, 1.5])
         with tax_opt_col:

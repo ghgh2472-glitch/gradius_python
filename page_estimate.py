@@ -36,6 +36,20 @@ def apply_styles():
         /* data_editor 스크롤바 겹침 해소 */
         [data-testid="stDataFrame"] > div { padding-bottom: 12px; }
         div[data-testid="stDataEditor"] iframe { min-height: 200px; }
+        /* radio-as-tabs */
+        div[data-testid="stRadio"] > div[role="radiogroup"] {
+            gap: 0; display: flex; flex-wrap: wrap;
+        }
+        div[data-testid="stRadio"] > div[role="radiogroup"] > label {
+            background: #f0f2f6; border: 1px solid #d1d5db; padding: 8px 20px;
+            cursor: pointer; font-weight: 700; font-size: 14px;
+            border-radius: 0; margin: 0 -1px 0 0;
+        }
+        div[data-testid="stRadio"] > div[role="radiogroup"] > label:first-child { border-radius: 8px 0 0 8px; }
+        div[data-testid="stRadio"] > div[role="radiogroup"] > label:last-child { border-radius: 0 8px 8px 0; }
+        div[data-testid="stRadio"] > div[role="radiogroup"] > label[data-checked="true"] {
+            background: #0f766e; color: white; border-color: #0f766e;
+        }
     </style>
     """, unsafe_allow_html=True)
 
@@ -532,9 +546,9 @@ def show(data):
             else:
                 st.info("저장된 견적안이 없습니다. 위에서 이름을 입력하고 저장하세요.")
 
-    tab1, tab2, tab3 = st.tabs([
-        "🛠️ 견적 산출", "📄 견적서 발행", "📋 히스토리 & 리포트"
-    ])
+    _est_tabs = ["🛠️ 견적 산출", "📄 견적서 발행", "📋 히스토리 & 리포트"]
+    _active_est = st.radio("estimate", _est_tabs, key="_estimate_tab", horizontal=True, label_visibility="collapsed")
+    st.markdown("---")
 
     # 세대 카운터 (프로젝트 전환/견적안 불러오기 시 위젯 재생성용)
     _g = st.session_state.get('_tab2_gen', 0)
@@ -542,7 +556,7 @@ def show(data):
     # ==================================================================
     # TAB 1: 견적 산출 (좌=입력 / 우=결과 장바구니 레이아웃)
     # ==================================================================
-    with tab1:
+    if _active_est == _est_tabs[0]:
         # ── 상단: 프로젝트 정보 (접을 수 있게) ──
         with st.expander("📋 프로젝트 정보", expanded=True):
             pi1, pi2, pi3 = st.columns([1.2, 1.2, 1])
@@ -1091,7 +1105,7 @@ def show(data):
     # ==================================================================
     # TAB 2: 견적서 발행
     # ==================================================================
-    with tab2:
+    if _active_est == _est_tabs[1]:
         col_edit, col_view = st.columns([1, 2.2])
         with col_edit:
             st.markdown("### ✏️ 편집")
@@ -1301,7 +1315,7 @@ def show(data):
     # ==================================================================
     # TAB 3: 히스토리 & 리포트 (통합)
     # ==================================================================
-    with tab3:
+    if _active_est == _est_tabs[2]:
         _show_history_tab(df_est, df_inq, st.session_state.get('w_client', ''))
 
         st.markdown("---")
