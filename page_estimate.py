@@ -881,11 +881,11 @@ def show(data):
                 fb = cc1.number_input("청구단가", value=base_p + add_p, step=5000)
                 fp = cc2.number_input("지급단가", value=cost_p + add_c, step=5000)
 
-                # ── 일자별 상세 입력 (특수 케이스) ──
+                # ── 일자별 상세 입력 (고도화) ──
                 use_daily_detail = st.checkbox(
-                    "📅 일자별 상세 입력 (날짜마다 인원/시간이 다를 때)",
+                    "📅 일자별 상세 입력 (날짜마다 인원/시간/단가가 다를 때)",
                     key="use_daily_detail",
-                    help="비연속 일정에서 날짜마다 투입인원이나 근무시간이 다른 경우 체크"
+                    help="날짜별로 투입 인원, 근무시간, 단가를 개별 설정할 수 있습니다."
                 )
 
                 daily_detail_df = None
@@ -901,57 +901,135 @@ def show(data):
                     if not all_dates:
                         st.warning("기간 정보가 없습니다. 위에서 날짜를 먼저 설정해주세요.")
                     else:
-                        st.caption(f"📅 전체 {len(all_dates)}일 — 날짜별 인원·시간을 수정하세요")
-                        # 기본값: 위에서 설정한 인원/시간으로 초기화
+                        # ── 이전 직군 설정 복사 ──
+                        _last_daily = st.session_state.get('_last_daily_setting', None)
+                        if _last_daily and st.session_state.get('_daily_copy_avail', False):
+                            _ldr = _last_daily.get('role', '')
+                            st.info(f"💡 마지막 설정(**{_ldr}**)을 참고하여 초기값이 채워집니다.")
+                            if st.button("🔄 이전 직군 설정 무시 (기본값으로)", key="ignore_last_daily"):
+                                st.session_state['_daily_copy_avail'] = False
+                                st.rerun()
+
+                        # ── 빠른 일괄 설정 ──
+                        with st.expander("⚡ 빠른 일괄 설정", expanded=False):
+                            _qc1, _qc2, _qc3 = st.columns(3)
+                            with _qc1:
+                                _bulk_qty = st.number_input("전체 인원 일괄", min_value=0, value=iq, step=1, key="_bulk_qty")
+                            with _qc2:
+                                _bulk_bill = st.number_input("전체 청구단가 일괄", min_value=0, value=int(fb), step=5000, key="_bulk_bill")
+                            with _qc3:
+                                _bulk_pay = st.number_input("전체 지급단가 일괄", min_value=0, value=int(fp), step=5000, key="_bulk_pay")
+                            _bc1, _bc2 = st.columns(2)
+                            with _bc1:
+                                if st.button("✅ 일괄 적용", key="_apply_bulk", use_container_width=True):
+                                    st.session_state['_daily_bulk'] = {
+                                        'qty': _bulk_qty, 'bill': _bulk_bill, 'pay': _bulk_pay
+                                    }
+                                    st.rerun()
+                            with _bc2:
+                                _zero_weekend = st.checkbox("🗓️ 주말(토/일) 0명 처리", key="_zero_weekend",
+                                                            help="토/일요일 인원을 자동으로 0으로 설정")
+
+                        # 일괄 설정값 반영
+                        _bulk = st.session_state.pop('_daily_bulk', None)
+
+                        # 기본값 결정: 이전 직군 복사 or 위에서 설정한 값
                         _KR_DAYS = {'Mon':'월','Tue':'화','Wed':'수','Thu':'목','Fri':'금','Sat':'토','Sun':'일'}
                         _daily_rows = []
-                        # 시간기준 모드일 때 출퇴근 표시
                         _daily_ti_str = ti.strftime('%H:%M') if time_mode == "출퇴근 지정" or (ti.hour != 0 or ti.minute != 0) else "미정"
                         _daily_to_str = to_.strftime('%H:%M') if time_mode == "출퇴근 지정" or (to_.hour != 0 or to_.minute != 0) else "미정"
-                        for _d in all_dates:
+
+                        for _di, _d in enumerate(all_dates):
                             _eng_day = _d.strftime('%a')
                             _kr_day = _KR_DAYS.get(_eng_day, _eng_day)
+                            _d_str = _d.strftime('%Y-%m-%d')
+
+                            # 인원 초기값 결정
+                            _init_qty = iq
+                            _init_bill = int(fb)
+                            _init_pay = int(fp)
+                            _init_ti = _daily_ti_str
+                            _init_to = _daily_to_str
+
+                            # 이전 직군 복사 적용 (날짜별 상세가 있으면)
+                            if _last_daily and st.session_state.get('_daily_copy_avail', False):
+                                _prev_dates = _last_daily.get('dates', {})
+                                if _d_str in _prev_dates:
+                                    _pd = _prev_dates[_d_str]
+                                    _init_ti = _pd.get('ti', _init_ti)
+                                    _init_to = _pd.get('to', _init_to)
+                                    # 인원/단가는 현재 직군 것 사용 (직군마다 다르므로)
+
+                            # 일괄 설정 적용
+                            if _bulk:
+                                _init_qty = _bulk['qty']
+                                _init_bill = _bulk['bill']
+                                _init_pay = _bulk['pay']
+
+                            # 주말 0명 처리
+                            if _zero_weekend and _eng_day in ('Sat', 'Sun'):
+                                _init_qty = 0
+
                             _daily_rows.append({
                                 '날짜': f"{_d.strftime('%m/%d')} ({_kr_day})",
-                                '_date_raw': _d.strftime('%Y-%m-%d'),
-                                '인원': iq,
-                                '출근시간': _daily_ti_str,
-                                '퇴근시간': _daily_to_str,
+                                '_date_raw': _d_str,
+                                '인원': _init_qty,
+                                '출근시간': _init_ti,
+                                '퇴근시간': _init_to,
+                                '청구단가': _init_bill,
+                                '지급단가': _init_pay,
                             })
                         _daily_init = pd.DataFrame(_daily_rows)
 
+                        st.caption(f"📅 전체 {len(all_dates)}일 — 날짜별 인원·시간·단가를 수정하세요")
                         daily_detail_df = st.data_editor(
-                            _daily_init[['날짜', '인원', '출근시간', '퇴근시간']],
+                            _daily_init[['날짜', '인원', '출근시간', '퇴근시간', '청구단가', '지급단가']],
                             column_config={
-                                '날짜': st.column_config.TextColumn('날짜', disabled=True),
-                                '인원': st.column_config.NumberColumn('인원', min_value=0, step=1),
-                                '출근시간': st.column_config.TextColumn('출근', help="HH:MM 형식"),
-                                '퇴근시간': st.column_config.TextColumn('퇴근', help="HH:MM 형식"),
+                                '날짜': st.column_config.TextColumn('날짜', disabled=True, width="small"),
+                                '인원': st.column_config.NumberColumn('인원', min_value=0, step=1, width="small"),
+                                '출근시간': st.column_config.TextColumn('출근', help="HH:MM 형식", width="small"),
+                                '퇴근시간': st.column_config.TextColumn('퇴근', help="HH:MM 형식", width="small"),
+                                '청구단가': st.column_config.NumberColumn('청구단가', min_value=0, step=5000, format="%d", width="small"),
+                                '지급단가': st.column_config.NumberColumn('지급단가', min_value=0, step=5000, format="%d", width="small"),
                             },
                             use_container_width=True, hide_index=True,
                             num_rows="fixed", key="daily_detail_editor",
                         )
-                        # _date_raw 컬럼 복원 (편집 결과에 합침)
+                        # _date_raw 컬럼 복원
                         daily_detail_df['_date_raw'] = _daily_init['_date_raw'].values
 
                         # 요약 표시
-                        total_person_days = int(daily_detail_df['인원'].sum())
-                        st.caption(f"👥 총 투입: **{total_person_days}명·일** (0명인 날은 건너뜀)")
+                        _active_days = daily_detail_df[daily_detail_df['인원'] > 0]
+                        _total_pd = int(_active_days['인원'].sum()) if not _active_days.empty else 0
+                        _skip_days = len(daily_detail_df) - len(_active_days)
+                        _sum_bill = int((_active_days['인원'] * _active_days['청구단가']).sum()) if not _active_days.empty else 0
+                        _sum_cost = int((_active_days['인원'] * _active_days['지급단가']).sum()) if not _active_days.empty else 0
+
+                        _sc1, _sc2 = st.columns(2)
+                        with _sc1:
+                            st.caption(f"👥 투입: **{_total_pd}명·일** ({len(_active_days)}일 투입" +
+                                       (f", {_skip_days}일 미투입)" if _skip_days > 0 else ")"))
+                        with _sc2:
+                            st.caption(f"💰 예상: 청구 **{_sum_bill:,}원** / 지급 **{_sum_cost:,}원**")
 
                 if st.button("⬇️ 리스트에 추가", type="primary", use_container_width=True):
                     if role_kr == "선택":
                         st.warning("직군을 선택하거나 직접 입력해주세요")
                     elif use_daily_detail and daily_detail_df is not None:
-                        # ── B방식: 일자별 행 생성 ──
+                        # ── B방식: 일자별 행 생성 (단가 오버라이드 지원) ──
                         nm_base = f"{role_kr} {'[팀장]' if is_leader else ''}".strip()
                         note = ", ".join([f_map[p]['name'] for p in picks])
                         new_rows = []
+                        _daily_dates_info = {}  # 이전 직군 복사용 설정 저장
                         for _, drow in daily_detail_df.iterrows():
                             d_qty = int(drow['인원'])
                             if d_qty <= 0:
                                 continue  # 0명인 날 스킵
                             d_date = str(drow['_date_raw'])
                             d_date_short = str(drow['날짜'])
+                            # 날짜별 단가 (오버라이드)
+                            d_fb = int(drow.get('청구단가', fb)) if pd.notna(drow.get('청구단가')) else int(fb)
+                            d_fp = int(drow.get('지급단가', fp)) if pd.notna(drow.get('지급단가')) else int(fp)
                             # 시간 파싱 (미정인 경우 시간기준 모드의 dur 사용)
                             _d_tin = str(drow['출근시간']).strip()
                             _d_tout = str(drow['퇴근시간']).strip()
@@ -965,23 +1043,29 @@ def show(data):
                                     d_dur = dur
                                 d_spec = f"{_d_tin}~{_d_tout} ({d_dur}H)"
                             d_mult = d_dur if pay_type == "시급" else 1
-                            d_bill = int(fb * d_mult * d_qty)
-                            d_cost = int(fp * d_mult * d_qty)
+                            d_bill = int(d_fb * d_mult * d_qty)
+                            d_cost = int(d_fp * d_mult * d_qty)
                             new_rows.append({
                                 "품목": f"{nm_base}\n({d_date_short})",
                                 "규격": d_spec,
                                 "수량": d_qty,
                                 "일수": 1,
-                                "매출단가": int(fb * d_mult),
-                                "매입단가": int(fp * d_mult),
+                                "매출단가": int(d_fb * d_mult),
+                                "매입단가": int(d_fp * d_mult),
                                 "할인액": 0,
                                 "매출합계": d_bill,
                                 "매입합계": d_cost,
                                 "비고": note,
                             })
+                            _daily_dates_info[d_date] = {'ti': _d_tin, 'to': _d_tout, 'qty': d_qty}
                         if new_rows:
                             st.session_state['est_items'] = pd.concat(
                                 [st.session_state['est_items'], pd.DataFrame(new_rows)], ignore_index=True)
+                            # 설정 기억 (다음 직군 추가 시 복사용)
+                            st.session_state['_last_daily_setting'] = {
+                                'role': role_kr, 'dates': _daily_dates_info
+                            }
+                            st.session_state['_daily_copy_avail'] = True
                             st.rerun()
                         else:
                             st.warning("인원이 0인 날만 있습니다. 인원을 입력해주세요.")
@@ -1169,6 +1253,62 @@ def show(data):
                     </div>
                 </div>
             """, unsafe_allow_html=True)
+
+            # ▶ 📅 일정 요약 카드 (날짜별 투입 현황)
+            if not st.session_state['est_items'].empty:
+                _items_df = st.session_state['est_items']
+                # 날짜별 행 감지: 품목명에 (MM/DD 형식이 포함된 행들
+                import re as _re_sched
+                _date_items = []
+                _normal_items = []
+                for _si, _sr in _items_df.iterrows():
+                    _sn = str(_sr.get('품목', ''))
+                    _dm = _re_sched.search(r'\((\d{2}/\d{2})', _sn)
+                    if _dm:
+                        _date_items.append((_dm.group(1), _sn, _sr))
+                    elif not _sn.startswith('[지원]'):
+                        _normal_items.append(_sr)
+
+                if _date_items:
+                    # 날짜별 그룹핑
+                    _date_groups = {}
+                    for _dt_str, _name, _row in _date_items:
+                        if _dt_str not in _date_groups:
+                            _date_groups[_dt_str] = []
+                        # 직군명 추출 (날짜 부분 제거)
+                        _role_clean = _re_sched.sub(r'\n?\(.*\)$', '', _name).strip()
+                        _date_groups[_dt_str].append({
+                            'role': _role_clean,
+                            'qty': int(_row.get('수량', 0)),
+                            'spec': str(_row.get('규격', '')),
+                            'bill': int(_row.get('매출합계', 0)),
+                            'cost': int(_row.get('매입합계', 0)),
+                        })
+
+                    with st.expander(f"📅 날짜별 투입 현황 ({len(_date_groups)}일)", expanded=False):
+                        _sorted_dates = sorted(_date_groups.keys())
+                        _n_cols = min(len(_sorted_dates), 4)
+                        for _chunk_start in range(0, len(_sorted_dates), _n_cols):
+                            _chunk = _sorted_dates[_chunk_start:_chunk_start + _n_cols]
+                            _cols = st.columns(len(_chunk))
+                            for _ci, _dt_key in enumerate(_chunk):
+                                _roles_in_day = _date_groups[_dt_key]
+                                _day_total_qty = sum(r['qty'] for r in _roles_in_day)
+                                _day_total_bill = sum(r['bill'] for r in _roles_in_day)
+                                _roles_txt = "".join([
+                                    f"<div style='font-size:11px;'>{r['role']} {r['qty']}명 <span style='color:#888;'>{r['spec'][:15]}</span></div>"
+                                    for r in _roles_in_day
+                                ])
+                                with _cols[_ci]:
+                                    st.markdown(f"""
+                                    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px;margin-bottom:4px;">
+                                        <div style="font-weight:700;font-size:13px;color:#1e3a8a;border-bottom:1px solid #e2e8f0;padding-bottom:4px;margin-bottom:4px;">
+                                            📅 {_dt_key} · {_day_total_qty}명
+                                        </div>
+                                        {_roles_txt}
+                                        <div style="font-size:10px;color:#059669;margin-top:4px;">₩{_day_total_bill:,}</div>
+                                    </div>
+                                    """, unsafe_allow_html=True)
 
             # ▶ 견적 품목 리스트
             st.markdown('<div class="sub-header">📦 견적 품목 리스트</div>', unsafe_allow_html=True)
