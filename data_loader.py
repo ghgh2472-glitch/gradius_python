@@ -481,10 +481,16 @@ def update_estimate_send_status(inquiry_id: str, send_method: str, send_memo: st
         headers = wks.row_values(1)
         headers_clean = [str(h).strip() for h in headers]
 
-        # 필요한 컬럼이 없으면 자동 추가
+        # 필요한 컬럼이 없으면 자동 추가 (시트 크기 부족 시 자동 확장)
         send_cols = ["발송여부", "발송일시", "발송방법", "발송메모"]
-        for col_name in send_cols:
-            if col_name not in headers_clean:
+        missing_cols = [c for c in send_cols if c not in headers_clean]
+        if missing_cols:
+            current_cols = wks.col_count
+            needed_cols = len(headers_clean) + len(missing_cols)
+            if needed_cols > current_cols:
+                wks.resize(cols=needed_cols + 2)
+                logger.info(f"📝 견적상세 시트 컬럼 확장: {current_cols} → {needed_cols + 2}")
+            for col_name in missing_cols:
                 next_col = len(headers_clean) + 1
                 wks.update_cell(1, next_col, col_name)
                 headers_clean.append(col_name)

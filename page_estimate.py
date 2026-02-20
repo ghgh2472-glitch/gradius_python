@@ -1498,7 +1498,7 @@ def _show_send_status_section(df_est, df_inq):
             with st.expander(f"📤 발송완료 처리 — {client} {event}", expanded=False):
                 mc1, mc2 = st.columns([1, 2])
                 with mc1:
-                    method = st.selectbox("발송방법", ["이메일", "카카오톡", "팩스", "직접전달"], key=f"send_method_{inq_id}_{idx}")
+                    method = st.selectbox("발송방법", ["이메일", "카카오톡", "휴대폰", "팩스", "직접전달"], key=f"send_method_{inq_id}_{idx}")
                 with mc2:
                     memo = st.text_input("발송 메모 (선택)", key=f"send_memo_{inq_id}_{idx}", placeholder="예: 담당자 김OO에게 발송")
                 if st.button("✅ 발송 완료 처리", key=f"send_btn_{inq_id}_{idx}", type="primary"):
