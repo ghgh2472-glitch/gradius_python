@@ -729,12 +729,12 @@ def show_settlement_detail(data):
         """, unsafe_allow_html=True)
 
     # --------------------------------------------------------------------------
-    # 손익 요약 (견적상세 데이터 우선, fallback으로 특이사항 파싱)
+    # 손익 요약 (실제 지급액 기반 — 배정기록 우선, fallback으로 견적/특이사항)
     # --------------------------------------------------------------------------
     df_est = data.get('estimate', pd.DataFrame())
     inq_id = str(row.get('문의ID', '')).strip()
 
-    # 견적상세에서 데이터 조회
+    # 견적상세에서 매출(공급가액) 조회
     est_row = None
     if not df_est.empty and '문의ID' in df_est.columns:
         matches = df_est[df_est['문의ID'].astype(str).str.strip() == inq_id]
@@ -748,25 +748,81 @@ def show_settlement_detail(data):
         except:
             return 0
 
+    # ① 실제 지급액 계산 (배정기록 시트에서 확정/이체 인력의 총지급액 합산)
+    actual_cost = 0
+    has_actual_data = False
+    try:
+        _settle_assignments = db.get_assignments_by_inquiry(inq_id)
+        if not _settle_assignments.empty:
+            # 상태 컴럼 식별
+            _sa_status_col = None
+            for _sc in ['지급상태', '상태']:
+                if _sc in _settle_assignments.columns:
+                    _sa_status_col = _sc
+                    break
+            # 취소된 건 제외, 후보 제외 (배정중/확정/이체완료 등만 포함)
+            if _sa_status_col:
+                _settle_assignments = _settle_assignments[
+                    ~_settle_assignments[_sa_status_col].astype(str).str.strip().isin(['취소', '후보'])
+                ]
+            # 팀원(결제대상=N)은 팀장에 합산되므로 직접 합산 시 중복 방지
+            _pay_target_col = '결제대상' if '결제대상' in _settle_assignments.columns else None
+            if _pay_target_col:
+                # 팀원(결제대상=N) 도 인건비로 계산되어야 하므로 전체 포함
+                pass
+            # 총지급액 / (단가 x 일수) 합산
+            _total_col = '총지급액' if '총지급액' in _settle_assignments.columns else None
+            _rate_col = next((c for c in ['지급단가', '단가'] if c in _settle_assignments.columns), None)
+            _days_col = next((c for c in ['근무일수', '일수'] if c in _settle_assignments.columns), None)
+            for _, _sa_row in _settle_assignments.iterrows():
+                _sa_total = _safe_int(_sa_row.get(_total_col, 0)) if _total_col else 0
+                if _sa_total > 0:
+                    actual_cost += _sa_total
+                elif _rate_col and _days_col:
+                    _sa_rate = _safe_int(_sa_row.get(_rate_col, 0))
+                    _sa_days = _safe_int(_sa_row.get(_days_col, 0))
+                    actual_cost += _sa_rate * _sa_days
+            if actual_cost > 0:
+                has_actual_data = True
+    except Exception:
+        pass
+
+    # ② 매출액 (공급가액 — 견적 기준)
     if est_row is not None:
-        summary = {
-            '매출': _safe_int(est_row.get('공급가액', 0)),
-            '매입': _safe_int(est_row.get('매입원가', 0)),
-            '수익': _safe_int(est_row.get('예상수익', 0)),
-            '수익률': 0.0,
-        }
-        if summary['수익'] == 0:
-            summary['수익'] = summary['매출'] - summary['매입']
-        if summary['매출'] > 0:
-            summary['수익률'] = (summary['수익'] / summary['매출'] * 100)
+        est_revenue = _safe_int(est_row.get('공급가액', 0))
+        est_cost = _safe_int(est_row.get('매입원가', 0))
     else:
-        summary = brain.get_financial_summary(row)
+        _fallback = brain.get_financial_summary(row)
+        est_revenue = _fallback.get('매출', 0)
+        est_cost = _fallback.get('매입', 0)
+
+    # ③ 손익 요약 조합: 실제 지급액이 있으면 실제 기준, 없으면 견적 기준
+    revenue = est_revenue  # 매출은 항상 견적 기준
+    cost = actual_cost if has_actual_data else est_cost
+    profit = revenue - cost
+    margin = (profit / revenue * 100) if revenue > 0 else 0.0
+
+    summary = {
+        '매출': revenue,
+        '매입': cost,
+        '수익': profit,
+        '수익률': margin,
+    }
+
+    # 데이터 출처 표시
+    cost_label = "실제 지급액" if has_actual_data else "예상 인건비"
+    cost_sublabel = "(배정기록 기준)" if has_actual_data else "(견적 기준)"
 
     st.markdown("##### 📊 손익 요약")
+    if has_actual_data:
+        st.caption("✅ 실제 배정/지급 데이터 기반으로 계산되었습니다.")
+    else:
+        st.caption("⚠️ 배정기록이 없어 견적 기준 예상치로 표시됩니다.")
     m1, m2, m3, m4 = st.columns(4)
+    profit_sign = "+" if profit >= 0 else ""
     with m1: st.markdown(f"""<div class="metric-card"><div class="metric-label">총 매출 (공급가액)</div><div class="metric-val">{summary['매출']:,}</div></div>""", unsafe_allow_html=True)
-    with m2: st.markdown(f"""<div class="metric-card"><div class="metric-label">총 인건비 (매입원가)</div><div class="metric-val cost-val">{summary['매입']:,}</div></div>""", unsafe_allow_html=True)
-    with m3: st.markdown(f"""<div class="metric-card"><div class="metric-label">순수익</div><div class="metric-val profit-val">+{summary['수익']:,}</div></div>""", unsafe_allow_html=True)
+    with m2: st.markdown(f"""<div class="metric-card"><div class="metric-label">{cost_label} {cost_sublabel}</div><div class="metric-val cost-val">{summary['매입']:,}</div></div>""", unsafe_allow_html=True)
+    with m3: st.markdown(f"""<div class="metric-card"><div class="metric-label">순수익</div><div class="metric-val profit-val">{profit_sign}{summary['수익']:,}</div></div>""", unsafe_allow_html=True)
     with m4: st.markdown(f"""<div class="metric-card"><div class="metric-label">수익률</div><div class="metric-val">{summary['수익률']:.1f}%</div></div>""", unsafe_allow_html=True)
 
     st.divider()
@@ -778,7 +834,8 @@ def show_settlement_detail(data):
     _active_detail = st.radio("detail", _detail_tabs, key=f"_detail_tab_{inq_id}", horizontal=True, label_visibility="collapsed")
 
     # 상태 변수 미리 초기화 (두 탭 모두에서 사용)
-    status_col = next((c for c in ['상태', '진행상태', '진행여부'] if c in row.index), None)
+    _status_candidates = ['상태', '진행상태', '진행여부']
+    status_col = next((c for c in _status_candidates if c in df_inq.columns), None)
     cur_status = str(row.get(status_col, '')).strip() if status_col else ''
     inq_id_for_update = str(row.get('문의ID', '')).strip()
 
