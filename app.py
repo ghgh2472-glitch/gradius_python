@@ -11,6 +11,7 @@ import data_management                   # 데이터 관리 도구
 import page_attendance # 5단계: 출석부
 import page_settlement  # 6단계: 정산
 import page_project_detail  # 프로젝트 상세확인
+import page_search  # 스마트 데이터 조회
 import page_guide  # 사용 가이드
 
 # 데이터 모듈 임포트
@@ -95,7 +96,8 @@ with st.sidebar:
             "📋 출석부 관리",
             "💰 정산 및 급여 관리",
             "🔍 프로젝트 상세확인",
-            "📘 사용 가이드",
+            "� 데이터 조회",
+            "�📘 사용 가이드",
             "🛠️ 데이터 관리"
         ],
         index=0
@@ -167,6 +169,9 @@ elif "정산" in menu:
 
 elif "상세확인" in menu:
     page_project_detail.show(data)
+
+elif "데이터 조회" in menu:
+    page_search.show(data)
 
 elif "가이드" in menu:
     page_guide.show(data)

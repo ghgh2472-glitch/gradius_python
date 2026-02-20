@@ -53,7 +53,7 @@ def load_all_data():
     data = {}
     client = get_connection()
     
-    # 필수 시트 로드 (견적 시스템용 Roles/Factors/Guides 포함)
+    # 필수 시트 로드 (견적 시스템용 Roles/Factors/Guides + 배정/정산 포함)
     sheet_map = {
         "inq": "문의작성",
         "staff": "STAFF",
@@ -62,6 +62,8 @@ def load_all_data():
         "factors": "Factors",
         "guides": "Guides",
         "estimate": "견적상세",
+        "dispatch": "배정기록",
+        "settlement": "계약건은청구금액적기",
     }
     
     if not client:
@@ -242,7 +244,7 @@ def get_data():
             st.session_state['_app_data'] = {
                 "inq": pd.DataFrame(), "staff": pd.DataFrame(), "client": pd.DataFrame(),
                 "roles": pd.DataFrame(), "factors": pd.DataFrame(), "guides": pd.DataFrame(),
-                "estimate": pd.DataFrame(),
+                "estimate": pd.DataFrame(), "dispatch": pd.DataFrame(), "settlement": pd.DataFrame(),
             }
         st.session_state['_data_loaded_at'] = datetime.now().strftime("%H:%M:%S")
         print(f"[SESSION] Main data loaded at {st.session_state['_data_loaded_at']}")
@@ -261,6 +263,8 @@ def load_all_data_with_progress(progress_bar=None):
         "factors": "Factors",
         "guides": "Guides",
         "estimate": "견적상세",
+        "dispatch": "배정기록",
+        "settlement": "계약건은청구금액적기",
     }
     data = {}
     client = get_connection()
@@ -358,17 +362,30 @@ def load_all_data_with_progress(progress_bar=None):
 def get_dispatch():
     """
     세션에 캐시된 배정/정산 데이터를 반환합니다.
-    최초 호출 시 배정기록 시트 컨텍스트도 함께 워밍업하여 이후 작업 속도를 높임.
+    초기 로딩 시 이미 포함되어 있으면 그대로 사용, 없으면 지연 로드.
     """
     if '_dispatch_data' not in st.session_state or st.session_state['_dispatch_data'] is None:
-        with st.spinner("📡 배정 데이터를 불러오는 중..."):
-            st.session_state['_dispatch_data'] = load_dispatch_data()
-            # 배정기록 시트 컨텍스트 프리-워밍 (이후 배정/취소 작업에서 API 절약)
+        # 초기 로딩에서 이미 읽어왔는지 확인
+        app_data = st.session_state.get('_app_data')
+        if app_data and 'dispatch' in app_data and not app_data['dispatch'].empty:
+            st.session_state['_dispatch_data'] = {
+                "dispatch": app_data['dispatch'],
+                "settlement": app_data.get('settlement', pd.DataFrame()),
+            }
+            # 배정기록 시트 컨텍스트 프리-워밍
             try:
                 _get_assign_sheet_ctx()
-                print("[SESSION] Dispatch data loaded + assign ctx warmed")
+                print("[SESSION] Dispatch data from initial load + assign ctx warmed")
             except Exception as e:
-                print(f"[SESSION] Dispatch data loaded (assign ctx warm failed: {e})")
+                print(f"[SESSION] Dispatch data from initial load (assign ctx warm failed: {e})")
+        else:
+            with st.spinner("📡 배정 데이터를 불러오는 중..."):
+                st.session_state['_dispatch_data'] = load_dispatch_data()
+                try:
+                    _get_assign_sheet_ctx()
+                    print("[SESSION] Dispatch data loaded + assign ctx warmed")
+                except Exception as e:
+                    print(f"[SESSION] Dispatch data loaded (assign ctx warm failed: {e})")
     return st.session_state['_dispatch_data']
 
 

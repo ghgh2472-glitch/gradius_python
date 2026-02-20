@@ -726,6 +726,11 @@ def show_settlement_detail(data):
     _detail_tabs = ["🏢 업체 정산", "👷 인력 급여 정산"]
     _active_detail = st.radio("detail", _detail_tabs, key=f"_detail_tab_{inq_id}", horizontal=True, label_visibility="collapsed")
 
+    # 상태 변수 미리 초기화 (두 탭 모두에서 사용)
+    status_col = brain.find_col(row, ['상태', '진행상태', '진행여부'])
+    cur_status = str(row.get(status_col, '')).strip() if status_col else ''
+    inq_id_for_update = str(row.get('문의ID', '')).strip()
+
     if _active_detail == _detail_tabs[0]:
         c1, c2 = st.columns(2)
         with c1:
@@ -798,10 +803,8 @@ def show_settlement_detail(data):
             st.components.v1.html(html, height=550, scrolling=True)
         with c2:
             st.subheader("입금 관리")
-            cur_status = str(row.get(status_col, '')).strip()
             st.markdown(f"현재 상태: {sc.get_status_badge_html(cur_status)}", unsafe_allow_html=True)
             
-            inq_id_for_update = str(row.get('문의ID', '')).strip()
             if cur_status in ['배정완료', '진행중']:
                 if st.button("✅ 현장 완료 처리"):
                     db.update_status(inq_id_for_update, sc.STATUS_FLOW[5])  # '완료'
