@@ -486,7 +486,7 @@ def get_detailed_report_html(df, client, notes):
     rows = ""
     total_rev, total_cost, total_prof = 0, 0, 0
     for _, r in df.iterrows():
-        item = r['품목']
+        item = str(r['품목']).replace('\n', ' ')  # 날짜 태그 줄바꿈 정리
         qty = safe_int(r.get('수량', 0))
         days = safe_int(r.get('일수', 1))
         u_rev = safe_int(r['매출단가'])

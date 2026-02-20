@@ -794,23 +794,41 @@ def show_settlement_detail(data):
                 matched_items = db.load_estimate_items(inq_id)
                 if not matched_items.empty:
                     # 견적품목 시트 컬럼 → 거래명세서 형식으로 변환
-                    _items = []
+                    # ★ 날짜별 품목을 기본 직군명으로 그룹핑
+                    import re as _re_settle
+                    _grouped_items = {}  # {base_name: {qty_total, sell, days_total, amt_total}}
                     for _, _r in matched_items.iterrows():
-                        _name = str(_r.get('직군명', '')).strip()
+                        _name_raw = str(_r.get('직군명', '')).strip()
                         if str(_r.get('팀장여부', '')).strip() == '팀장':
-                            _name += ' [팀장]'
+                            _name_raw += ' [팀장]'
+                        # 날짜 태그 제거
+                        _base_name = _re_settle.sub(r'\s*\n\(\d{2}/\d{2}\s*[^\)]*\)', '', _name_raw).strip()
                         _qty = int(float(_r.get('수량', 0) or 0))
                         _days = int(float(_r.get('일수', 1) or 1))
                         _sell = int(float(_r.get('매출단가', 0) or 0))
-                        _amt = _qty * _sell * _days
-                        if _name and _sell > 0:
-                            _items.append({
-                                '품목명': _name,
-                                '수량': _qty,
-                                '단가': _sell,
-                                '일수': _days,
-                                '금액': _amt
-                            })
+                        _disc = int(float(_r.get('할인액', 0) or 0))
+                        _effective_sell = max(0, _sell - _disc)
+                        _amt = _qty * _effective_sell * _days
+                        if _base_name and _sell > 0:
+                            if _base_name in _grouped_items:
+                                g = _grouped_items[_base_name]
+                                g['qty'] = max(g['qty'], _qty)  # 최대 인원
+                                g['days'] += _days
+                                g['amt'] += _amt
+                            else:
+                                _grouped_items[_base_name] = {
+                                    'qty': _qty, 'sell': _effective_sell,
+                                    'days': _days, 'amt': _amt
+                                }
+                    _items = []
+                    for gn, gv in _grouped_items.items():
+                        _items.append({
+                            '품목명': gn,
+                            '수량': gv['qty'],
+                            '단가': gv['sell'],
+                            '일수': gv['days'],
+                            '금액': gv['amt']
+                        })
                     if _items:
                         invoice_items = _items
                         # 품목 합산이 공급가액보다 정확하면 품목 합산 사용

@@ -125,43 +125,104 @@ def _parse_date_safe(date_str):
     return None
 
 
+def _strip_date_tag(name):
+    """품목/직군명에서 날짜 태그 제거 → 기본 직군명 반환
+    예: '경호원\\n(03/01 토)' → '경호원', '안내원 [팀장]' → '안내원 [팀장]'"""
+    if not name:
+        return ''
+    return re.sub(r'\s*\n\(\d{2}/\d{2}\s*[^\)]*\)', '', str(name)).strip()
+
+
 def _get_role_status(est_items, assignments_df):
     """견적품목과 배정기록에서 직군별 배정 현황 계산 ([지원] 품목 제외)
+    ★ 날짜별 견적 품목을 기본 직군명으로 그룹핑하여 통합 관리
     인일(man-day) 기반 진행률 포함"""
     role_status = []
     if est_items.empty:
         return role_status
+
+    # ── 1단계: 품목을 기본 직군명으로 그룹핑 ──
+    # 날짜별 품목 (경호원\n(03/01 토)) → 기본 직군명 (경호원)으로 묶기
+    grouped = {}  # {base_role: {needed_total, days_total, pay_rate, time, date_details}}
     for _, item in est_items.iterrows():
-        # [지원] 품목은 인력이 아니므로 제외
         item_name = str(item.get('품목', item.get('직군명', '')))
         if item_name.startswith('[지원]'):
             continue
-        role_name = str(item.get('직군명', item_name))
-        if not role_name or role_name == 'nan':
+        raw_role = str(item.get('직군명', item_name))
+        if not raw_role or raw_role == 'nan':
+            continue
+        base_role = _strip_date_tag(raw_role)
+        if not base_role:
             continue
         needed = int(item.get('인원수', item.get('수량', 0)) or 0)
         est_days = int(item.get('일수', 0) or 0)
-        needed_mandays = needed * est_days  # 필요 인일
+        pay_rate = int(item.get('매입단가', 0) or 0)
+        time_str = str(item.get('근무시간', item.get('규격', '')))
 
+        # 날짜 태그에서 날짜 추출 (MM/DD)
+        date_match = re.search(r'\n\((\d{2}/\d{2})', raw_role)
+        date_tag = date_match.group(1) if date_match else None
+
+        if base_role not in grouped:
+            grouped[base_role] = {
+                'needed_total': 0, 'days_total': 0,
+                'pay_rate': pay_rate, 'time': time_str,
+                'date_details': {},  # {날짜문자열: 필요인원}
+                'has_date_items': False,
+            }
+        g = grouped[base_role]
+        if date_tag:
+            # 날짜별 품목: 인원은 그 날짜의 필요인원
+            g['date_details'][date_tag] = needed
+            g['has_date_items'] = True
+            g['days_total'] += 1  # 각 날짜 행 = 1일
+            g['needed_total'] += needed  # 인일 합산
+        else:
+            # 일반 품목: 수량 × 일수
+            g['needed_total'] += needed * est_days
+            g['days_total'] += est_days
+        # 더 높은 단가가 있으면 갱신 (날짜별 단가 차이 시 대표값)
+        if pay_rate > g['pay_rate']:
+            g['pay_rate'] = pay_rate
+
+    # ── 2단계: 배정기록 매칭 (기본 직군명 기준) ──
+    for base_role, g in grouped.items():
         assigned_count = 0
         actual_mandays = 0
         if not assignments_df.empty:
             role_col = '직무' if '직무' in assignments_df.columns else '역할'
             days_col = '근무일수' if '근무일수' in assignments_df.columns else '일수'
             if role_col in assignments_df.columns:
+                # ★ 수정: 배정기록의 직무가 base_role을 포함하는지 확인
+                # (배정 시 직무='경호원'으로 저장되므로 정확 매칭 + 포함 매칭 모두 처리)
                 role_rows = assignments_df[
-                    assignments_df[role_col].astype(str).str.contains(role_name, na=False)]
+                    assignments_df[role_col].astype(str).str.strip().apply(
+                        lambda x: x == base_role or base_role in x or x in base_role
+                    )]
                 assigned_count = len(role_rows)
                 if days_col in role_rows.columns:
                     actual_mandays = int(pd.to_numeric(
                         role_rows[days_col], errors='coerce').fillna(0).sum())
+
+        # 날짜별 품목의 경우 needed는 최대일 인원 (배정 현황 카드 표시용)
+        if g['has_date_items'] and g['date_details']:
+            max_needed = max(g['date_details'].values())
+            total_days = len(g['date_details'])
+        else:
+            max_needed = g['needed_total'] // max(g['days_total'], 1)
+            total_days = g['days_total']
+
         role_status.append({
-            'role': role_name, 'needed': needed, 'assigned': assigned_count,
-            'pay_rate': int(item.get('매입단가', 0) or 0),
-            'days': est_days,
-            'time': str(item.get('근무시간', '')),
-            'needed_mandays': needed_mandays,
+            'role': base_role,
+            'needed': max_needed,           # 최대 일 인원 (카드 표시)
+            'assigned': assigned_count,
+            'pay_rate': g['pay_rate'],
+            'days': total_days,
+            'time': g['time'],
+            'needed_mandays': g['needed_total'],  # 총 인일
             'actual_mandays': actual_mandays,
+            'date_details': g['date_details'],    # 날짜별 필요인원
+            'has_date_items': g['has_date_items'],
         })
     return role_status
 
@@ -371,13 +432,21 @@ def tab_assignment(data):
                     rc1, rc2 = st.columns([2, 1])
                     with rc1:
                         st.markdown(f"**{rs['role']}**")
-                        st.caption(f"₩{rs['pay_rate']:,}/일 · {rs['days']}일 · {rs['time']}")
+                        _time_display = rs['time'] if rs['time'] and rs['time'] != 'nan' else ''
+                        st.caption(f"₩{rs['pay_rate']:,}/일 · {rs['days']}일{(' · ' + _time_display) if _time_display else ''}")
                     with rc2:
                         over_tag = " 초과OK" if rs['assigned'] > rs['needed'] else ""
                         st.markdown(f"**{rs['assigned']}/{rs['needed']}명**{over_tag}")
                     st.progress(min(md_p / 100.0, 1.0))
                     md_icon = '✅' if md_p >= 100 else ''
                     st.caption(f"인일: {rs['actual_mandays']}/{rs['needed_mandays']} {md_icon}")
+                    # ★ 날짜별 인원 차이가 있으면 미니 표시
+                    if rs.get('has_date_items') and rs.get('date_details'):
+                        dd = rs['date_details']
+                        vals = list(dd.values())
+                        if len(set(vals)) > 1:  # 날짜별 인원이 다를 때만
+                            parts = [f"{k}:{v}명" for k, v in dd.items()]
+                            st.caption(f"📅 {' · '.join(parts)}")
 
         # 전체 인일 요약 (마지막 컬럼)
         with cols[len(role_status) % (len(role_status) + 1)]:
@@ -400,11 +469,25 @@ def tab_assignment(data):
             if event_dates_top and len(event_dates_top) <= 30:
                 st.caption("📅 일자별 충원 상태 (배정중+확정 인원 기준)")
                 day_cols = st.columns(min(len(event_dates_top), 10))
-                total_needed_p = sum(rs['needed'] for rs in role_status)
+                # ★ 날짜별 필요인원 계산 (date_details가 있으면 해당 날짜의 인원, 없으면 전체 합)
+                _date_needs = {}  # {'03/01': 전체필요인원}
+                for rs in role_status:
+                    if rs.get('has_date_items') and rs.get('date_details'):
+                        for dk, dv in rs['date_details'].items():
+                            _date_needs[dk] = _date_needs.get(dk, 0) + dv
+                    else:
+                        # 날짜 상세 없으면 모든 날짜에 필요인원 추가
+                        for dd in event_dates_top:
+                            dk = dd.strftime('%m/%d')
+                            _date_needs[dk] = _date_needs.get(dk, 0) + rs['needed']
+                # 기본값 (date_details 없을 때)
+                _default_needed = sum(rs['needed'] for rs in role_status)
                 for di, dd in enumerate(event_dates_top[:10]):
                     wd = '월화수목금토일'[dd.weekday()]
+                    dk = dd.strftime('%m/%d')
+                    needed_today = _date_needs.get(dk, _default_needed)
                     with day_cols[di]:
-                        st.caption(f"{dd.strftime('%m/%d')}{wd}")
+                        st.caption(f"{dk}{wd}\n필요:{needed_today}명")
                 if len(event_dates_top) > 10:
                     st.caption(f"⋯ +{len(event_dates_top) - 10}일 더")
 
@@ -1005,7 +1088,23 @@ def _step2_role_assignment(sel_id, sel, role_status, start_d=None, end_d=None, d
         elif len(event_dates) > 60:
             st.caption(f"행사 기간이 {len(event_dates)}일로 너무 깁니다. 매트릭스 생략.")
         else:
-            total_needed_per_day = sum(rs['needed'] for rs in role_status) if role_status else 0
+            # ★ 날짜별 필요인원 딕셔너리 구축
+            _date_needs_map = {}  # {'2026-03-01': 총필요인원}
+            _has_any_date_detail = any(rs.get('has_date_items') for rs in role_status)
+            for rs in role_status:
+                if rs.get('has_date_items') and rs.get('date_details'):
+                    for dk, dv in rs['date_details'].items():
+                        # dk = 'MM/DD' → ISO 날짜로 변환 시도
+                        for ed in event_dates:
+                            if ed.strftime('%m/%d') == dk:
+                                k = ed.isoformat()
+                                _date_needs_map[k] = _date_needs_map.get(k, 0) + dv
+                                break
+                else:
+                    for ed in event_dates:
+                        k = ed.isoformat()
+                        _date_needs_map[k] = _date_needs_map.get(k, 0) + rs['needed']
+            _default_needed_per_day = sum(rs['needed'] for rs in role_status) if role_status else 0
 
             # 페이징
             dates_per_page = 7
@@ -1148,14 +1247,16 @@ def _step2_role_assignment(sel_id, sel, role_status, start_d=None, end_d=None, d
             short_days = 0
             for di, dd in enumerate(page_dates):
                 cnt = day_counts.get(dd.isoformat(), 0)
-                if cnt >= total_needed_per_day:
+                # ★ 날짜별 필요인원 적용
+                needed_today = _date_needs_map.get(dd.isoformat(), _default_needed_per_day)
+                if cnt >= needed_today:
                     icon = "🟢"
                 elif cnt > 0:
                     icon = "🟡"
                 else:
                     icon = "🔴"
                     short_days += 1
-                scols[di + 1].caption(f"{icon}**{cnt}/{total_needed_per_day}**")
+                scols[di + 1].caption(f"{icon}**{cnt}/{needed_today}**")
             total_mandays_page = sum(day_counts.values())
             scols[-2].caption(f"**{total_mandays_page}**")
 
@@ -1215,8 +1316,9 @@ def _step2_role_assignment(sel_id, sel, role_status, start_d=None, end_d=None, d
                 days = rs['days']
 
                 role_assigned = assigned[
-                    assigned[role_col_name].astype(str).str.contains(role_name, na=False)
-                ] if not assigned.empty else pd.DataFrame()
+                    assigned[role_col_name].astype(str).str.strip().apply(
+                        lambda x: x == role_name or role_name in x or x in role_name
+                    )] if not assigned.empty else pd.DataFrame()
                 current_count = len(role_assigned)
 
                 # 인일 기반 진행률
