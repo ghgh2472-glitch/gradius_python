@@ -1329,11 +1329,13 @@ def show(data):
                 disabled=["매출합계", "매입합계"],
                 column_config={
                     "품목": st.column_config.TextColumn("품목", width="medium"),
+                    "규격": st.column_config.TextColumn("규격/상세", width="medium"),
                     "수량": st.column_config.NumberColumn("수량", min_value=0, step=1, format="%d"),
                     "일수": st.column_config.NumberColumn("일수", min_value=0, step=1, format="%d"),
                     "매출단가": st.column_config.NumberColumn("단가", min_value=0, step=5000, format="%d"),
                     "할인액": st.column_config.NumberColumn("할인액", min_value=0, step=10000, format="%d"),
                     "매출합계": st.column_config.NumberColumn("금액", format="%d"),
+                    "비고": st.column_config.TextColumn("비고", width="medium"),
                 },
                 hide_index=True, key=f"final_edit_table_{_g}"
             )
