@@ -118,16 +118,21 @@ def _load_existing_items(inquiry_id):
         name = str(r.get('직군명', ''))
         if str(r.get('팀장여부', '')).strip() == '팀장':
             name += ' [팀장]'
-        qty = ue.safe_int(r.get('수량', 0))
+        # 컬럼명 호환: 인원수→수량 (load_estimate_items에서도 정규화하지만 안전장치)
+        qty = ue.safe_int(r.get('수량', r.get('인원수', 0)))
         days = ue.safe_int(r.get('일수', 1))
         sell = ue.safe_int(r.get('매출단가', 0))
         buy = ue.safe_int(r.get('매입단가', 0))
+        disc = ue.safe_int(r.get('할인액', r.get('할인율', 0)))
+        discounted_sell = max(0, sell - disc)
         rows.append({
-            '품목': name, '규격': str(r.get('규격', '')),
+            '품목': name,
+            '규격': str(r.get('규격', r.get('근무시간', ''))),
             '수량': qty, '일수': days,
             '매출단가': sell, '매입단가': buy,
-            '할인액': ue.safe_int(r.get('할인액', r.get('할인율', 0))),
-            '매출합계': sell * qty * days, '매입합계': buy * qty * days,
+            '할인액': disc,
+            '매출합계': discounted_sell * qty * days,
+            '매입합계': buy * qty * days,
             '비고': str(r.get('비고', ''))
         })
     return pd.DataFrame(rows) if rows else pd.DataFrame(columns=['품목','규격','수량','일수','매출단가','매입단가','할인액','매출합계','매입합계','비고'])

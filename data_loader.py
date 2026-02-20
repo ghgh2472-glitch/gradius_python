@@ -2273,6 +2273,25 @@ def delete_estimate_version(inquiry_id: str, version_name: str):
 # 견적품목 관리
 # ---------------------------------------------------------
 
+# 견적품목 표준 헤더 (save/load 동기화)
+_ESTIMATE_ITEMS_HEADERS = ['품목ID', '문의ID', '직군명', '수량', '일수', '매출단가', '매입단가', '규격', '비고', '팀장여부', '할인액']
+
+
+def _safe_num(val, default=0):
+    """NaN/문자열 안전 정수 변환"""
+    try:
+        if val is None or (isinstance(val, float) and str(val) == 'nan'):
+            return default
+        if isinstance(val, str):
+            clean = val.replace(',', '').replace('원', '').strip()
+            if not clean:
+                return default
+            return int(float(clean))
+        return int(float(val))
+    except (ValueError, TypeError):
+        return default
+
+
 def save_estimate_items(inquiry_id: str, items_df):
     """견적품목 시트에 직군별 품목 저장 (기존 항목 삭제 후 재작성)"""
     client = get_connection()
@@ -2284,10 +2303,14 @@ def save_estimate_items(inquiry_id: str, items_df):
         
         # 기존 해당 문의의 품목 삭제 (전체 재작성)
         all_vals = wks.get_all_values()
-        rows_to_keep = [all_vals[0]]  # 헤더
+        # 헤더를 표준 형식으로 고정 (기존 헤더 불일치 문제 방지)
+        rows_to_keep = [_ESTIMATE_ITEMS_HEADERS]
+        old_headers = all_vals[0] if all_vals else []
         for row in all_vals[1:]:
             if len(row) >= 2 and str(row[1]).strip() != str(inquiry_id).strip():
-                rows_to_keep.append(row)
+                # 기존 데이터 행을 표준 헤더 길이에 맞춤
+                padded = list(row) + [''] * max(0, len(_ESTIMATE_ITEMS_HEADERS) - len(row))
+                rows_to_keep.append(padded[:len(_ESTIMATE_ITEMS_HEADERS)])
         
         # 시트 클리어 후 재작성
         wks.clear()
@@ -2299,17 +2322,19 @@ def save_estimate_items(inquiry_id: str, items_df):
         for idx, item in items_df.iterrows():
             item_id = f"I-{datetime.now().strftime('%y%m%d')}-{str(uuid4())[:4]}"
             role_name = str(item.get('품목', '')).replace('[팀장]', '').strip()
+            # NaN 안전 변환
             row = [
                 item_id,
                 str(inquiry_id),
                 role_name,
-                int(item.get('수량', 0)),
-                int(item.get('일수', 0)),
-                int(item.get('매출단가', 0)),
-                int(item.get('매입단가', 0)),
-                str(item.get('규격', '')),
-                str(item.get('비고', '')),
+                _safe_num(item.get('수량', 0)),
+                _safe_num(item.get('일수', 0)),
+                _safe_num(item.get('매출단가', 0)),
+                _safe_num(item.get('매입단가', 0)),
+                str(item.get('규격', '') if pd.notna(item.get('규격', '')) else ''),
+                str(item.get('비고', '') if pd.notna(item.get('비고', '')) else ''),
                 '팀장' if '[팀장]' in str(item.get('품목', '')) else '',
+                _safe_num(item.get('할인액', 0)),
             ]
             wks.update(f'A{next_row}', [row], value_input_option='RAW')
             next_row += 1
@@ -2334,6 +2359,15 @@ def load_estimate_items(inquiry_id: str):
         if not records:
             return pd.DataFrame()
         df = pd.DataFrame(records)
+        # 구버전 헤더 호환: 인원수→수량, 근무시간→규격 등
+        _col_map = {'인원수': '수량', '근무시간': '규격', '할증옵션': '비고_old'}
+        for old_name, new_name in _col_map.items():
+            if old_name in df.columns and new_name not in df.columns:
+                df = df.rename(columns={old_name: new_name})
+        # 숫자 컬럼 타입 보정
+        for nc in ['수량', '일수', '매출단가', '매입단가', '할인액']:
+            if nc in df.columns:
+                df[nc] = pd.to_numeric(df[nc], errors='coerce').fillna(0).astype(int)
         if '문의ID' in df.columns:
             df = df[df['문의ID'].astype(str).str.strip() == str(inquiry_id).strip()]
         return df.reset_index(drop=True)

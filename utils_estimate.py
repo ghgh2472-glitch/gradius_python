@@ -492,8 +492,8 @@ def get_detailed_report_html(df, client, notes):
         u_rev = safe_int(r['매출단가'])
         u_cost = safe_int(r['매입단가'])
         u_prof = u_rev - u_cost
-        sum_rev = r['매출합계']
-        sum_cost = r['매입합계']
+        sum_rev = safe_int(r['매출합계'])
+        sum_cost = safe_int(r['매입합계'])
         prof = sum_rev - sum_cost
         margin = (prof / sum_rev * 100) if sum_rev > 0 else 0
         total_rev += sum_rev; total_cost += sum_cost; total_prof += prof
