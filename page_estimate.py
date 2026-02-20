@@ -270,7 +270,13 @@ def show(data):
     # ================================================================
     if sel_p != "(신규작성)" and not all_pending.empty and st.session_state.get('last_project') != sel_p:
         try:
-            target = all_pending[all_pending['label'] == sel_p].iloc[0]
+            _matched_pending = all_pending[all_pending['label'] == sel_p]
+            if _matched_pending.empty:
+                st.warning("⚠️ 선택한 프로젝트를 찾을 수 없습니다. 목록을 다시 확인해주세요.")
+                st.session_state['_est_selected'] = '(신규작성)'
+                st.session_state['last_project'] = '(신규작성)'
+                st.rerun()
+            target = _matched_pending.iloc[0]
             target_id = str(target.get('문의ID', '')).strip()
 
             # ▶ 날짜 개별 파싱 (행사시작일 > 시작일 > 일시 순으로 시도)
@@ -1660,7 +1666,11 @@ def show(data):
                         st.warning("⚠️ 프로젝트를 먼저 선택하세요.")
                     else:
                         try:
-                            target_row = all_pending[all_pending['label'] == sel_p].iloc[0]
+                            _save_matched = all_pending[all_pending['label'] == sel_p]
+                            if _save_matched.empty:
+                                st.error("⚠️ 선택한 프로젝트를 찾을 수 없습니다. 프로젝트를 다시 선택해주세요.")
+                                st.stop()
+                            target_row = _save_matched.iloc[0]
                             target_id = str(target_row.get('문의ID', ''))
 
                             s_amt = int(edited_df['매출합계'].sum()) if not edited_df.empty else 0
