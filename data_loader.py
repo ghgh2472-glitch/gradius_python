@@ -2545,14 +2545,16 @@ def save_payment_record(payment_dict: dict):
         
         wks.update(f'A{target_row}', [row_values], value_input_option='RAW')
         print(f"✅ 지급내역 저장: {payment_dict.get('인력명', '')} at row {target_row}")
+        invalidate_payment_cache()
         return True
     except Exception as e:
         print(f"❌ save_payment_record 오류: {e}")
         return False
 
 
-def get_payment_records_by_inquiry(inquiry_id: str) -> pd.DataFrame:
-    """특정 문의ID에 해당하는 지급내역 조회 (배정ID → 배정기록.문의ID 매칭)"""
+@st.cache_data(ttl=120)  # 지급내역 시트 120초 캐시 (API 할당량 절약)
+def _load_payment_sheet_cached():
+    """지급내역 시트 전체를 캐시하여 반복 API 호출 방지"""
     try:
         ensure_payment_sheet()
         client = get_connection()
@@ -2570,9 +2572,30 @@ def get_payment_records_by_inquiry(inquiry_id: str) -> pd.DataFrame:
         if not records:
             return pd.DataFrame()
         pay_df = pd.DataFrame(records)
-        # 빈 행 제거
         if '지급ID' in pay_df.columns:
             pay_df = pay_df[pay_df['지급ID'].astype(str).str.strip() != '']
+        print(f"[Payment] Loaded {len(pay_df)} payment records (cached)")
+        return pay_df.reset_index(drop=True)
+    except Exception as e:
+        print(f"_load_payment_sheet_cached error: {e}")
+        return pd.DataFrame()
+
+
+def invalidate_payment_cache():
+    """지급내역 캐시 초기화 (저장/수정 후 호출)"""
+    try:
+        _load_payment_sheet_cached.clear()
+    except Exception:
+        pass
+    print("[SESSION] Payment cache invalidated")
+
+
+def get_payment_records_by_inquiry(inquiry_id: str) -> pd.DataFrame:
+    """특정 문의ID에 해당하는 지급내역 조회 (캐시된 시트 사용, 배정ID → 배정기록.문의ID 매칭)"""
+    try:
+        pay_df = _load_payment_sheet_cached()
+        if pay_df.empty:
+            return pd.DataFrame()
 
         # 배정ID → 배정기록에서 문의ID로 필터
         assignments = get_assignments_by_inquiry(inquiry_id)
@@ -2621,6 +2644,7 @@ def update_payment_status(assign_id: str, new_status: str, pay_date: str = '') -
                 cells.append(Cell(row=target_row, col=date_col_idx, value=pay_date))
             wks.update_cells(cells, value_input_option='RAW')
             print(f"✅ 지급상태 업데이트: {assign_id} → {new_status}")
+            invalidate_payment_cache()
             return True
         else:
             # 레코드 없으면 무시 (먼저 지급기록 저장 필요)

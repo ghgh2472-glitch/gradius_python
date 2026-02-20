@@ -965,11 +965,19 @@ def show_settlement_detail(data):
         # 배정기록 시트에서 직접 인력 데이터 조회
         inq_id = str(row.get('문의ID', '')).strip()
         assignment_df = pd.DataFrame()
+        _load_error_msg = None
         if inq_id:
-            try:
-                assignment_df = db.get_assignments_by_inquiry(inq_id)
-            except Exception:
-                pass
+            for _retry in range(2):  # 최대 2회 시도
+                try:
+                    if _retry > 0:
+                        import time as _t; _t.sleep(1)
+                        db.invalidate_dispatch_only()
+                    assignment_df = db.get_assignments_by_inquiry(inq_id)
+                    if not assignment_df.empty:
+                        break
+                except Exception as _e:
+                    _load_error_msg = str(_e)
+                    print(f"[Settlement] 배정데이터 로드 실패 (시도 {_retry+1}): {_e}")
 
         # STAFF 시트에서 은행/계좌 정보 로드
         df_staff = data.get('staff', pd.DataFrame())
@@ -1099,6 +1107,13 @@ def show_settlement_detail(data):
                         team_info[_tc]['leader'] = _t_name
 
             edit_rows = []
+            # ── 지급상태 사전 로드 (캐시됨) ──
+            _pay_records_early = db.get_payment_records_by_inquiry(inq_id)
+            _pay_status_map_early = {}
+            if not _pay_records_early.empty and '배정ID' in _pay_records_early.columns and '지급상태' in _pay_records_early.columns:
+                for _, _pr in _pay_records_early.iterrows():
+                    _pay_status_map_early[str(_pr['배정ID']).strip()] = str(_pr['지급상태']).strip()
+
             for i, arow in assignment_df.iterrows():
                 a_name = str(arow.get(name_col, 'N/A')) if name_col else 'N/A'
                 a_role = str(arow.get(role_col, '')) if role_col else ''
@@ -1108,6 +1123,7 @@ def show_settlement_detail(data):
                 is_hq = a_name in hq_names
                 _tc = str(arow.get(team_code_col, '')).strip() if team_code_col else ''
                 _is_pay = str(arow.get(pay_target_col, 'Y')).strip().upper() == 'Y' if pay_target_col else True
+                _a_aid = str(arow.get('배정ID', '')).strip()
 
                 # 팀원(결제대상=N)은 정산 테이블에서 제외
                 if _tc and not _is_pay:
@@ -1116,6 +1132,9 @@ def show_settlement_detail(data):
                 orig_data[a_name] = {'단가': a_rate, '일수': a_days}
 
                 bank, account = _get_bank_info(a_name, df_staff)
+
+                # 지급상태 조회
+                _pay_st = _pay_status_map_early.get(_a_aid, '-')
 
                 # 팀장이면 팀 전체 합산 (현장 투입 인원 기준)
                 if _tc and _tc in team_info:
@@ -1136,7 +1155,7 @@ def show_settlement_detail(data):
                     team_note = ''
 
                 edit_rows.append({
-                    '이체': False,
+                    '지급상태': _pay_st,
                     '이름': a_name,
                     '직무': a_role,
                     '구분': '본사' if is_hq else a_type,
@@ -1156,6 +1175,7 @@ def show_settlement_detail(data):
                     '_은행': bank or '',
                     '_계좌': account or '',
                     '_팀코드': _tc,
+                    '_배정ID': _a_aid,
                 })
 
             initial_df = pd.DataFrame(edit_rows)
@@ -1176,7 +1196,7 @@ def show_settlement_detail(data):
                 # 추가된 행 처리
                 for added_row in persisted.get('added_rows', []):
                     new_row = {
-                        '이체': added_row.get('이체', False),
+                        '지급상태': '-',
                         '이름': added_row.get('이름', ''),
                         '직무': added_row.get('직무', ''),
                         '구분': added_row.get('구분', ''),
@@ -1190,7 +1210,7 @@ def show_settlement_detail(data):
                         '기타(숙박등)': added_row.get('기타(숙박등)', 0),
                         '기본급': 0, '공제': 0, '실수령': 0,
                         '메모': added_row.get('메모', ''),
-                        '_은행': '', '_계좌': '',
+                        '_은행': '', '_계좌': '', '_배정ID': '',
                     }
                     initial_df = pd.concat([initial_df, pd.DataFrame([new_row])], ignore_index=True)
 
@@ -1266,9 +1286,9 @@ def show_settlement_detail(data):
                             f'{team_html}</div>', unsafe_allow_html=True)
 
             edited_df = st.data_editor(
-                initial_df.drop(columns=['_은행', '_계좌', '_팀코드']),
+                initial_df.drop(columns=['_은행', '_계좌', '_팀코드', '_배정ID']),
                 column_config={
-                    '이체': st.column_config.CheckboxColumn('이체✓', width=50, help="이체 완료 체크"),
+                    '지급상태': st.column_config.TextColumn('지급', width=55, disabled=True, help="지급내역 시트 기준 상태"),
                     '이름': st.column_config.TextColumn('이름', width=75, disabled=True),
                     '직무': st.column_config.TextColumn('직무', width=65, disabled=True),
                     '구분': st.column_config.TextColumn('구분', width=50, disabled=True),
@@ -1303,12 +1323,13 @@ def show_settlement_detail(data):
                 e_overtime = int(erow.get('연장', 0) or 0)
                 e_etc = int(erow.get('기타(숙박등)', 0) or 0)
                 is_sep = bool(erow.get('별도', False))
-                is_paid = bool(erow.get('이체', False))
+                _e_pay_status = str(erow.get('지급상태', '-')).strip()
                 person_rate = _parse_tax_rate(erow.get('공제율', default_tax_label))
                 e_name = str(erow.get('이름', '')).strip()
 
                 # 팀장이면 팀 합산 기본급 사용
                 _e_tc = str(initial_df.iloc[i].get('_팀코드', '')) if i < len(initial_df) else ''
+                _e_aid = str(initial_df.iloc[i].get('_배정ID', '')) if i < len(initial_df) else ''
                 if _e_tc and _e_tc in team_info:
                     basic = team_info[_e_tc]['sum_amount']
                 else:
@@ -1341,7 +1362,6 @@ def show_settlement_detail(data):
                     '구분': str(erow.get('구분', '')),
                     '공제율': str(erow.get('공제율', default_tax_label)),
                     '별도': is_sep,
-                    '이체': is_paid,
                     '단가': e_rate,
                     '일수': e_days,
                     '식비': e_meal,
@@ -1358,6 +1378,8 @@ def show_settlement_detail(data):
                     '_changes': changes,
                     '_tax_rate': person_rate,
                     '_팀코드': _e_tc,
+                    '_배정ID': _e_aid,
+                    '_지급상태': _e_pay_status,
                 })
 
             # ── ⚡ 변동내역 배지 ──
@@ -1377,8 +1399,8 @@ def show_settlement_detail(data):
             # ── 💰 지급 요약 메트릭 ──
             normal = [r for r in calc_rows if not r['별도']]
             separate = [r for r in calc_rows if r['별도']]
-            paid_count = sum(1 for r in calc_rows if r['이체'])
-            unpaid_normal = [r for r in normal if not r['이체']]
+            paid_count = sum(1 for r in calc_rows if r.get('_지급상태') in ('완료', '확인완료'))
+            unpaid_normal = [r for r in normal if r.get('_지급상태') not in ('완료', '확인완료')]
 
             total_gross = sum(r['총액'] for r in normal)
             total_tax = sum(r['공제'] for r in normal)
@@ -1389,8 +1411,8 @@ def show_settlement_detail(data):
             mc2.metric("총 지급액", f"₩{total_gross:,}")
             mc3.metric("공제 합계", f"-₩{total_tax:,}")
             mc4.metric("실수령 합계", f"₩{total_net:,}")
-            mc5.metric("이체 진행", f"{paid_count}/{len(calc_rows)}명",
-                       delta=f"{len(calc_rows)-paid_count}명 미이체" if paid_count < len(calc_rows) else "전원 완료",
+            mc5.metric("지급 진행", f"{paid_count}/{len(calc_rows)}명",
+                       delta=f"{len(calc_rows)-paid_count}명 미처리" if paid_count < len(calc_rows) else "전원 완료",
                        delta_color="inverse" if paid_count < len(calc_rows) else "off")
 
             if separate:
@@ -1432,14 +1454,7 @@ def show_settlement_detail(data):
                             continue
                         if cr['총액'] <= 0:
                             continue
-                        # initial_df에서 배정ID 가져오기 (assignment_df가 아닌 initial_df 사용 — 팀원 제외되었으므로)
-                        a_assign_id = ''
-                        if i < len(initial_df):
-                            # initial_df에는 _은행/_계좌는 있지만 배정ID는 없을 수 있으므로 이름으로 매칭
-                            _match_name = cr['이름']
-                            _matched = assignment_df[assignment_df[name_col].astype(str) == _match_name] if name_col else pd.DataFrame()
-                            if not _matched.empty:
-                                a_assign_id = str(_matched.iloc[0].get('배정ID', ''))
+                        a_assign_id = cr.get('_배정ID', '')
                         _tc_note = "[팀일괄] " if cr.get('_팀코드') else ""
                         _is_hq_person = cr['구분'] == '본사'
                         payment_dict = {
@@ -1504,21 +1519,7 @@ def show_settlement_detail(data):
 
             st.divider()
 
-            # ── � 지급 진행 현황 (지급내역 시트 기준) ──
-            _pay_records = db.get_payment_records_by_inquiry(inq_id)
-            _pay_status_map = {}  # {배정ID: 지급상태}
-            if not _pay_records.empty and '배정ID' in _pay_records.columns and '지급상태' in _pay_records.columns:
-                for _, _pr in _pay_records.iterrows():
-                    _pay_status_map[str(_pr['배정ID']).strip()] = str(_pr['지급상태']).strip()
-
-            # 각 calc_row에 배정ID와 지급상태 매핑
-            for _ci, _cr in enumerate(calc_rows):
-                _cr_name = _cr['이름']
-                _matched_a = assignment_df[assignment_df[name_col].astype(str) == _cr_name] if name_col else pd.DataFrame()
-                _cr_aid = str(_matched_a.iloc[0].get('배정ID', '')) if not _matched_a.empty else ''
-                _cr['_배정ID'] = _cr_aid
-                _cr['_지급상태'] = _pay_status_map.get(_cr_aid, '')
-
+            # ── 💰 지급 진행 현황 (calc_rows에 _배정ID, _지급상태 이미 매핑됨) ──
             # 진행률 계산
             _total_persons = len(calc_rows)
             _completed_count = sum(1 for cr in calc_rows if cr['_지급상태'] in ('완료', '확인완료'))
@@ -1571,7 +1572,6 @@ def show_settlement_detail(data):
                     leader_tax_label = leader_cr['공제율'] if leader_cr else default_tax_label
                     leader_bank = leader_cr['은행'] if leader_cr else ''
                     leader_acct = leader_cr['계좌'] if leader_cr else ''
-                    leader_paid = leader_cr['이체'] if leader_cr else False
                     _leader_pay_status = leader_cr.get('_지급상태', '') if leader_cr else ''
 
                     # 배지 (지급내역 기준)
@@ -1581,9 +1581,6 @@ def show_settlement_detail(data):
                     elif _leader_pay_status == '대기':
                         _t_badge = "⏳"
                         _t_status = " [대기]"
-                    elif leader_paid:
-                        _t_badge = "✅"
-                        _t_status = " [이체완료]"
                     else:
                         _t_badge = "👥"
                         _t_status = ""
@@ -1722,12 +1719,11 @@ def show_settlement_detail(data):
                     continue
                 gross = cr['총액']
                 is_sep = cr['별도']
-                is_paid = cr['이체']
                 person_rate = cr['_tax_rate']
                 _ind_status = cr.get('_지급상태', '')
                 _is_hq = cr['구분'] == '본사'
 
-                # 배지 (지급내역 상태 우선)
+                # 배지 (지급내역 상태 기준)
                 if _ind_status == '완료':
                     badge = "✅"
                     status_txt = " [입금완료]"
@@ -1740,9 +1736,6 @@ def show_settlement_detail(data):
                 elif is_sep:
                     badge = "🔸"
                     status_txt = " [별도정산]"
-                elif is_paid:
-                    badge = "✅"
-                    status_txt = " [이체완료]"
                 else:
                     badge = "👤"
                     status_txt = ""
@@ -1829,8 +1822,14 @@ def show_settlement_detail(data):
             staff_data = brain.parse_dispatch_data(note_text)
             
             if not staff_data:
-                st.warning("⚠️ 배정된 인원 데이터를 찾을 수 없습니다.")
-                st.caption("인력배정 → 배정 확정을 먼저 진행해주세요.")
+                if _load_error_msg:
+                    st.error(f"⚠️ 배정 데이터 로드 중 오류가 발생했습니다: {_load_error_msg}")
+                    st.caption("잠시 후 페이지를 새로고침 하거나, 인터넷 연결을 확인해주세요.")
+                elif not inq_id:
+                    st.warning("⚠️ 문의ID가 없습니다. 계약 정보를 확인해주세요.")
+                else:
+                    st.warning("⚠️ 배정된 인원 데이터를 찾을 수 없습니다.")
+                    st.caption("인력배정 → 배정 확정을 먼저 진행해주세요.")
             else:
                 st.subheader(f"지급 대상자 ({len(staff_data)}명) — 특이사항 파싱")
                 for i, s in enumerate(staff_data):
