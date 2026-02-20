@@ -824,7 +824,7 @@ def _render_team_assignment_ui(df_staff, role_status):
                 })
 
             st.session_state.team_members = []
-            st.success(f"✅ {leader_name}팀 ({team_size}명) 배정 추가!")
+            st.success(f"✅ {leader_name}팀 ({1 + team_member_count}명, 현장{onsite_count}명) 배정 추가!")
             st.rerun()
 
 
