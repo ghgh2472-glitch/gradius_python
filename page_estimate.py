@@ -1364,6 +1364,11 @@ def show(data):
     # TAB 3: 히스토리 & 리포트 (통합)
     # ==================================================================
     if _active_est == _est_tabs[2]:
+        # ── 📬 견적서 발송 현황 (최상단) ──
+        _show_send_status_section(df_est, df_inq)
+
+        st.markdown("---")
+
         _show_history_tab(df_est, df_inq, st.session_state.get('w_client', ''))
 
         st.markdown("---")
@@ -1380,6 +1385,145 @@ def show(data):
             with c2:
                 html_rep = ue.get_detailed_report_html(st.session_state['est_items'], st.session_state.get('w_client', ''), [n1, n2, n3, n4])
                 st.components.v1.html(html_rep, height=1000, scrolling=True)
+
+
+# ==============================================================================
+# 2-1. 견적서 발송 현황
+# ==============================================================================
+def _show_send_status_section(df_est, df_inq):
+    """히스토리 탭 상단에 견적서 발송 확인/처리 섹션"""
+    st.subheader("📬 견적서 발송 현황")
+
+    if df_est.empty:
+        st.info("저장된 견적이 없어 발송 현황을 표시할 수 없습니다.")
+        return
+
+    # ── 발송 여부 컬럼 확인 ──
+    has_send_col = '발송여부' in df_est.columns
+    if has_send_col:
+        sent_mask = df_est['발송여부'].astype(str).str.strip() == '발송완료'
+        sent_count = sent_mask.sum()
+        unsent_count = len(df_est) - sent_count
+    else:
+        sent_count = 0
+        unsent_count = len(df_est)
+
+    # ── 요약 카드 ──
+    s1, s2, s3 = st.columns(3)
+    with s1:
+        st.markdown(f"""
+        <div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:10px;padding:16px;text-align:center;">
+            <div style="font-size:28px;font-weight:900;color:#059669;">{sent_count}</div>
+            <div style="font-size:13px;color:#065F46;font-weight:600;">✅ 발송 완료</div>
+        </div>""", unsafe_allow_html=True)
+    with s2:
+        st.markdown(f"""
+        <div style="background:#FEF2F2;border:1px solid #FECACA;border-radius:10px;padding:16px;text-align:center;">
+            <div style="font-size:28px;font-weight:900;color:#DC2626;">{unsent_count}</div>
+            <div style="font-size:13px;color:#991B1B;font-weight:600;">⏳ 미발송</div>
+        </div>""", unsafe_allow_html=True)
+    with s3:
+        rate = round(sent_count / max(len(df_est), 1) * 100)
+        bar_color = "#059669" if rate >= 70 else "#F59E0B" if rate >= 40 else "#DC2626"
+        st.markdown(f"""
+        <div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:10px;padding:16px;text-align:center;">
+            <div style="font-size:28px;font-weight:900;color:{bar_color};">{rate}%</div>
+            <div style="font-size:13px;color:#475569;font-weight:600;">📊 발송률</div>
+        </div>""", unsafe_allow_html=True)
+
+    st.markdown("")
+
+    # ── 견적별 발송 상태 목록 ──
+    # 최신순 정렬
+    display_df = df_est.copy()
+    if '기록일시' in display_df.columns:
+        display_df = display_df.sort_values('기록일시', ascending=False)
+
+    # 필터
+    f1, f2 = st.columns([1, 3])
+    with f1:
+        send_filter = st.selectbox("📌 필터", ["전체", "미발송만", "발송완료만"], key="send_filter_sel")
+
+    if send_filter == "미발송만" and has_send_col:
+        display_df = display_df[display_df['발송여부'].astype(str).str.strip() != '발송완료']
+    elif send_filter == "발송완료만" and has_send_col:
+        display_df = display_df[display_df['발송여부'].astype(str).str.strip() == '발송완료']
+
+    if display_df.empty:
+        st.info("해당 조건의 견적이 없습니다.")
+        return
+
+    for idx, (_, row) in enumerate(display_df.iterrows()):
+        inq_id = str(row.get('문의ID', '')).strip()
+        client = str(row.get('업체명', '')).strip()
+        event = str(row.get('행사명', row.get('현장명', ''))).strip()
+        total = ue.safe_int(row.get('합계금액', 0))
+        rec_date = str(row.get('기록일시', ''))[:10]
+
+        is_sent = has_send_col and str(row.get('발송여부', '')).strip() == '발송완료'
+        send_date = str(row.get('발송일시', '')).strip() if has_send_col else ''
+        send_method_val = str(row.get('발송방법', '')).strip() if has_send_col else ''
+        send_memo_val = str(row.get('발송메모', '')).strip() if has_send_col and '발송메모' in df_est.columns else ''
+
+        # 상태 뱃지
+        if is_sent:
+            badge = f'<span style="background:#D1FAE5;color:#065F46;padding:3px 10px;border-radius:6px;font-size:12px;font-weight:700;">✅ 발송완료</span>'
+            sub_info = f'📤 {send_method_val} | 📅 {send_date}'
+        else:
+            badge = f'<span style="background:#FEE2E2;color:#991B1B;padding:3px 10px;border-radius:6px;font-size:12px;font-weight:700;">⏳ 미발송</span>'
+            sub_info = ''
+
+        # 카드
+        border_color = "#10B981" if is_sent else "#F87171"
+        st.markdown(f"""
+        <div style="background:white;border:1px solid #e5e7eb;border-left:4px solid {border_color};
+                    border-radius:8px;padding:12px 16px;margin-bottom:6px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+                <div>
+                    <span style="font-weight:700;font-size:14px;">{client}</span>
+                    <span style="color:#6B7280;font-size:12px;margin-left:8px;">{event}</span>
+                    {badge}
+                </div>
+                <div style="text-align:right;">
+                    <span style="font-size:16px;font-weight:800;color:#1E40AF;">{total:,}원</span>
+                    <div style="font-size:11px;color:#9CA3AF;">ID: {inq_id} | {rec_date}</div>
+                </div>
+            </div>
+            {"<div style='font-size:11px;color:#6B7280;margin-top:4px;'>" + sub_info + ("  |  💬 " + send_memo_val if send_memo_val else "") + "</div>" if sub_info else ""}
+        </div>
+        """, unsafe_allow_html=True)
+
+        # 발송 처리 / 취소 토글
+        if not is_sent:
+            with st.expander(f"📤 발송완료 처리 — {client} {event}", expanded=False):
+                mc1, mc2 = st.columns([1, 2])
+                with mc1:
+                    method = st.selectbox("발송방법", ["이메일", "카카오톡", "팩스", "직접전달"], key=f"send_method_{inq_id}_{idx}")
+                with mc2:
+                    memo = st.text_input("발송 메모 (선택)", key=f"send_memo_{inq_id}_{idx}", placeholder="예: 담당자 김OO에게 발송")
+                if st.button("✅ 발송 완료 처리", key=f"send_btn_{inq_id}_{idx}", type="primary"):
+                    with st.spinner("발송 기록 중..."):
+                        res = db.update_estimate_send_status(inq_id, method, memo)
+                    if res:
+                        st.success(f"✅ {client} 견적서 발송 완료 기록됨!")
+                        db.invalidate_data()
+                        import time; time.sleep(0.5)
+                        st.rerun()
+                    else:
+                        st.error("❌ 발송 기록 실패. 시트 연결을 확인해주세요.")
+        else:
+            with st.expander(f"🔄 발송 취소 — {client} {event}", expanded=False):
+                st.warning("발송 완료를 취소하면 미발송 상태로 돌아갑니다.")
+                if st.button("🔄 발송 취소", key=f"unsend_btn_{inq_id}_{idx}"):
+                    with st.spinner("취소 처리 중..."):
+                        res = db.cancel_estimate_send_status(inq_id)
+                    if res:
+                        st.success("발송 상태가 초기화되었습니다.")
+                        db.invalidate_data()
+                        import time; time.sleep(0.5)
+                        st.rerun()
+                    else:
+                        st.error("❌ 취소 실패")
 
 
 # ==============================================================================

@@ -457,6 +457,118 @@ def update_status(inquiry_id, new_status, col_idx=14):
         except: pass
     return False
 
+
+def update_estimate_send_status(inquiry_id: str, send_method: str, send_memo: str = ""):
+    """
+    견적상세 시트의 발송 상태를 업데이트합니다.
+    발송여부, 발송일시, 발송방법, 발송메모 4개 컬럼을 한 번에 업데이트합니다.
+    컬럼이 없으면 자동으로 추가합니다.
+
+    Args:
+        inquiry_id (str): 문의ID
+        send_method (str): 발송방법 (이메일/카카오톡/팩스/직접전달)
+        send_memo (str): 발송 메모 (선택)
+    Returns:
+        bool: 성공 여부
+    """
+    client = get_connection()
+    if not client:
+        return False
+
+    try:
+        sh = client.open_by_key(SHEET_ID)
+        wks = sh.worksheet("견적상세")
+        headers = wks.row_values(1)
+        headers_clean = [str(h).strip() for h in headers]
+
+        # 필요한 컬럼이 없으면 자동 추가
+        send_cols = ["발송여부", "발송일시", "발송방법", "발송메모"]
+        for col_name in send_cols:
+            if col_name not in headers_clean:
+                next_col = len(headers_clean) + 1
+                wks.update_cell(1, next_col, col_name)
+                headers_clean.append(col_name)
+                logger.info(f"📝 견적상세 시트에 '{col_name}' 컬럼 추가 (col {next_col})")
+
+        # 문의ID로 행 찾기
+        id_col_idx = headers_clean.index('문의ID') + 1 if '문의ID' in headers_clean else 1
+        id_col = wks.col_values(id_col_idx)
+        id_col_clean = [str(x).strip() for x in id_col]
+
+        target_row = None
+        for i, cid in enumerate(id_col_clean):
+            if cid == str(inquiry_id).strip():
+                target_row = i + 1
+                break
+
+        if target_row is None:
+            logger.error(f"❌ 견적상세에서 문의ID '{inquiry_id}'를 찾을 수 없습니다")
+            return False
+
+        # 4개 컬럼 일괄 업데이트
+        from gspread.cell import Cell
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+        cells = [
+            Cell(row=target_row, col=headers_clean.index("발송여부") + 1, value="발송완료"),
+            Cell(row=target_row, col=headers_clean.index("발송일시") + 1, value=now_str),
+            Cell(row=target_row, col=headers_clean.index("발송방법") + 1, value=send_method),
+            Cell(row=target_row, col=headers_clean.index("발송메모") + 1, value=send_memo),
+        ]
+        wks.update_cells(cells, value_input_option='RAW')
+        logger.info(f"✅ 견적 발송 기록: {inquiry_id} → {send_method} ({now_str})")
+        return True
+
+    except Exception as e:
+        logger.error(f"❌ update_estimate_send_status 오류: {e}")
+        return False
+
+
+def cancel_estimate_send_status(inquiry_id: str):
+    """
+    견적 발송 상태를 취소(초기화)합니다.
+    """
+    client = get_connection()
+    if not client:
+        return False
+
+    try:
+        sh = client.open_by_key(SHEET_ID)
+        wks = sh.worksheet("견적상세")
+        headers = wks.row_values(1)
+        headers_clean = [str(h).strip() for h in headers]
+
+        if "발송여부" not in headers_clean:
+            return False
+
+        id_col_idx = headers_clean.index('문의ID') + 1 if '문의ID' in headers_clean else 1
+        id_col = wks.col_values(id_col_idx)
+        id_col_clean = [str(x).strip() for x in id_col]
+
+        target_row = None
+        for i, cid in enumerate(id_col_clean):
+            if cid == str(inquiry_id).strip():
+                target_row = i + 1
+                break
+
+        if target_row is None:
+            return False
+
+        from gspread.cell import Cell
+        cells = [
+            Cell(row=target_row, col=headers_clean.index("발송여부") + 1, value=""),
+            Cell(row=target_row, col=headers_clean.index("발송일시") + 1, value=""),
+            Cell(row=target_row, col=headers_clean.index("발송방법") + 1, value=""),
+            Cell(row=target_row, col=headers_clean.index("발송메모") + 1, value=""),
+        ]
+        wks.update_cells(cells, value_input_option='RAW')
+        logger.info(f"✅ 견적 발송 취소: {inquiry_id}")
+        return True
+
+    except Exception as e:
+        logger.error(f"❌ cancel_estimate_send_status 오류: {e}")
+        return False
+
+
 def update_cell(sheet_name, inquiry_id, col_name=None, value=""):
     """
     특정 셀 업데이트 (문의ID 기반)
