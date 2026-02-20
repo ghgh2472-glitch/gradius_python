@@ -126,6 +126,7 @@ def _load_existing_items(inquiry_id):
             '품목': name, '규격': str(r.get('규격', '')),
             '수량': qty, '일수': days,
             '매출단가': sell, '매입단가': buy,
+            '할인액': ue.safe_int(r.get('할인액', r.get('할인율', 0))),
             '매출합계': sell * qty * days, '매입합계': buy * qty * days,
             '비고': str(r.get('비고', ''))
         })
@@ -618,20 +619,37 @@ def show(data):
     # ── 탭 전환 시 위젯 값 보존 로직 ──
     # Streamlit은 렌더링되지 않는 위젯의 키를 session_state에서 삭제하므로
     # TAB1 떠날 때 백업, 돌아올 때 복원
-    _backup_keys = ['w_client', 'w_event', 'w_loc', 'w_manager', 'w_contact',
-                    'w_qty', 'w_time_in', 'w_time_out', 'w_dress', 'w_meal', 'w_parking', 'w_note',
-                    'w_time_mode', 'w_hour_base']
+    # (1) 위젯 키 (TAB1에서만 렌더되므로 탭 이동 시 Streamlit이 삭제)
+    _widget_keys = ['w_client', 'w_event', 'w_loc', 'w_manager', 'w_contact',
+                    'w_qty', 'w_time_in', 'w_time_out', 'w_dress', 'w_meal', 'w_parking', 'w_note']
+    # (2) 상속 데이터 키 (위젯이 아닌 순수 세션값이지만, 안전하게 백업)
+    _data_keys = ['w_sdate', 'w_edate', 'w_date_periods', 'w_time_mode', 'w_hour_base',
+                  '_current_inq_id', 'last_project']
+    # (3) 날짜 위젯 키 (dp_s_0 ~ dp_e_19)
+    _date_widget_keys = [f'dp_{t}_{i}' for i in range(20) for t in ['s', 'e']]
+    _all_backup_keys = _widget_keys + _data_keys + _date_widget_keys
+
     if _active_est != _est_tabs[0]:
-        # TAB1을 떠남 → 현재 위젯 값 백업
-        for _bk in _backup_keys:
+        # TAB1을 떠남 → 현재 값 백업
+        for _bk in _all_backup_keys:
             if _bk in st.session_state:
                 st.session_state[f'_bak_{_bk}'] = st.session_state[_bk]
+        # DataFrame은 별도 백업 (.copy() 필요)
+        if 'est_items' in st.session_state:
+            st.session_state['_bak_est_items'] = st.session_state['est_items'].copy()
+        if 'additional_costs' in st.session_state:
+            st.session_state['_bak_additional_costs'] = st.session_state['additional_costs'].copy()
     else:
         # TAB1 진입 → 백업값 복원 (위젯이 아직 렌더 전이라 키를 미리 설정)
-        for _bk in _backup_keys:
+        for _bk in _all_backup_keys:
             _bak_key = f'_bak_{_bk}'
             if _bak_key in st.session_state and _bk not in st.session_state:
                 st.session_state[_bk] = st.session_state[_bak_key]
+        # DataFrame 복원
+        if '_bak_est_items' in st.session_state and 'est_items' not in st.session_state:
+            st.session_state['est_items'] = st.session_state['_bak_est_items'].copy()
+        if '_bak_additional_costs' in st.session_state and 'additional_costs' not in st.session_state:
+            st.session_state['additional_costs'] = st.session_state['_bak_additional_costs'].copy()
 
     # 세대 카운터 (프로젝트 전환/견적안 불러오기 시 위젯 재생성용)
     _g = st.session_state.get('_tab2_gen', 0)
@@ -934,12 +952,18 @@ def show(data):
                                 continue  # 0명인 날 스킵
                             d_date = str(drow['_date_raw'])
                             d_date_short = str(drow['날짜'])
-                            # 시간 파싱
-                            try:
-                                d_dur = ue.smart_parse_time(f"{drow['출근시간']}~{drow['퇴근시간']}")[2]
-                            except Exception:
-                                d_dur = dur  # 파싱 실패 시 기본값
-                            d_spec = f"{drow['출근시간']}~{drow['퇴근시간']} ({d_dur}H)"
+                            # 시간 파싱 (미정인 경우 시간기준 모드의 dur 사용)
+                            _d_tin = str(drow['출근시간']).strip()
+                            _d_tout = str(drow['퇴근시간']).strip()
+                            if _d_tin in ('미정', '') or _d_tout in ('미정', ''):
+                                d_dur = dur  # 시간기준 모드의 기본 dur
+                                d_spec = f"{dur}H 기준 (시간 미정)"
+                            else:
+                                try:
+                                    d_dur = ue.smart_parse_time(f"{_d_tin}~{_d_tout}")[2]
+                                except Exception:
+                                    d_dur = dur
+                                d_spec = f"{_d_tin}~{_d_tout} ({d_dur}H)"
                             d_mult = d_dur if pay_type == "시급" else 1
                             d_bill = int(fb * d_mult * d_qty)
                             d_cost = int(fp * d_mult * d_qty)
