@@ -143,14 +143,41 @@ def show(data):
             f"현재 {team_stats['팀수']}개 팀, 팀장 {team_stats.get('팀장수', 0)}명 + 팀원 {team_stats.get('팀원수', 0)}명 투입 중"
         )
     
+    # 브리핑 내용 → 연결 페이지 매핑
+    def _get_nav_target(text):
+        if "미수금" in text: return "정산"
+        if "이익률" in text: return "정산"
+        if "곧 나갈 현장" in text: return "인원"
+        if "팀 배정" in text: return "인원"
+        if "미체결" in text: return "견적"
+        if "계약 완료 대기" in text: return "문의"
+        return None
+    
     for idx, item in enumerate(smart_briefing):
         color_idx = idx % len(briefing_colors)
-        st.markdown(f"""
-        <div style="background-color: {briefing_colors[color_idx]}; border-left: 4px solid {briefing_borders[color_idx]}; 
-                    padding: 12px 15px; margin-bottom: 10px; border-radius: 6px; font-size: 13px; line-height: 1.6;">
-            {item}
-        </div>
-        """, unsafe_allow_html=True)
+        nav_target = _get_nav_target(item)
+        
+        if nav_target:
+            bcol_left, bcol_right = st.columns([6, 1])
+            with bcol_left:
+                st.markdown(f"""
+                <div style="background-color: {briefing_colors[color_idx]}; border-left: 4px solid {briefing_borders[color_idx]}; 
+                            padding: 12px 15px; margin-bottom: 10px; border-radius: 6px; font-size: 13px; line-height: 1.6;">
+                    {item}
+                </div>
+                """, unsafe_allow_html=True)
+            with bcol_right:
+                st.markdown("<div style='height: 8px'></div>", unsafe_allow_html=True)
+                if st.button("바로가기 →", key=f"_brief_nav_{idx}", use_container_width=True):
+                    st.session_state['_nav_target'] = nav_target
+                    st.rerun()
+        else:
+            st.markdown(f"""
+            <div style="background-color: {briefing_colors[color_idx]}; border-left: 4px solid {briefing_borders[color_idx]}; 
+                        padding: 12px 15px; margin-bottom: 10px; border-radius: 6px; font-size: 13px; line-height: 1.6;">
+                {item}
+            </div>
+            """, unsafe_allow_html=True)
     
     st.markdown("---")
     

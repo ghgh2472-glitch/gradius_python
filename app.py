@@ -85,22 +85,31 @@ with st.sidebar:
     st.markdown("---")
     
     # 메뉴 선택
+    menu_options = [
+        "🚀 경영 대시보드",
+        "📞 문의 접수 및 관리",
+        "🧮 견적 통합 관리",
+        "📝 계약 관리 및 승인",
+        "👷 인원 배정 관리",
+        "📋 출석부 관리",
+        "💰 정산 및 급여 관리",
+        "🔍 프로젝트 상세확인",
+        "📊 데이터 조회",
+        "📘 사용 가이드",
+        "🛠️ 데이터 관리"
+    ]
+    # 대시보드 바로가기에서 네비게이션된 경우
+    nav_target = st.session_state.pop('_nav_target', None)
+    default_idx = 0
+    if nav_target:
+        for i, opt in enumerate(menu_options):
+            if nav_target in opt:
+                default_idx = i
+                break
     menu = st.radio(
         "업무 선택",
-        [
-            "🚀 경영 대시보드",
-            "📞 문의 접수 및 관리",
-            "🧮 견적 통합 관리",
-            "📝 계약 관리 및 승인",
-            "👷 인원 배정 관리",
-            "📋 출석부 관리",
-            "💰 정산 및 급여 관리",
-            "🔍 프로젝트 상세확인",
-            "� 데이터 조회",
-            "�📘 사용 가이드",
-            "🛠️ 데이터 관리"
-        ],
-        index=0
+        menu_options,
+        index=default_idx
     )
     
     st.markdown("---")

@@ -670,12 +670,63 @@ def show_settlement_detail(data):
         st.info("📌 정산할 프로젝트가 없습니다. (인력 배정 완료 필요)")
         return
 
-    # 프로젝트 선택
-    c_sel, c_blank = st.columns([1.5, 2.5])
-    with c_sel:
-        targets['label'] = targets['업체명'] + " (" + targets['행사명'] + ")"
-        sel_p = st.selectbox("📂 프로젝트 선택", targets['label'].unique())
-        row = targets[targets['label'] == sel_p].iloc[0]
+    # 프로젝트 좌우 분할 레이아웃
+    targets['label'] = targets['업체명'] + " (" + targets['행사명'] + ")"
+    
+    left_panel, right_panel = st.columns([1, 2.5])
+    
+    with left_panel:
+        st.markdown("##### 📂 프로젝트 목록")
+        
+        # 프로젝트 카드 리스트
+        selected_label = None
+        for idx, (_, t_row) in enumerate(targets.iterrows()):
+            t_label = t_row['label']
+            t_status = str(t_row.get(status_col, '')).strip()
+            # 상태별 색상
+            if t_status in ['정산완료']:
+                badge_color = "#10b981"; badge_bg = "#ecfdf5"
+            elif t_status in ['완료']:
+                badge_color = "#3b82f6"; badge_bg = "#eff6ff"
+            else:
+                badge_color = "#f59e0b"; badge_bg = "#fffbeb"
+            
+            # 미수금 표시
+            settle_data = dispatch_data.get('settlement', pd.DataFrame()) if 'dispatch_data' in dir() else pd.DataFrame()
+            
+            is_selected = st.session_state.get('_settle_selected') == t_label
+            border = f"2px solid {badge_color}" if is_selected else "1px solid #e5e7eb"
+            bg = badge_bg if is_selected else "white"
+            
+            st.markdown(f"""
+            <div style="background:{bg}; border:{border}; border-radius:8px; padding:10px 12px; margin-bottom:6px; cursor:pointer;">
+                <div style="font-weight:700; font-size:13px; color:#111;">{t_row['업체명']}</div>
+                <div style="font-size:12px; color:#6b7280;">{t_row['행사명']}</div>
+                <span style="background:{badge_color}; color:white; padding:2px 8px; border-radius:10px; font-size:11px;">{t_status}</span>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            if st.button(f"선택", key=f"_settle_sel_{idx}", use_container_width=True):
+                st.session_state['_settle_selected'] = t_label
+                st.rerun()
+        
+        # 기본 선택 (첫 번째 또는 세션)
+        if '_settle_selected' not in st.session_state or st.session_state['_settle_selected'] not in targets['label'].values:
+            st.session_state['_settle_selected'] = targets['label'].iloc[0]
+    
+    sel_p = st.session_state.get('_settle_selected', targets['label'].iloc[0])
+    row = targets[targets['label'] == sel_p].iloc[0]
+
+    # 오른쪽 패널: 선택된 프로젝트 요약 표시
+    with right_panel:
+        _sel_status = str(row.get(status_col, '')).strip()
+        st.markdown(f"""
+        <div style="background:#f8fafc; border-radius:10px; padding:16px; border-left:4px solid #3b82f6;">
+            <div style="font-size:18px; font-weight:800; color:#111;">{row['업체명']}</div>
+            <div style="font-size:14px; color:#4b5563; margin:4px 0;">{row['행사명']}</div>
+            <span style="background:#3b82f6; color:white; padding:3px 10px; border-radius:12px; font-size:12px;">{_sel_status}</span>
+        </div>
+        """, unsafe_allow_html=True)
 
     # --------------------------------------------------------------------------
     # 손익 요약 (견적상세 데이터 우선, fallback으로 특이사항 파싱)

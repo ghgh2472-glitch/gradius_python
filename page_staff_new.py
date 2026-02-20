@@ -789,6 +789,8 @@ def _render_individual_assignment_ui(sel, df_staff, role_status):
         st.markdown(f"**{len(results)}명 검색됨** — 체크하여 후보풀에 추가")
 
         selected_indices = []
+        # 카드형 레이아웃: 3열 그리드
+        card_cols = st.columns(3)
         for idx, row in results.reset_index(drop=True).iterrows():
             name = row.get('이름', 'N/A')
             gender = row.get('성별', '-')
@@ -799,13 +801,34 @@ def _render_individual_assignment_ui(sel, df_staff, role_status):
             score = row.get('총점', '-')
             recommend = row.get('추천도', '-')
             ai_score = row.get('AI점수', '')
-            ai_txt = f" · AI:{ai_score}" if ai_score != '' else ''
+            
+            # 추천도별 색상
+            if str(recommend) in ['A', 'S']:
+                rec_color = "#10b981"; rec_bg = "#ecfdf5"
+            elif str(recommend) == 'B':
+                rec_color = "#3b82f6"; rec_bg = "#eff6ff"
+            else:
+                rec_color = "#6b7280"; rec_bg = "#f9fafb"
+            
+            ai_badge = f'<span style="background:#7c3aed;color:white;padding:1px 6px;border-radius:8px;font-size:10px;">AI {ai_score}</span>' if ai_score != '' else ''
 
-            label = (f"{name}  |  {gender}/{age}  |  📍{region}  |  🔧{role}  "
-                     f"|  📏{height}cm  |  ⭐{score}  |  {recommend}{ai_txt}")
-
-            if st.checkbox(label, key=f"staff_sel_{idx}"):
-                selected_indices.append(idx)
+            with card_cols[idx % 3]:
+                st.markdown(f"""
+                <div style="background:white; border:1px solid #e5e7eb; border-radius:10px; padding:12px; margin-bottom:8px; box-shadow:0 1px 4px rgba(0,0,0,0.05);">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                        <span style="font-weight:800; font-size:15px; color:#111;">{name}</span>
+                        <span style="background:{rec_color}; color:white; padding:2px 8px; border-radius:10px; font-size:11px;">{recommend}</span>
+                    </div>
+                    <div style="font-size:12px; color:#4b5563; line-height:1.7;">
+                        👤 {gender}/{age}세 · 📏 {height}cm<br/>
+                        📍 {region}<br/>
+                        🔧 {role}<br/>
+                        ⭐ 총점: {score} {ai_badge}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+                if st.checkbox(f"{name} 선택", key=f"staff_sel_{idx}", label_visibility="collapsed"):
+                    selected_indices.append(idx)
 
         if selected_indices:
             if st.button(f"✅ 선택한 {len(selected_indices)}명 후보풀에 추가",

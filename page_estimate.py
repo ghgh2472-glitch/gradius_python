@@ -189,10 +189,58 @@ def show(data):
     _frames = [df for df in [pending_new, pending_edit, pending_contracted] if not df.empty]
     all_pending = pd.concat(_frames, ignore_index=True) if _frames else pd.DataFrame()
 
-    c_load, c_info = st.columns([1.5, 2.5])
-    with c_load:
-        sel_p = st.selectbox("📂 프로젝트 선택", p_list, key="est_project_sel")
-    with c_info:
+    est_left, est_right = st.columns([1, 3])
+    with est_left:
+        st.markdown("##### 📂 프로젝트")
+        # 신규작성 버튼
+        _new_selected = st.session_state.get('_est_selected', '(신규작성)') == '(신규작성)'
+        _new_border = "2px solid #10b981" if _new_selected else "1px solid #e5e7eb"
+        _new_bg = "#ecfdf5" if _new_selected else "white"
+        st.markdown(f"""
+        <div style="background:{_new_bg}; border:{_new_border}; border-radius:8px; padding:10px; margin-bottom:4px; text-align:center;">
+            <span style="font-weight:700; font-size:13px;">➕ 신규 작성</span>
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button("신규", key="_est_sel_new", use_container_width=True):
+            st.session_state['_est_selected'] = '(신규작성)'
+            st.rerun()
+
+        # 프로젝트 카드 목록
+        for idx, lbl in enumerate(p_list[1:]):  # [1:]은 (신규작성) 제외
+            # 상태별 색상
+            if lbl.startswith("[접수]"):
+                badge = "🆕"; color = "#10b981"; bg_sel = "#ecfdf5"
+            elif lbl.startswith("[수정]"):
+                badge = "📝"; color = "#f59e0b"; bg_sel = "#fffbeb"
+            else:
+                badge = "⚠️"; color = "#ef4444"; bg_sel = "#fef2f2"
+
+            is_sel = st.session_state.get('_est_selected') == lbl
+            border = f"2px solid {color}" if is_sel else "1px solid #e5e7eb"
+            bg = bg_sel if is_sel else "white"
+            # 라벨에서 업체/행사 추출
+            _display = lbl.split("] ", 1)[-1] if "] " in lbl else lbl
+            _parts = _display.split(" (")
+            _company = _parts[0] if _parts else _display
+            _event = _parts[1].rstrip(")") if len(_parts) > 1 else ""
+
+            st.markdown(f"""
+            <div style="background:{bg}; border:{border}; border-radius:8px; padding:8px 10px; margin-bottom:4px;">
+                <div style="font-weight:700; font-size:12px; color:#111;">{badge} {_company}</div>
+                <div style="font-size:11px; color:#6b7280; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{_event}</div>
+            </div>
+            """, unsafe_allow_html=True)
+            if st.button("선택", key=f"_est_sel_{idx}", use_container_width=True):
+                st.session_state['_est_selected'] = lbl
+                st.rerun()
+
+        # 기본 선택
+        if '_est_selected' not in st.session_state:
+            st.session_state['_est_selected'] = p_list[0]
+
+    sel_p = st.session_state.get('_est_selected', p_list[0])
+
+    with est_right:
         if sel_p.startswith("[체결수정]"):
             st.warning("⚠️ 체결된 견적을 수정합니다. 저장 시 기존 데이터를 덮어씁니다.")
         elif sel_p.startswith("[수정]"):

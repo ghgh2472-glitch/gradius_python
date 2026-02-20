@@ -126,6 +126,9 @@ def save_inquiry():
     res, msg = db.append_row("inq", inq_row)
 
     if res:
+        # 성공 시 데이터 캐시 초기화 (다른 페이지에서 즉시 반영)
+        db.invalidate_data()
+        
         # 성공 시 입력 폼 초기화 (여기서 초기화하면 에러 안 남)
         keys_to_clear = [
             'form_evt_name', 'form_evt_place', 'form_date_start', 'form_date_end', 
@@ -326,3 +329,70 @@ def show(data):
         # ----------------------------------------------------------------------
         # on_click에 save_inquiry 함수를 연결하여 위젯 렌더링 충돌 방지
         st.button("🚀 문의 접수 등록", type="primary", use_container_width=True, on_click=save_inquiry)
+
+    # ==========================================================================
+    # 최근 등록 문의 미니카드
+    # ==========================================================================
+    st.markdown("---")
+    st.markdown("#### 📋 최근 등록된 문의")
+    
+    df_inq = data.get('inq', pd.DataFrame())
+    if not df_inq.empty and len(df_inq) > 0:
+        # 최근 5건 (마지막 행이 최신)
+        recent = df_inq.tail(5).iloc[::-1]
+        
+        # 컬럼명 찾기
+        cols_map = {}
+        for target, candidates in [
+            ('업체명', ['업체명', '회사명']),
+            ('행사명', ['행사명', '프로젝트명']),
+            ('행사시작일', ['행사시작일', '시작일', '일시']),
+            ('상태', ['체결', '상태', '진행상태']),
+            ('작성일', ['작성일', '등록일']),
+        ]:
+            for c in candidates:
+                if c in recent.columns:
+                    cols_map[target] = c
+                    break
+        
+        card_cols = st.columns(min(len(recent), 5))
+        for i, (_, row) in enumerate(recent.iterrows()):
+            with card_cols[i % len(card_cols)]:
+                client = str(row.get(cols_map.get('업체명', ''), '')).strip()
+                event = str(row.get(cols_map.get('행사명', ''), '')).strip()
+                date_val = str(row.get(cols_map.get('행사시작일', ''), '')).strip()[:10]
+                status = str(row.get(cols_map.get('상태', ''), '')).strip()
+                reg_date = str(row.get(cols_map.get('작성일', ''), '')).strip()[:10]
+                
+                # 상태 색상
+                if status in ('접수', '상담'):
+                    s_color, s_bg = '#3B82F6', '#EFF6FF'
+                elif '견적' in status:
+                    s_color, s_bg = '#F59E0B', '#FFFBEB'
+                elif '체결' in status or '완료' in status:
+                    s_color, s_bg = '#10B981', '#F0FDF4'
+                else:
+                    s_color, s_bg = '#6B7280', '#F9FAFB'
+                
+                st.markdown(f"""
+                <div style="background: white; border: 1px solid #e5e7eb; border-radius: 10px; 
+                            padding: 14px; box-shadow: 0 1px 4px rgba(0,0,0,0.06); min-height: 130px;">
+                    <div style="font-size: 13px; font-weight: 700; color: #111827; margin-bottom: 6px; 
+                                overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                        {client or '-'}
+                    </div>
+                    <div style="font-size: 12px; color: #6B7280; margin-bottom: 4px;
+                                overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                        📌 {event or '-'}
+                    </div>
+                    <div style="font-size: 11px; color: #9CA3AF; margin-bottom: 8px;">
+                        📅 {date_val or '-'} &nbsp;|&nbsp; 🕐 {reg_date or '-'}
+                    </div>
+                    <span style="background: {s_bg}; color: {s_color}; padding: 2px 8px; 
+                                 border-radius: 8px; font-size: 11px; font-weight: 600;">
+                        {status or '-'}
+                    </span>
+                </div>
+                """, unsafe_allow_html=True)
+    else:
+        st.info("등록된 문의가 없습니다.")
