@@ -1053,6 +1053,45 @@ def _get_assign_sheet_ctx(force=False):
         except Exception as e:
             print(f"[Migration] 근무일자 헤더 추가 실패: {e}")
 
+    # 팀코드/결제대상/현장참여 헤더 자동 추가 (17-19번째 — 최초 1회)
+    _team_headers = ['팀코드', '결제대상', '현장참여']
+    for _th in _team_headers:
+        if _th not in headers:
+            try:
+                next_col = len(headers) + 1
+                wks.update_cell(1, next_col, _th)
+                headers.append(_th)
+                print(f"[Migration] '{_th}' 헤더 추가 (Col {next_col})")
+            except Exception as e:
+                print(f"[Migration] {_th} 헤더 추가 실패: {e}")
+
+    # ── 기존 데이터 마이그레이션: 팀코드/결제대상/현장참여가 20-22번 컬럼에 있으면 17-19번으로 이동 ──
+    try:
+        tc_idx = headers.index('팀코드') + 1 if '팀코드' in headers else None
+        if tc_idx and tc_idx <= 19:
+            # 헤더가 올바른 위치(<=19)에 있으면, 20-22번에 잘못 저장된 기존 데이터 체크
+            all_vals = wks.get_all_values()
+            migrated = 0
+            batch_cells = []
+            for ri, row_vals in enumerate(all_vals[1:], start=2):  # 데이터 행만
+                # 20-22번 컬럼(인덱스 19-21)에 데이터가 있고 17-19번(인덱스 tc_idx-1~)에 없으면 이동
+                if len(row_vals) > 21 and row_vals[19]:  # 20번 컬럼에 값이 있음
+                    if len(row_vals) <= tc_idx or not str(row_vals[tc_idx - 1]).strip():
+                        # 20→tc_idx, 21→tc_idx+1, 22→tc_idx+2 이동
+                        for offset in range(3):
+                            old_col = 20 + offset  # 1-based
+                            new_col = tc_idx + offset  # 1-based
+                            val = row_vals[19 + offset] if (19 + offset) < len(row_vals) else ''
+                            if val:
+                                batch_cells.append(gspread.Cell(ri, new_col, str(val)))
+                                batch_cells.append(gspread.Cell(ri, old_col, ''))  # 옛 위치 지우기
+                                migrated += 1
+            if batch_cells:
+                wks.update_cells(batch_cells, value_input_option='RAW')
+                print(f"[Migration] 팀 데이터 {migrated}건 위치 이동 (Col 20-22 → {tc_idx}-{tc_idx+2})")
+    except Exception as e:
+        print(f"[Migration] 팀 데이터 이동 실패 (무시): {e}")
+
     id_col = [str(v).strip() for v in wks.col_values(1)]
 
     # 자주 쓰는 컬럼 위치 사전 계산
@@ -1071,6 +1110,9 @@ def _get_assign_sheet_ctx(force=False):
         '근무일자': _fc('근무일자'),
         '구분': _fc('구분'),
         '인력명': _fc('인력명', '이름'),
+        '팀코드': _fc('팀코드'),
+        '결제대상': _fc('결제대상'),
+        '현장참여': _fc('현장참여'),
     }
 
     cache.update(wks=wks, headers=headers, id_col=id_col, col_map=col_map, ts=now)
@@ -1133,33 +1175,32 @@ def save_candidates_batch(inquiry_id: str, event_name: str, candidates: list):
                 if not account: account = staff_info.get('계좌번호', '')
             
             batch_rows.append([
-                assign_id,                          # A: 배정ID
-                str(inquiry_id),                    # B: 문의ID
-                str(event_name),                    # C: 행사명
-                staff_name,                         # D: 인력명
-                c.get('구분', '외부'),              # E: 구분
-                c.get('직무', ''),                  # F: 직무 (후보 단계에서는 빈칸 가능)
-                contact,                            # G: 연락처
-                ssn,                                # H: 주민등록번호
-                bank,                               # I: 은행명
-                account,                            # J: 계좌번호
-                c.get('지급단가', ''),              # K: 지급단가
-                c.get('근무일수', ''),              # L: 근무일수
-                c.get('총지급액', ''),              # M: 총지급액
-                ASSIGN_STATUS_CANDIDATE,            # N: 지급상태 = '후보'
-                now_str,                            # O: 배정일시
-                '',                                 # P: 투입시작일
-                '',                                 # Q: 투입종료일
-                '',                                 # R: 메모
-                '',                                 # S: 근무일자
-                c.get('팀코드', ''),                # T: 팀코드
-                c.get('결제대상', 'Y'),             # U: 결제대상
-                c.get('현장참여', 'Y'),             # V: 현장참여 (Y/N)
+                assign_id,                          # Col 1: 배정ID
+                str(inquiry_id),                    # Col 2: 문의ID
+                str(event_name),                    # Col 3: 행사명
+                staff_name,                         # Col 4: 인력명
+                c.get('구분', '외부'),              # Col 5: 구분
+                c.get('직무', ''),                  # Col 6: 직무
+                contact,                            # Col 7: 연락처
+                ssn,                                # Col 8: 주민등록번호
+                bank,                               # Col 9: 은행명
+                account,                            # Col 10: 계좌번호
+                c.get('지급단가', ''),              # Col 11: 지급단가
+                c.get('근무일수', ''),              # Col 12: 근무일수
+                c.get('총지급액', ''),              # Col 13: 총지급액
+                ASSIGN_STATUS_CANDIDATE,            # Col 14: 지급상태 = '후보'
+                now_str,                            # Col 15: 배정일시
+                '',                                 # Col 16: 근무일자 (후보 단계에서는 빈칸)
+                c.get('팀코드', ''),                # Col 17: 팀코드
+                c.get('결제대상', 'Y'),             # Col 18: 결제대상
+                c.get('현장참여', 'Y'),             # Col 19: 현장참여 (Y/N)
             ])
         
-        # 한 번의 API 호출로 배치 저장 (A~V: 22컬럼)
+        # 한 번의 API 호출로 배치 저장 (Col 1~19)
         if batch_rows:
-            cell_range = f'A{next_row}:V{next_row + len(batch_rows) - 1}'
+            num_cols = len(batch_rows[0])
+            end_col_letter = chr(ord('A') + num_cols - 1)  # 19 → 'S'
+            cell_range = f'A{next_row}:{end_col_letter}{next_row + len(batch_rows) - 1}'
             _invalidate_assign_ctx()
             wks.update(cell_range, batch_rows, value_input_option='RAW')
             print(f"[Batch] Saved {len(batch_rows)} candidates for {inquiry_id}")
@@ -1771,6 +1812,12 @@ def load_dispatch_sheet():
     try:
         sh = client.open_by_key(SHEET_ID)
         wks = sh.worksheet("배정기록")
+        
+        # ★ 읽기 전 헤더 마이그레이션: 팀코드/결제대상/현장참여 헤더 보장 + 데이터 위치 보정
+        try:
+            _get_assign_sheet_ctx()  # 헤더 추가 + 기존 데이터 이동 (자체 캐시 60초)
+        except Exception as _mig_err:
+            print(f"[Dispatch-Migration] 헤더/데이터 마이그레이션 건너뜀: {_mig_err}")
         
         # get_all_records 시도
         try:
