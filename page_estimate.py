@@ -13,7 +13,7 @@ import pandas as pd
 import utils_estimate as ue
 import data_loader as db
 import status_config as sc
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, time
 import time as _time
 import base64
 import os
@@ -258,6 +258,8 @@ def show(data):
             'w_date_periods': [],
             'w_time_in': datetime.strptime("09:00", "%H:%M").time(),
             'w_time_out': datetime.strptime("18:00", "%H:%M").time(),
+            'w_time_mode': '출퇴근 지정',  # '출퇴근 지정' | '시간 기준'
+            'w_hour_base': 8,
             'w_terms_top': get_default_terms_top(),
             'w_terms_side': get_default_terms_side()
         })
@@ -369,6 +371,17 @@ def show(data):
                 if v and v not in ('nan', 'None', ''): return v
                 return inq_val
 
+            # 시간 상속: 파싱된 출퇴근 시간 반영
+            _time_mode = '출퇴근 지정'
+            _hour_base = 8
+            _time_str = str(target.get('행사시간', target.get('시간', ''))).strip()
+            # '8시간', '10시간 기준' 같은 패턴 감지
+            import re as _re2
+            _hour_match = _re2.search(r'(\d+)\s*시간', _time_str)
+            if _hour_match and ('~' not in _time_str and ':' not in _time_str):
+                _time_mode = '시간 기준'
+                _hour_base = int(_hour_match.group(1))
+
             st.session_state.update({
                 'w_client': _safe_str(target.get('업체명', '')),
                 'w_event': _safe_str(target.get('행사명', '')),
@@ -378,6 +391,10 @@ def show(data):
                 'w_sdate': s_d, 'w_edate': e_d,
                 'w_date_periods': _date_periods,
                 'w_qty': qty,
+                'w_time_in': s_t,
+                'w_time_out': e_t,
+                'w_time_mode': _time_mode,
+                'w_hour_base': _hour_base,
                 'last_project': sel_p,
                 '_current_inq_id': target_id,
                 'w_dress': _safe_str(_pick('복장', _inq_dress)),
@@ -598,6 +615,24 @@ def show(data):
     _active_est = st.radio("estimate", _est_tabs, key="_estimate_tab", horizontal=True, label_visibility="collapsed")
     st.markdown("---")
 
+    # ── 탭 전환 시 위젯 값 보존 로직 ──
+    # Streamlit은 렌더링되지 않는 위젯의 키를 session_state에서 삭제하므로
+    # TAB1 떠날 때 백업, 돌아올 때 복원
+    _backup_keys = ['w_client', 'w_event', 'w_loc', 'w_manager', 'w_contact',
+                    'w_qty', 'w_time_in', 'w_time_out', 'w_dress', 'w_meal', 'w_parking', 'w_note',
+                    'w_time_mode', 'w_hour_base']
+    if _active_est != _est_tabs[0]:
+        # TAB1을 떠남 → 현재 위젯 값 백업
+        for _bk in _backup_keys:
+            if _bk in st.session_state:
+                st.session_state[f'_bak_{_bk}'] = st.session_state[_bk]
+    else:
+        # TAB1 진입 → 백업값 복원 (위젯이 아직 렌더 전이라 키를 미리 설정)
+        for _bk in _backup_keys:
+            _bak_key = f'_bak_{_bk}'
+            if _bak_key in st.session_state and _bk not in st.session_state:
+                st.session_state[_bk] = st.session_state[_bak_key]
+
     # 세대 카운터 (프로젝트 전환/견적안 불러오기 시 위젯 재생성용)
     _g = st.session_state.get('_tab2_gen', 0)
 
@@ -738,13 +773,91 @@ def show(data):
                 if is_leader:
                     base_p += 10000; cost_p += 10000
 
-                # 핵심 입력: 시간/인원/단가 (컴팩트)
-                t1, t2, t3 = st.columns([1, 1, 0.7])
-                ti = t1.time_input("출근", key="w_time_in")
-                to_ = t2.time_input("퇴근", key="w_time_out")
-                iq = t3.number_input("인원", min_value=1, key="w_qty")
-                dur = ue.smart_parse_time(f"{ti}~{to_}")[2]
-                spec_txt = f"{ti.strftime('%H:%M')}~{to_.strftime('%H:%M')} ({dur}H)"
+                # ──────────── 근무시간 설정 (개선) ────────────
+                # 탭 전환 시 값 복원
+                if 'w_time_mode' not in st.session_state:
+                    st.session_state['w_time_mode'] = '출퇴근 지정'
+                if 'w_hour_base' not in st.session_state:
+                    st.session_state['w_hour_base'] = 8
+
+                _tm_col1, _tm_col2 = st.columns([1.2, 2])
+                with _tm_col1:
+                    time_mode = st.radio("⏰ 근무시간", ["출퇴근 지정", "시간 기준"],
+                                         index=0 if st.session_state.get('w_time_mode', '출퇴근 지정') == '출퇴근 지정' else 1,
+                                         horizontal=True, key="_time_mode_radio", label_visibility="collapsed")
+                    st.session_state['w_time_mode'] = time_mode
+
+                dur = 9.0
+                spec_txt = ""
+
+                if time_mode == "출퇴근 지정":
+                    # 프리셋 버튼
+                    _presets = {"09~18": ("09:00", "18:00"), "08~17": ("08:00", "17:00"),
+                                "07~16": ("07:00", "16:00"), "10~19": ("10:00", "19:00"),
+                                "22~07": ("22:00", "07:00")}
+                    _preset_cols = st.columns(len(_presets) + 1)
+                    for _pi, (_plabel, (_ps_t, _pe_t)) in enumerate(_presets.items()):
+                        with _preset_cols[_pi]:
+                            if st.button(f"⏱ {_plabel}", key=f"preset_{_plabel}", use_container_width=True):
+                                st.session_state['w_time_in'] = datetime.strptime(_ps_t, "%H:%M").time()
+                                st.session_state['w_time_out'] = datetime.strptime(_pe_t, "%H:%M").time()
+                                st.rerun()
+                    with _preset_cols[-1]:
+                        _use_manual = st.checkbox("직접입력", key="_manual_time_chk")
+
+                    if _use_manual:
+                        _mt1, _mt2 = st.columns(2)
+                        _manual_in = _mt1.text_input("출근시간", value=st.session_state.get('w_time_in', time(9,0)).strftime('%H:%M'), key="_manual_time_in", placeholder="07:30")
+                        _manual_out = _mt2.text_input("퇴근시간", value=st.session_state.get('w_time_out', time(18,0)).strftime('%H:%M'), key="_manual_time_out", placeholder="16:30")
+                        try:
+                            ti = datetime.strptime(_manual_in.strip(), "%H:%M").time()
+                            to_ = datetime.strptime(_manual_out.strip(), "%H:%M").time()
+                            st.session_state['w_time_in'] = ti
+                            st.session_state['w_time_out'] = to_
+                        except ValueError:
+                            st.warning("⚠️ 시간 형식은 HH:MM (예: 07:30)")
+                            ti = st.session_state.get('w_time_in', time(9,0))
+                            to_ = st.session_state.get('w_time_out', time(18,0))
+                    else:
+                        _tt1, _tt2 = st.columns(2)
+                        ti = _tt1.time_input("출근", key="w_time_in")
+                        to_ = _tt2.time_input("퇴근", key="w_time_out")
+
+                    dur = ue.smart_parse_time(f"{ti}~{to_}")[2]
+                    spec_txt = f"{ti.strftime('%H:%M')}~{to_.strftime('%H:%M')} ({dur}H)"
+
+                else:  # 시간 기준 모드
+                    _hb_col1, _hb_col2 = st.columns([1.5, 2])
+                    with _hb_col1:
+                        _hour_presets = [4, 5, 6, 7, 8, 9, 10, 11, 12]
+                        _cur_hb = st.session_state.get('w_hour_base', 8)
+                        _hb_idx = _hour_presets.index(_cur_hb) if _cur_hb in _hour_presets else 4
+                        hour_base = st.selectbox("⏳ 기준 시간", _hour_presets, index=_hb_idx, key="_hour_base_sel",
+                                                 format_func=lambda x: f"{x}시간")
+                        st.session_state['w_hour_base'] = hour_base
+                    with _hb_col2:
+                        _optional_start = st.text_input("시작시간 (선택, 미정이면 비워두세요)", key="_hour_mode_start", placeholder="예: 09:00")
+
+                    dur = float(hour_base)
+                    if _optional_start and _optional_start.strip():
+                        try:
+                            _st_parsed = datetime.strptime(_optional_start.strip(), "%H:%M")
+                            _et_parsed = _st_parsed + timedelta(hours=hour_base)
+                            ti = _st_parsed.time()
+                            to_ = _et_parsed.time()
+                            spec_txt = f"{ti.strftime('%H:%M')}~{to_.strftime('%H:%M')} ({dur}H)"
+                        except ValueError:
+                            ti = time(9, 0)
+                            to_ = time(9 + hour_base, 0) if 9 + hour_base < 24 else time(23, 0)
+                            spec_txt = f"{hour_base}H 기준 (시간 미정)"
+                    else:
+                        ti = time(0, 0)
+                        to_ = time(0, 0)
+                        spec_txt = f"{hour_base}H 기준 (시간 미정)"
+                    st.info(f"📌 **{hour_base}시간 기준** 견적으로 산출됩니다")
+
+                # 인원 입력
+                iq = st.number_input("👥 인원", min_value=1, key="w_qty")
 
                 cc1, cc2 = st.columns(2)
                 fb = cc1.number_input("청구단가", value=base_p + add_p, step=5000)
@@ -774,6 +887,9 @@ def show(data):
                         # 기본값: 위에서 설정한 인원/시간으로 초기화
                         _KR_DAYS = {'Mon':'월','Tue':'화','Wed':'수','Thu':'목','Fri':'금','Sat':'토','Sun':'일'}
                         _daily_rows = []
+                        # 시간기준 모드일 때 출퇴근 표시
+                        _daily_ti_str = ti.strftime('%H:%M') if time_mode == "출퇴근 지정" or (ti.hour != 0 or ti.minute != 0) else "미정"
+                        _daily_to_str = to_.strftime('%H:%M') if time_mode == "출퇴근 지정" or (to_.hour != 0 or to_.minute != 0) else "미정"
                         for _d in all_dates:
                             _eng_day = _d.strftime('%a')
                             _kr_day = _KR_DAYS.get(_eng_day, _eng_day)
@@ -781,8 +897,8 @@ def show(data):
                                 '날짜': f"{_d.strftime('%m/%d')} ({_kr_day})",
                                 '_date_raw': _d.strftime('%Y-%m-%d'),
                                 '인원': iq,
-                                '출근시간': ti.strftime('%H:%M'),
-                                '퇴근시간': to_.strftime('%H:%M'),
+                                '출근시간': _daily_ti_str,
+                                '퇴근시간': _daily_to_str,
                             })
                         _daily_init = pd.DataFrame(_daily_rows)
 
