@@ -1441,6 +1441,7 @@ def show_settlement_detail(data):
                             if not _matched.empty:
                                 a_assign_id = str(_matched.iloc[0].get('배정ID', ''))
                         _tc_note = "[팀일괄] " if cr.get('_팀코드') else ""
+                        _is_hq_person = cr['구분'] == '본사'
                         payment_dict = {
                             '배정ID': a_assign_id,
                             '인력명': cr['이름'],
@@ -1455,10 +1456,10 @@ def show_settlement_detail(data):
                             '소계': cr['총액'],
                             '세금공제': cr['공제'],
                             '최종지급액': cr['실수령'],
-                            '지급상태': '완료',
-                            '지급일': datetime.now().strftime('%Y-%m-%d'),
+                            '지급상태': '대기',
+                            '지급일': '',
                             '지급담당자': '',
-                            '비고': _tc_note + f"{cr['공제율']} 공제" + (f" | {cr['메모']}" if cr['메모'] else ""),
+                            '비고': _tc_note + f"{cr['공제율']} 공제" + (f" | {cr['메모']}" if cr['메모'] else "") + (' [본사인원]' if _is_hq_person else ''),
                         }
                         if db.save_payment_record(payment_dict):
                             save_count += 1
@@ -1503,7 +1504,54 @@ def show_settlement_detail(data):
 
             st.divider()
 
-            # ── 📄 팀 결제 명세서 ──
+            # ── � 지급 진행 현황 (지급내역 시트 기준) ──
+            _pay_records = db.get_payment_records_by_inquiry(inq_id)
+            _pay_status_map = {}  # {배정ID: 지급상태}
+            if not _pay_records.empty and '배정ID' in _pay_records.columns and '지급상태' in _pay_records.columns:
+                for _, _pr in _pay_records.iterrows():
+                    _pay_status_map[str(_pr['배정ID']).strip()] = str(_pr['지급상태']).strip()
+
+            # 각 calc_row에 배정ID와 지급상태 매핑
+            for _ci, _cr in enumerate(calc_rows):
+                _cr_name = _cr['이름']
+                _matched_a = assignment_df[assignment_df[name_col].astype(str) == _cr_name] if name_col else pd.DataFrame()
+                _cr_aid = str(_matched_a.iloc[0].get('배정ID', '')) if not _matched_a.empty else ''
+                _cr['_배정ID'] = _cr_aid
+                _cr['_지급상태'] = _pay_status_map.get(_cr_aid, '')
+
+            # 진행률 계산
+            _total_persons = len(calc_rows)
+            _completed_count = sum(1 for cr in calc_rows if cr['_지급상태'] in ('완료', '확인완료'))
+            _pending_count = sum(1 for cr in calc_rows if cr['_지급상태'] == '대기')
+            _no_record = _total_persons - _completed_count - _pending_count
+            _progress_pct = (_completed_count / _total_persons * 100) if _total_persons > 0 else 0
+
+            _hq_done = sum(1 for cr in calc_rows if cr['구분'] == '본사' and cr['_지급상태'] == '확인완료')
+            _ext_done = sum(1 for cr in calc_rows if cr['구분'] != '본사' and cr['_지급상태'] == '완료')
+            _hq_total = sum(1 for cr in calc_rows if cr['구분'] == '본사')
+            _ext_total = _total_persons - _hq_total
+
+            st.subheader("💰 지급 진행 현황")
+            _prog_col1, _prog_col2 = st.columns([3, 1])
+            with _prog_col1:
+                st.progress(min(_progress_pct / 100, 1.0))
+            with _prog_col2:
+                st.markdown(f"**{_completed_count}/{_total_persons}명** ({_progress_pct:.0f}%)")
+
+            _status_parts = []
+            if _hq_total > 0:
+                _status_parts.append(f"🏢 본사 {_hq_done}/{_hq_total}명 확인")
+            if _ext_total > 0:
+                _status_parts.append(f"👤 외부 {_ext_done}/{_ext_total}명 입금")
+            if _pending_count > 0:
+                _status_parts.append(f"⏳ 대기 {_pending_count}명")
+            if _no_record > 0:
+                _status_parts.append(f"📝 미저장 {_no_record}명")
+            st.caption(" | ".join(_status_parts))
+
+            st.divider()
+
+            # ── �📄 팀 결제 명세서 ──
             if team_info:
                 st.subheader("👥 팀 결제 명세서")
                 for _tc, _ti in team_info.items():
@@ -1524,22 +1572,28 @@ def show_settlement_detail(data):
                     leader_bank = leader_cr['은행'] if leader_cr else ''
                     leader_acct = leader_cr['계좌'] if leader_cr else ''
                     leader_paid = leader_cr['이체'] if leader_cr else False
+                    _leader_pay_status = leader_cr.get('_지급상태', '') if leader_cr else ''
 
-                    # 팀장 현장참여 여부
-                    _leader_onsite = _onsite_n >= _total_n  # 전원 현장이면 팀장도 참여
-                    # 좀 더 정확하게: assignment_df에서 직접 확인
-                    if onsite_col and name_col:
-                        _ldr_rows = assignment_df[assignment_df[name_col].astype(str).str.strip() == _leader]
-                        if not _ldr_rows.empty:
-                            _leader_onsite = str(_ldr_rows.iloc[0].get(onsite_col, 'Y')).strip().upper() != 'N'
-
-                    # 배지
-                    if leader_paid:
+                    # 배지 (지급내역 기준)
+                    if _leader_pay_status == '완료':
+                        _t_badge = "✅"
+                        _t_status = " [입금완료]"
+                    elif _leader_pay_status == '대기':
+                        _t_badge = "⏳"
+                        _t_status = " [대기]"
+                    elif leader_paid:
                         _t_badge = "✅"
                         _t_status = " [이체완료]"
                     else:
                         _t_badge = "👥"
                         _t_status = ""
+
+                    # 팀장 현장참여 여부
+                    _leader_onsite = _onsite_n >= _total_n  # 전원 현장이면 팀장도 참여
+                    if onsite_col and name_col:
+                        _ldr_rows = assignment_df[assignment_df[name_col].astype(str).str.strip() == _leader]
+                        if not _ldr_rows.empty:
+                            _leader_onsite = str(_ldr_rows.iloc[0].get(onsite_col, 'Y')).strip().upper() != 'N'
 
                     bank_info = f"💳 {leader_bank} {leader_acct}" if leader_bank and leader_acct else "❗ 계좌 미등록"
                     onsite_tag = "" if _leader_onsite else " 🚫팀장불참"
@@ -1619,6 +1673,41 @@ def show_settlement_detail(data):
                             else:
                                 st.warning(f"❗ {_leader} 계좌 미등록")
 
+                            # ── 팀 입금확인 버튼 ──
+                            _t_aid = leader_cr.get('_배정ID', '') if leader_cr else ''
+                            _t_pay_status = leader_cr.get('_지급상태', '') if leader_cr else ''
+                            if _t_pay_status == '완료':
+                                st.success("✅ 입금 완료")
+                                if st.button("↩ 되돌리기", key=f"undo_team_{_tc}", type="secondary"):
+                                    if _t_aid and db.update_payment_status(_t_aid, '대기', ''):
+                                        # 팀원도 일괄 되돌리기
+                                        for _m_name in _ti['members']:
+                                            if _m_name == _leader:
+                                                continue
+                                            _m_rows = assignment_df[assignment_df[name_col].astype(str) == _m_name] if name_col else pd.DataFrame()
+                                            if not _m_rows.empty:
+                                                _m_aid = str(_m_rows.iloc[0].get('배정ID', ''))
+                                                if _m_aid:
+                                                    db.update_payment_status(_m_aid, '대기', '')
+                                        st.rerun()
+                            elif _t_pay_status == '대기':
+                                if st.button("💰 팀 입금완료", key=f"pay_team_{_tc}", type="primary", use_container_width=True):
+                                    _now_str = datetime.now().strftime('%Y-%m-%d')
+                                    if _t_aid:
+                                        db.update_payment_status(_t_aid, '완료', _now_str)
+                                    # 팀원도 일괄 완료
+                                    for _m_name in _ti['members']:
+                                        if _m_name == _leader:
+                                            continue
+                                        _m_rows = assignment_df[assignment_df[name_col].astype(str) == _m_name] if name_col else pd.DataFrame()
+                                        if not _m_rows.empty:
+                                            _m_aid = str(_m_rows.iloc[0].get('배정ID', ''))
+                                            if _m_aid:
+                                                db.update_payment_status(_m_aid, '완료', _now_str)
+                                    st.rerun()
+                            else:
+                                st.caption("📝 지급기록을 먼저 저장하세요")
+
             # ── 📄 개별 급여명세서 ──
             # 팀장(팀 결제)은 위에서 표시했으므로 개별에서는 건너뜀
             individual_rows = [cr for cr in calc_rows if not cr.get('_팀코드')]
@@ -1635,14 +1724,25 @@ def show_settlement_detail(data):
                 is_sep = cr['별도']
                 is_paid = cr['이체']
                 person_rate = cr['_tax_rate']
+                _ind_status = cr.get('_지급상태', '')
+                _is_hq = cr['구분'] == '본사'
 
-                # 배지
-                if is_paid:
+                # 배지 (지급내역 상태 우선)
+                if _ind_status == '완료':
                     badge = "✅"
-                    status_txt = " [이체완료]"
+                    status_txt = " [입금완료]"
+                elif _ind_status == '확인완료':
+                    badge = "✅"
+                    status_txt = " [본사확인]"
+                elif _ind_status == '대기':
+                    badge = "⏳"
+                    status_txt = " [대기]"
                 elif is_sep:
                     badge = "🔸"
                     status_txt = " [별도정산]"
+                elif is_paid:
+                    badge = "✅"
+                    status_txt = " [이체완료]"
                 else:
                     badge = "👤"
                     status_txt = ""
@@ -1690,6 +1790,39 @@ def show_settlement_detail(data):
                         | 공제({cr['공제율']}) | -₩{cr['공제']:,} |
                         | **실수령** | **₩{cr['실수령']:,}** |
                         """)
+
+                        # ── 입금확인 / 본사확인 버튼 ──
+                        st.markdown("---")
+                        _ind_aid = cr.get('_배정ID', '')
+                        _ind_pay_status = cr.get('_지급상태', '')
+                        _is_hq = cr['구분'] == '본사'
+
+                        if _is_hq:
+                            # 본사 인원: 확인 버튼만
+                            if _ind_pay_status == '확인완료':
+                                st.success("✅ 본사 확인 완료")
+                                if st.button("↩ 되돌리기", key=f"undo_hq_{_ind_aid}"):
+                                    db.update_payment_status(_ind_aid, '대기', '')
+                                    st.rerun()
+                            elif _ind_pay_status == '대기':
+                                if st.button("🏢 본사 확인", key=f"confirm_hq_{_ind_aid}", type="primary", use_container_width=True):
+                                    db.update_payment_status(_ind_aid, '확인완료', datetime.now().strftime('%Y-%m-%d'))
+                                    st.rerun()
+                            else:
+                                st.caption("📝 지급기록을 먼저 저장하세요")
+                        else:
+                            # 외부 인력: 입금완료 버튼
+                            if _ind_pay_status == '완료':
+                                st.success("✅ 입금 완료")
+                                if st.button("↩ 되돌리기", key=f"undo_pay_{_ind_aid}"):
+                                    db.update_payment_status(_ind_aid, '대기', '')
+                                    st.rerun()
+                            elif _ind_pay_status == '대기':
+                                if st.button("💰 입금완료", key=f"confirm_pay_{_ind_aid}", type="primary", use_container_width=True):
+                                    db.update_payment_status(_ind_aid, '완료', datetime.now().strftime('%Y-%m-%d'))
+                                    st.rerun()
+                            else:
+                                st.caption("📝 지급기록을 먼저 저장하세요")
         else:
             # 배정기록 없으면 기존 특이사항 텍스트 파싱 fallback
             note_text = str(row.get('특이사항', ''))
@@ -1713,10 +1846,17 @@ def show_settlement_detail(data):
         # 정산 완료 버튼
         if cur_status == '완료':
             st.divider()
-            if st.button("🏁 최종 정산 완료 (프로젝트 종료)", type="primary"):
-                db.update_status(inq_id_for_update, sc.STATUS_FLOW[6])  # '정산완료'
-                db.invalidate_data()
-                st.balloons(); st.success("모든 정산이 완료되었습니다!"); st.rerun()
+            # 전원 처리 완료 확인
+            _all_done = (_total_persons > 0 and _completed_count == _total_persons) if '_total_persons' in dir() else False
+            if _all_done:
+                if st.button("🏁 최종 정산 완료 (프로젝트 종료)", type="primary"):
+                    db.update_status(inq_id_for_update, sc.STATUS_FLOW[6])  # '정산완료'
+                    db.invalidate_data()
+                    st.balloons(); st.success("모든 정산이 완료되었습니다!"); st.rerun()
+            else:
+                _remain = _total_persons - _completed_count if '_total_persons' in dir() else 0
+                st.button(f"🏁 최종 정산 완료 (미처리 {_remain}명)", type="primary", disabled=True)
+                st.caption("⚠️ 모든 인원의 입금확인/본사확인이 완료되어야 정산을 마감할 수 있습니다.")
 
 
 def show_tax_invoice_management():

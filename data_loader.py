@@ -2551,6 +2551,86 @@ def save_payment_record(payment_dict: dict):
         return False
 
 
+def get_payment_records_by_inquiry(inquiry_id: str) -> pd.DataFrame:
+    """특정 문의ID에 해당하는 지급내역 조회 (배정ID → 배정기록.문의ID 매칭)"""
+    try:
+        ensure_payment_sheet()
+        client = get_connection()
+        if not client:
+            return pd.DataFrame()
+        sh = client.open_by_key(SHEET_ID)
+        wks = sh.worksheet("지급내역")
+        try:
+            records = wks.get_all_records()
+        except Exception:
+            all_vals = wks.get_all_values()
+            if len(all_vals) <= 1:
+                return pd.DataFrame()
+            records = [dict(zip(all_vals[0], row)) for row in all_vals[1:]]
+        if not records:
+            return pd.DataFrame()
+        pay_df = pd.DataFrame(records)
+        # 빈 행 제거
+        if '지급ID' in pay_df.columns:
+            pay_df = pay_df[pay_df['지급ID'].astype(str).str.strip() != '']
+
+        # 배정ID → 배정기록에서 문의ID로 필터
+        assignments = get_assignments_by_inquiry(inquiry_id)
+        if assignments.empty:
+            return pd.DataFrame()
+        valid_aids = set(assignments['배정ID'].astype(str).str.strip()) if '배정ID' in assignments.columns else set()
+        if not valid_aids or '배정ID' not in pay_df.columns:
+            return pd.DataFrame()
+        pay_df = pay_df[pay_df['배정ID'].astype(str).str.strip().isin(valid_aids)]
+        return pay_df.reset_index(drop=True)
+    except Exception as e:
+        print(f"get_payment_records_by_inquiry error: {e}")
+        return pd.DataFrame()
+
+
+def update_payment_status(assign_id: str, new_status: str, pay_date: str = '') -> bool:
+    """지급내역 시트에서 배정ID로 찾아 지급상태와 지급일을 업데이트.
+    레코드가 없으면 새로 생성 (최소 정보만).
+    """
+    try:
+        ensure_payment_sheet()
+        client = get_connection()
+        if not client:
+            return False
+        sh = client.open_by_key(SHEET_ID)
+        wks = sh.worksheet("지급내역")
+        all_vals = wks.get_all_values()
+        headers = all_vals[0] if all_vals else []
+        bid_col = headers.index('배정ID') + 1 if '배정ID' in headers else 2
+        status_col_idx = headers.index('지급상태') + 1 if '지급상태' in headers else 15
+        date_col_idx = headers.index('지급일') + 1 if '지급일' in headers else 16
+
+        target_row = None
+        for i, row in enumerate(all_vals[1:], 2):
+            if len(row) >= bid_col and str(row[bid_col - 1]).strip() == str(assign_id).strip():
+                target_row = i
+                break
+
+        if target_row:
+            # 기존 레코드 업데이트
+            from gspread.cell import Cell
+            cells = [
+                Cell(row=target_row, col=status_col_idx, value=new_status),
+            ]
+            if pay_date:
+                cells.append(Cell(row=target_row, col=date_col_idx, value=pay_date))
+            wks.update_cells(cells, value_input_option='RAW')
+            print(f"✅ 지급상태 업데이트: {assign_id} → {new_status}")
+            return True
+        else:
+            # 레코드 없으면 무시 (먼저 지급기록 저장 필요)
+            print(f"⚠️ 지급내역에 {assign_id} 미존재 — 지급기록 저장을 먼저 해주세요")
+            return False
+    except Exception as e:
+        print(f"❌ update_payment_status 오류: {e}")
+        return False
+
+
 # ---------------------------------------------------------
 # 본사 인원 정보 (코드 내 상수)
 # ---------------------------------------------------------

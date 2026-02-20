@@ -2416,7 +2416,7 @@ def show(data):
     c3.metric("🏢 본사 투입", f"{hq_count}명")
     c4.metric("👥 외부 인력", f"{ext_count}명")
 
-    _main_tabs = ["🎯 인력배정", "📋 출석/근무", "⭐ 평가", "💰 지급"]
+    _main_tabs = ["🎯 인력배정", "📋 출석/근무", "⭐ 평가"]
     _active = st.radio("main", _main_tabs, key="_staff_main_tab", horizontal=True, label_visibility="collapsed")
     st.markdown("---")
     if _active == _main_tabs[0]:
@@ -2425,5 +2425,3 @@ def show(data):
         tab_attendance(data)
     elif _active == _main_tabs[2]:
         tab_evaluation(data)
-    elif _active == _main_tabs[3]:
-        tab_payment(data)
