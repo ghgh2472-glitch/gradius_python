@@ -1179,8 +1179,13 @@ def show(data):
             if '할인액' not in st.session_state['est_items'].columns:
                 _idx = st.session_state['est_items'].columns.tolist().index('매출합계') if '매출합계' in st.session_state['est_items'].columns else len(st.session_state['est_items'].columns)
                 st.session_state['est_items'].insert(_idx, '할인액', 0)
+            # ── 텍스트 컬럼 NaN 정리 (data_editor 텍스트 편집 안정화) ──
+            _ed_src = st.session_state['est_items'].copy()
+            for _sc in ['품목', '규격', '비고']:
+                if _sc in _ed_src.columns:
+                    _ed_src[_sc] = _ed_src[_sc].fillna('').astype(str).replace('nan', '')
             edited_items = st.data_editor(
-                st.session_state['est_items'], use_container_width=True, hide_index=True,
+                _ed_src, use_container_width=True, hide_index=True,
                 num_rows="dynamic", key=f"est_items_editor_{_g}",
                 disabled=["매출합계", "매입합계"],
                 column_config={
@@ -1195,7 +1200,7 @@ def show(data):
                     "매입합계": st.column_config.NumberColumn("지출합계", format="%d"),
                     "비고": st.column_config.TextColumn("비고"),
                 })
-            # 편집 결과를 세션에 반영 (항상 수식 기반 재계산)
+            # 편집 결과를 세션에 반영 (수식 기반 재계산 — 변경 시에만 업데이트)
             if not edited_items.empty:
                 _recalc = edited_items.copy()
                 if '할인액' not in _recalc.columns:
@@ -1212,17 +1217,24 @@ def show(data):
                     _new_cost = _q * _d * _uc
                     _old_sale = _safe_int(_recalc.loc[_ci, '매출합계'])
                     _old_cost = _safe_int(_recalc.loc[_ci, '매입합계'])
-                    if _new_sale != _old_sale or _new_cost != _old_cost:
+                    if _new_sale != _old_sale:
+                        _recalc.loc[_ci, '매출합계'] = _new_sale
                         _needs_rerun = True
-                    _recalc.loc[_ci, '매출합계'] = _new_sale
-                    _recalc.loc[_ci, '매입합계'] = _new_cost
+                    if _new_cost != _old_cost:
+                        _recalc.loc[_ci, '매입합계'] = _new_cost
+                        _needs_rerun = True
+                # 텍스트 컬럼 NaN → '' 정리
+                for _sc in ['품목', '규격', '비고']:
+                    if _sc in _recalc.columns:
+                        _recalc[_sc] = _recalc[_sc].fillna('').astype(str).replace('nan', '')
                 st.session_state['est_items'] = _recalc
                 if _needs_rerun:
                     st.rerun()
 
-            # 삭제 버튼 (체크박스 선택 방식)
+            # 삭제 & 행 이동 버튼
             if not st.session_state['est_items'].empty:
                 n_items = len(st.session_state['est_items'])
+                # 삭제 버튼
                 del_cols = st.columns(min(n_items, 10) + 1)
                 for idx in range(min(n_items, 10)):
                     r = st.session_state['est_items'].iloc[idx]
@@ -1234,6 +1246,52 @@ def show(data):
                     if st.button("🗑️전체", key="del_all_items"):
                         st.session_state['est_items'] = pd.DataFrame(columns=['품목','규격','수량','일수','매출단가','매입단가','할인액','매출합계','매입합계','비고'])
                         st.rerun()
+
+                # 행 순서 이동
+                if n_items >= 2:
+                    with st.expander("🔀 행 순서 변경", expanded=False):
+                        _mv_labels = [f"{i+1}. {str(st.session_state['est_items'].iloc[i]['품목'])[:20]}" for i in range(n_items)]
+                        _mc1, _mc2, _mc3, _mc4, _mc5 = st.columns([2.5, 1, 1, 1, 1])
+                        with _mc1:
+                            _mv_idx = st.selectbox("이동할 품목", range(n_items), format_func=lambda i: _mv_labels[i], key="mv_item_sel")
+                        with _mc2:
+                            st.write("")
+                            if st.button("🔝 맨위", key="mv_top", use_container_width=True):
+                                if _mv_idx > 0:
+                                    _df = st.session_state['est_items']
+                                    _row = _df.iloc[[_mv_idx]]
+                                    _rest = _df.drop(_mv_idx)
+                                    st.session_state['est_items'] = pd.concat([_row, _rest], ignore_index=True)
+                                    st.session_state['_tab2_gen'] = _g + 1
+                                    st.rerun()
+                        with _mc3:
+                            st.write("")
+                            if st.button("⬆️ 위로", key="mv_up", use_container_width=True):
+                                if _mv_idx > 0:
+                                    _df = st.session_state['est_items'].copy()
+                                    _df.iloc[_mv_idx], _df.iloc[_mv_idx - 1] = _df.iloc[_mv_idx - 1].copy(), _df.iloc[_mv_idx].copy()
+                                    st.session_state['est_items'] = _df.reset_index(drop=True)
+                                    st.session_state['_tab2_gen'] = _g + 1
+                                    st.rerun()
+                        with _mc4:
+                            st.write("")
+                            if st.button("⬇️ 아래", key="mv_down", use_container_width=True):
+                                if _mv_idx < n_items - 1:
+                                    _df = st.session_state['est_items'].copy()
+                                    _df.iloc[_mv_idx], _df.iloc[_mv_idx + 1] = _df.iloc[_mv_idx + 1].copy(), _df.iloc[_mv_idx].copy()
+                                    st.session_state['est_items'] = _df.reset_index(drop=True)
+                                    st.session_state['_tab2_gen'] = _g + 1
+                                    st.rerun()
+                        with _mc5:
+                            st.write("")
+                            if st.button("🔚 맨끝", key="mv_bottom", use_container_width=True):
+                                if _mv_idx < n_items - 1:
+                                    _df = st.session_state['est_items']
+                                    _row = _df.iloc[[_mv_idx]]
+                                    _rest = _df.drop(_mv_idx)
+                                    st.session_state['est_items'] = pd.concat([_rest, _row], ignore_index=True)
+                                    st.session_state['_tab2_gen'] = _g + 1
+                                    st.rerun()
 
             # ▶ 단가 일괄 조정
             with st.expander("⚡ 단가 일괄 조정", expanded=False):
@@ -1324,8 +1382,13 @@ def show(data):
                 st.session_state['est_items'] = st.session_state['est_items'].rename(columns={'할인율': '할인액'})
             if '할인액' not in st.session_state['est_items'].columns:
                 st.session_state['est_items']['할인액'] = 0
+            # ── 텍스트 컬럼 NaN 정리 (data_editor 텍스트 편집 안정화) ──
+            _t2_src = st.session_state['est_items'].copy()
+            for _sc in ['품목', '규격', '비고']:
+                if _sc in _t2_src.columns:
+                    _t2_src[_sc] = _t2_src[_sc].fillna('').astype(str).replace('nan', '')
             edited_df = st.data_editor(
-                st.session_state['est_items'], width='stretch', num_rows="dynamic",
+                _t2_src, width='stretch', num_rows="dynamic",
                 disabled=["매출합계", "매입합계"],
                 column_config={
                     "품목": st.column_config.TextColumn("품목", width="medium"),
@@ -1340,7 +1403,7 @@ def show(data):
                 hide_index=True, key=f"final_edit_table_{_g}"
             )
 
-            # ── TAB2 편집 결과도 항상 수식 기반 재계산 ──
+            # ── TAB2 편집 결과도 수식 기반 재계산 (변경 시에만 업데이트) ──
             if not edited_df.empty:
                 _t2_recalc = edited_df.copy()
                 if '할인액' not in _t2_recalc.columns:
@@ -1357,23 +1420,84 @@ def show(data):
                     _new_cost = _q * _d * _uc
                     _old_sale = _safe_int(_t2_recalc.loc[_ci, '매출합계'])
                     _old_cost = _safe_int(_t2_recalc.loc[_ci, '매입합계'])
-                    if _new_sale != _old_sale or _new_cost != _old_cost:
+                    if _new_sale != _old_sale:
+                        _t2_recalc.loc[_ci, '매출합계'] = _new_sale
                         _t2_needs_rerun = True
-                    _t2_recalc.loc[_ci, '매출합계'] = _new_sale
-                    _t2_recalc.loc[_ci, '매입합계'] = _new_cost
+                    if _new_cost != _old_cost:
+                        _t2_recalc.loc[_ci, '매입합계'] = _new_cost
+                        _t2_needs_rerun = True
+                # 텍스트 컬럼 NaN → '' 정리
+                for _sc in ['품목', '규격', '비고']:
+                    if _sc in _t2_recalc.columns:
+                        _t2_recalc[_sc] = _t2_recalc[_sc].fillna('').astype(str).replace('nan', '')
                 edited_df = _t2_recalc
                 st.session_state['est_items'] = _t2_recalc
                 if _t2_needs_rerun:
                     st.rerun()
 
-            # 빈 행 삭제 버튼
+            # 빈 행 삭제 & 행 이동 버튼
             _empty_mask = edited_df['품목'].fillna('').astype(str).str.strip() == ''
             _empty_count = _empty_mask.sum()
-            if _empty_count > 0:
-                if st.button(f"🗑️ 빈 행 삭제 ({_empty_count}개)", key="remove_empty_rows"):
-                    st.session_state['est_items'] = edited_df[~_empty_mask].reset_index(drop=True)
-                    st.session_state['_tab2_gen'] = _g + 1  # data_editor 재생성
-                    st.rerun()
+            _t2_n = len(edited_df) - _empty_count
+            _t2_btns = st.columns([1, 1, 1] if _empty_count > 0 else [1, 1])
+            with _t2_btns[0]:
+                if _t2_n >= 2:
+                    if st.button("🔀 행 순서 변경", key="t2_toggle_move", use_container_width=True):
+                        st.session_state['_t2_show_move'] = not st.session_state.get('_t2_show_move', False)
+                        st.rerun()
+            with _t2_btns[1]:
+                if _empty_count > 0:
+                    if st.button(f"🗑️ 빈 행 삭제 ({_empty_count}개)", key="remove_empty_rows", use_container_width=True):
+                        st.session_state['est_items'] = edited_df[~_empty_mask].reset_index(drop=True)
+                        st.session_state['_tab2_gen'] = _g + 1
+                        st.rerun()
+
+            # 행 순서 변경 UI
+            if st.session_state.get('_t2_show_move', False) and _t2_n >= 2:
+                _t2_items_only = st.session_state['est_items'][~_empty_mask].reset_index(drop=True) if _empty_count > 0 else st.session_state['est_items']
+                _t2_n_real = len(_t2_items_only)
+                _t2_mv_labels = [f"{i+1}. {str(_t2_items_only.iloc[i]['품목'])[:20]}" for i in range(_t2_n_real)]
+                _tc1, _tc2, _tc3, _tc4, _tc5 = st.columns([2.5, 1, 1, 1, 1])
+                with _tc1:
+                    _t2_mv_idx = st.selectbox("이동할 품목", range(_t2_n_real), format_func=lambda i: _t2_mv_labels[i], key="t2_mv_sel")
+                with _tc2:
+                    st.write("")
+                    if st.button("🔝 맨위", key="t2_mv_top", use_container_width=True):
+                        if _t2_mv_idx > 0:
+                            _df = st.session_state['est_items']
+                            _row = _df.iloc[[_t2_mv_idx]]
+                            _rest = _df.drop(_t2_mv_idx)
+                            st.session_state['est_items'] = pd.concat([_row, _rest], ignore_index=True)
+                            st.session_state['_tab2_gen'] = _g + 1
+                            st.rerun()
+                with _tc3:
+                    st.write("")
+                    if st.button("⬆️ 위로", key="t2_mv_up", use_container_width=True):
+                        if _t2_mv_idx > 0:
+                            _df = st.session_state['est_items'].copy()
+                            _df.iloc[_t2_mv_idx], _df.iloc[_t2_mv_idx - 1] = _df.iloc[_t2_mv_idx - 1].copy(), _df.iloc[_t2_mv_idx].copy()
+                            st.session_state['est_items'] = _df.reset_index(drop=True)
+                            st.session_state['_tab2_gen'] = _g + 1
+                            st.rerun()
+                with _tc4:
+                    st.write("")
+                    if st.button("⬇️ 아래", key="t2_mv_down", use_container_width=True):
+                        if _t2_mv_idx < _t2_n_real - 1:
+                            _df = st.session_state['est_items'].copy()
+                            _df.iloc[_t2_mv_idx], _df.iloc[_t2_mv_idx + 1] = _df.iloc[_t2_mv_idx + 1].copy(), _df.iloc[_t2_mv_idx].copy()
+                            st.session_state['est_items'] = _df.reset_index(drop=True)
+                            st.session_state['_tab2_gen'] = _g + 1
+                            st.rerun()
+                with _tc5:
+                    st.write("")
+                    if st.button("🔚 맨끝", key="t2_mv_bottom", use_container_width=True):
+                        if _t2_mv_idx < _t2_n_real - 1:
+                            _df = st.session_state['est_items']
+                            _row = _df.iloc[[_t2_mv_idx]]
+                            _rest = _df.drop(_t2_mv_idx)
+                            st.session_state['est_items'] = pd.concat([_rest, _row], ignore_index=True)
+                            st.session_state['_tab2_gen'] = _g + 1
+                            st.rerun()
 
             t_top = st.text_area("상단 약관", value=st.session_state['w_terms_top'], height=120)
             t_side = st.text_area("측면 약관", value=st.session_state['w_terms_side'], height=120)
