@@ -71,6 +71,21 @@ def _col(df, *candidates):
             return c
     return candidates[0] if candidates else None
 
+
+def _team_prefix(row):
+    """팀 배정 인력이면 [팀] 프리픽스 반환, 팀장 현장불참이면 추가 표기"""
+    cat = str(row.get('구분', '')).strip()
+    tc = str(row.get('팀코드', '')).strip()
+    onsite = str(row.get('현장참여', '')).strip().upper()
+    if cat == '팀장' or cat == '팀원' or (tc and tc != 'nan' and tc != ''):
+        if cat == '팀장' and onsite == 'N':
+            return '[팀장·불참] '
+        elif cat == '팀장':
+            return '[팀장] '
+        else:
+            return '[팀] '
+    return ''
+
 def _select_contract(df_inq, statuses, key_prefix):
     """배정 가능 계약 선택. 없으면 (None, None)"""
     if df_inq.empty or '상태' not in df_inq.columns:
@@ -625,6 +640,7 @@ def _render_candidate_pool_panel(sel_id, sel, df_staff, role_status):
             badge_icon = "🏢" if ctype == '본사' else "👤"
             status_badge = "🟡 후보" if '후보' in cstatus else "🔵 배정중"
             role_text = f" → {crole}" if crole and str(crole) != 'nan' and str(crole).strip() else ""
+            team_tag = _team_prefix(row)
 
             # STAFF 정보 조회
             sinfo = _lookup_staff_brief(df_staff, cname)
@@ -635,7 +651,7 @@ def _render_candidate_pool_panel(sel_id, sel, df_staff, role_status):
 
             c1, c2 = st.columns([3, 1])
             with c1:
-                st.markdown(f"{badge_icon} **{cname}** {status_badge}{role_text}")
+                st.markdown(f"{badge_icon} {team_tag}**{cname}** {status_badge}{role_text}")
                 if info_line:
                     st.caption(f"  {info_line}")
             with c2:
@@ -1152,10 +1168,11 @@ def _step2_role_assignment(sel_id, sel, role_status, start_d=None, end_d=None, d
 
                     acols = st.columns([2.5] + [1] * len(page_dates) + [0.8, 0.8])
                     badge = "🏢" if a_type == '본사' else "👤"
+                    team_tag = _team_prefix(arow)
                     conflict_tag = ""
                     if a_name in conflict_map:
                         conflict_tag = " ⚠️"
-                    acols[0].caption(f"{badge}{a_name}{conflict_tag}\n({a_role})")
+                    acols[0].caption(f"{badge}{team_tag}{a_name}{conflict_tag}\n({a_role})")
 
                     person_days = 0
                     for di, dd in enumerate(page_dates):
@@ -1292,6 +1309,7 @@ def _step2_role_assignment(sel_id, sel, role_status, start_d=None, end_d=None, d
                 cname = row.get(name_col, 'N/A')
                 ctype = row.get('구분', '외부')
                 badge = "🏢" if ctype == '본사' else "👤"
+                team_tag = _team_prefix(row)
                 conflict_tag = ""
                 if cname in conflict_map:
                     total_overlap = sum(len(c['겹치는날짜']) for c in conflict_map[cname])
@@ -1303,7 +1321,7 @@ def _step2_role_assignment(sel_id, sel, role_status, start_d=None, end_d=None, d
                     info_txt = f" {sinfo['성별']}/{sinfo['나이']} · 📱{phone_display} · ⭐{sinfo['총점']}"
                 else:
                     info_txt = ""
-                st.markdown(f"{badge} **{cname}**{info_txt}{conflict_tag}")
+                st.markdown(f"{badge} {team_tag}**{cname}**{info_txt}{conflict_tag}")
 
         st.divider()
 
@@ -1340,10 +1358,11 @@ def _step2_role_assignment(sel_id, sel, role_status, start_d=None, end_d=None, d
                     for _, rr in role_assigned.iterrows():
                         rr_name = rr.get(name_col, '')
                         rr_days = int(rr.get('근무일수', rr.get('일수', 0)) or 0)
+                        rr_team = _team_prefix(rr)
                         ct = ""
                         if rr_name in conflict_map:
                             ct = f" ⚠️충돌"
-                        st.caption(f"  ✔ {rr_name} ({rr_days}일){ct}")
+                        st.caption(f"  ✔ {rr_team}{rr_name} ({rr_days}일){ct}")
 
                 # 미배정 후보를 이 직군에 배정 (인원 초과 허용)
                 has_manday_shortage = rs['actual_mandays'] < rs['needed_mandays']
@@ -1352,10 +1371,12 @@ def _step2_role_assignment(sel_id, sel, role_status, start_d=None, end_d=None, d
                         candidate_names = [r.get(name_col, 'N/A') for _, r in unassigned.iterrows()]
                         candidate_ids = [r.get('배정ID', '') for _, r in unassigned.iterrows()]
 
+                        # 팀 배정 인력에 [팀] 프리픽스 추가
+                        candidate_team_tags = [_team_prefix(r) for _, r in unassigned.iterrows()]
                         selected_candidates = st.multiselect(
                             f"{role_name} 배정할 후보",
                             range(len(candidate_names)),
-                            format_func=lambda x: f"{candidate_names[x]}{' ⚠️' if candidate_names[x] in conflict_map else ''}",
+                            format_func=lambda x: f"{candidate_team_tags[x]}{candidate_names[x]}{' ⚠️' if candidate_names[x] in conflict_map else ''}",
                             key=f"role_select_{ri}",
                         )
 
@@ -1574,8 +1595,9 @@ def _step3_confirm_and_schedule(sel_id, sel, role_status, is_long_term, start_d,
             r_role = row.get(role_col, '')
             r_rate = int(row.get('지급단가', row.get('단가', 0)) or 0)
             r_days = int(row.get('근무일수', row.get('일수', 0)) or 0)
+            team_tag = _team_prefix(row)
             confirm_data.append({
-                '인력명': r_name, '구분': row.get('구분', ''), '직무': r_role,
+                '인력명': f"{team_tag}{r_name}", '구분': row.get('구분', ''), '직무': r_role,
                 '단가': f"₩{r_rate:,}", '일수': r_days,
                 '총액': f"₩{r_rate * r_days:,}",
                 '배정ID': row.get('배정ID', '')
@@ -1644,7 +1666,7 @@ def _step3_confirm_and_schedule(sel_id, sel, role_status, is_long_term, start_d,
 
         # 개별 관리
         st.markdown("##### 🔧 배정 관리")
-        manage_labels = [f"{row.get(name_col, 'N/A')} — {row.get(role_col, '-')}"
+        manage_labels = [f"{_team_prefix(row)}{row.get(name_col, 'N/A')} — {row.get(role_col, '-')}"
                          for _, row in confirmed.iterrows()]
         sel_manage = st.selectbox("대상", range(len(manage_labels)),
                                    format_func=lambda x: manage_labels[x], key="manage_confirmed")

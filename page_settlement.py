@@ -778,7 +778,7 @@ def show_settlement_detail(data):
     _active_detail = st.radio("detail", _detail_tabs, key=f"_detail_tab_{inq_id}", horizontal=True, label_visibility="collapsed")
 
     # 상태 변수 미리 초기화 (두 탭 모두에서 사용)
-    status_col = brain.find_col(row, ['상태', '진행상태', '진행여부'])
+    status_col = next((c for c in ['상태', '진행상태', '진행여부'] if c in row.index), None)
     cur_status = str(row.get(status_col, '')).strip() if status_col else ''
     inq_id_for_update = str(row.get('문의ID', '')).strip()
 
