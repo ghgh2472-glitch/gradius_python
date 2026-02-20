@@ -1075,19 +1075,24 @@ def show_settlement_detail(data):
             pay_target_col = '결제대상' if '결제대상' in assignment_df.columns else None
 
             team_info = {}  # {팀코드: {'members': [...], 'leader': ..., 'sum_amount': int, ...}}
+            onsite_col = '현장참여' if '현장참여' in assignment_df.columns else None
             if team_code_col and pay_target_col:
                 for _, _tr in assignment_df.iterrows():
                     _tc = str(_tr.get(team_code_col, '')).strip()
                     if not _tc:
                         continue
                     if _tc not in team_info:
-                        team_info[_tc] = {'members': [], 'leader': None, 'sum_amount': 0, 'per_rate': 0, 'per_days': 0}
+                        team_info[_tc] = {'members': [], 'leader': None, 'sum_amount': 0, 'per_rate': 0, 'per_days': 0, 'onsite_count': 0}
                     _t_name = str(_tr.get(name_col, '')) if name_col else ''
                     _t_rate = int(float(_tr.get(rate_col, 0) or 0)) if rate_col else 0
                     _t_days = int(float(_tr.get(days_col, 1) or 1)) if days_col else 1
                     _is_pay = str(_tr.get(pay_target_col, 'Y')).strip().upper() == 'Y'
+                    _is_onsite = str(_tr.get(onsite_col, 'Y')).strip().upper() != 'N' if onsite_col else True
                     team_info[_tc]['members'].append(_t_name)
-                    team_info[_tc]['sum_amount'] += _t_rate * _t_days
+                    # 현장 투입 인원만 금액 합산 (불참 팀장 본인 몫 제외)
+                    if _is_onsite:
+                        team_info[_tc]['sum_amount'] += _t_rate * _t_days
+                        team_info[_tc]['onsite_count'] += 1
                     team_info[_tc]['per_rate'] = _t_rate
                     team_info[_tc]['per_days'] = _t_days
                     if _is_pay:
@@ -1112,16 +1117,19 @@ def show_settlement_detail(data):
 
                 bank, account = _get_bank_info(a_name, df_staff)
 
-                # 팀장이면 팀 전체 합산
+                # 팀장이면 팀 전체 합산 (현장 투입 인원 기준)
                 if _tc and _tc in team_info:
                     ti = team_info[_tc]
-                    display_basic = ti['sum_amount']
+                    display_basic = ti['sum_amount']  # 현장 투입 인원분만
                     member_names = [m for m in ti['members'] if m != a_name]
                     member_count = len(member_names)
                     per_rate = ti.get('per_rate', a_rate)
                     per_days = ti.get('per_days', a_days)
-                    team_note = (f"팀원{member_count}명분 포함 | "
-                                f"인당 ₩{per_rate:,}×{per_days}일×{len(ti['members'])}명"
+                    onsite_cnt = ti.get('onsite_count', len(ti['members']))
+                    _is_leader_onsite = str(arow.get(onsite_col, 'Y')).strip().upper() != 'N' if onsite_col else True
+                    offsite_note = ' (팀장 불참·본인분 제외)' if not _is_leader_onsite else ''
+                    team_note = (f"현장{onsite_cnt}명{offsite_note} | "
+                                f"인당 ₩{per_rate:,}×{per_days}일×{onsite_cnt}명"
                                 f"=₩{display_basic:,}")
                 else:
                     display_basic = a_rate * a_days

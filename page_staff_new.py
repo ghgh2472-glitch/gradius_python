@@ -207,6 +207,7 @@ def _get_role_status(est_items, assignments_df):
         if not assignments_df.empty:
             role_col = '직무' if '직무' in assignments_df.columns else '역할'
             days_col = '근무일수' if '근무일수' in assignments_df.columns else '일수'
+            onsite_col = '현장참여' if '현장참여' in assignments_df.columns else None
             if role_col in assignments_df.columns:
                 # ★ 수정: 배정기록의 직무가 base_role을 포함하는지 확인
                 # (배정 시 직무='경호원'으로 저장되므로 정확 매칭 + 포함 매칭 모두 처리)
@@ -214,10 +215,15 @@ def _get_role_status(est_items, assignments_df):
                     assignments_df[role_col].astype(str).str.strip().apply(
                         lambda x: x == base_role or base_role in x or x in base_role
                     )]
-                assigned_count = len(role_rows)
-                if days_col in role_rows.columns:
+                # ★ 현장불참 팀장은 인원/인일 카운트에서 제외
+                if onsite_col:
+                    onsite_rows = role_rows[role_rows[onsite_col].astype(str).str.strip().str.upper() != 'N']
+                else:
+                    onsite_rows = role_rows
+                assigned_count = len(onsite_rows)
+                if days_col in onsite_rows.columns:
                     actual_mandays = int(pd.to_numeric(
-                        role_rows[days_col], errors='coerce').fillna(0).sum())
+                        onsite_rows[days_col], errors='coerce').fillna(0).sum())
 
         # 날짜별 품목의 경우 needed는 최대일 인원 (배정 현황 카드 표시용)
         if g['has_date_items'] and g['date_details']:
@@ -296,7 +302,16 @@ def _auto_update_status(inquiry_id, role_status):
             active = assignments_df
         if role_status:
             total_needed = sum(rs['needed'] for rs in role_status)
-            total_assigned = len(active) if not active.empty else 0
+            # 현장불참 팀장은 인원 카운트에서 제외
+            if not active.empty:
+                _onsite_col = '현장참여' if '현장참여' in active.columns else None
+                if _onsite_col:
+                    _onsite_active = active[active[_onsite_col].astype(str).str.strip().str.upper() != 'N']
+                    total_assigned = len(_onsite_active)
+                else:
+                    total_assigned = len(active)
+            else:
+                total_assigned = 0
             if total_needed > 0 and total_assigned >= total_needed:
                 db.update_status(inquiry_id, sc.STATUS_FLOW[3])  # '배정완료'
                 # ✅ 정산 시트 진행상황도 '행사준비'로 자동 전환
@@ -768,13 +783,13 @@ def _render_team_assignment_ui(df_staff, role_status):
 
     team_member_count = len(st.session_state.team_members)
     onsite_count = (1 if leader_onsite else 0) + team_member_count
-    team_size = 1 + team_member_count  # 결제 기준 인원 (팀장 포함)
-    team_total = team_rate * team_days * team_size
+    # 총 지급액: 현장 투입 인원 기준 (불참 팀장 본인 몫 제외)
+    team_total = team_rate * team_days * onsite_count
 
     st.info(f"""
     📊 **팀 합계**
-    - 팀 인원: {team_size}명 (팀장 1 + 팀원 {team_member_count})
-    - 현장 투입: **{onsite_count}명** {'(팀장 불참)' if not leader_onsite else ''}
+    - 팀 인원: {1 + team_member_count}명 (팀장 1 + 팀원 {team_member_count})
+    - 현장 투입: **{onsite_count}명** {'(팀장 불참 → 팀장 본인 몫 제외)' if not leader_onsite else ''}
     - 총 지급액: **{team_total:,}원** → 팀장 계좌로 일괄 지급
     """)
 
@@ -787,10 +802,13 @@ def _render_team_assignment_ui(df_staff, role_status):
             leader_name = selected_leader.get('이름', '')
 
             # 팀장 추가 (결제대상 = Y, 현장참여는 체크박스 반영)
+            # 불참 팀장: 총지급액=0 (본인 몫 없음, 팀원분만 수령)
+            leader_own_pay = int(team_rate * team_days) if leader_onsite else 0
             st.session_state.assign_cart.append({
                 '인력명': leader_name, '구분': '팀장',
                 '직무': sel_role, '지급단가': int(team_rate),
-                '근무일수': int(team_days), '총지급액': int(team_rate * team_days),
+                '근무일수': int(team_days) if leader_onsite else 0,
+                '총지급액': leader_own_pay,
                 '팀코드': team_code, '결제대상': 'Y',
                 '현장참여': 'Y' if leader_onsite else 'N',
             })
@@ -1174,23 +1192,36 @@ def _step2_role_assignment(sel_id, sel, role_status, start_d=None, end_d=None, d
                         conflict_tag = " ⚠️"
                     acols[0].caption(f"{badge}{team_tag}{a_name}{conflict_tag}\n({a_role})")
 
+                    # 현장불참 팀장 여부 확인
+                    _is_offsite_leader = (
+                        str(arow.get('구분', '')).strip() == '팀장' and
+                        str(arow.get('현장참여', 'Y')).strip().upper() == 'N'
+                    )
+
                     person_days = 0
                     for di, dd in enumerate(page_dates):
                         d_iso = dd.isoformat()
                         # 근무일자 컬럼이 있으면 정확한 날짜 매칭, 없으면 순서 기반 폴백
-                        if a_work_dates_set is not None:
+                        if _is_offsite_leader:
+                            works_this_day = False  # 불참 팀장은 출근 없음
+                        elif a_work_dates_set is not None:
                             works_this_day = d_iso in a_work_dates_set
                         else:
                             day_idx = event_dates.index(dd) if dd in event_dates else -1
                             works_this_day = day_idx < a_days if a_days > 0 and day_idx >= 0 else False
                         with acols[di + 1]:
-                            if works_this_day:
+                            if _is_offsite_leader:
+                                st.markdown("🚫")  # 불참 표시
+                            elif works_this_day:
                                 st.markdown("✅")
                                 day_counts[d_iso] = day_counts.get(d_iso, 0) + 1
                                 person_days += 1
                             else:
                                 st.markdown("·")
-                    acols[-2].caption(f"**{person_days}**")
+                    if _is_offsite_leader:
+                        acols[-2].caption("**불참**")
+                    else:
+                        acols[-2].caption(f"**{person_days}**")
 
                     # 관리 버튼: ✏️ 수정 / ❌ 배정취소
                     with acols[-1]:
