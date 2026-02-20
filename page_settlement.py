@@ -1252,10 +1252,12 @@ def show_settlement_detail(data):
                     _per_r = _ti.get('per_rate', 0)
                     _per_d = _ti.get('per_days', 0)
                     _n = len(_ti['members'])
+                    _onsite_n = _ti.get('onsite_count', _n)
+                    _offsite_tag = f' <span style=\"color:#DC2626;\">(팀장 불참, 현장{_onsite_n}명)</span>' if _onsite_n < _n else ''
                     team_html += (f'<div style="background:#EDE9FE;border-radius:8px;padding:6px 10px;margin:3px 0;">'
-                                 f'<b>👥 {_leader}팀</b> ({_n}명) → <b>{_leader}</b> 계좌로 일괄지급<br/>'
+                                 f'<b>👥 {_leader}팀</b> ({_n}명{_offsite_tag}) → <b>{_leader}</b> 계좌로 일괄지급<br/>'
                                  f'<span style="font-size:12px;color:#5B21B6;">'
-                                 f'  산출: 인당 ₩{_per_r:,} × {_per_d}일 × {_n}명 = <b>₩{_ti["sum_amount"]:,}</b>'
+                                 f'  산출: 인당 ₩{_per_r:,} × {_per_d}일 × {_onsite_n}명 = <b>₩{_ti["sum_amount"]:,}</b>'
                                  f'</span><br/>'
                                  f'<span style="font-size:11px;color:#7C3AED;">팀원: {", ".join(_members) if _members else "(팀장만)"}</span>'
                                  f'</div>')
@@ -1501,11 +1503,133 @@ def show_settlement_detail(data):
 
             st.divider()
 
+            # ── 📄 팀 결제 명세서 ──
+            if team_info:
+                st.subheader("👥 팀 결제 명세서")
+                for _tc, _ti in team_info.items():
+                    _leader = _ti['leader'] or '?'
+                    _members = [m for m in _ti['members'] if m != _leader]
+                    _per_r = _ti.get('per_rate', 0)
+                    _per_d = _ti.get('per_days', 0)
+                    _onsite_n = _ti.get('onsite_count', len(_ti['members']))
+                    _total_n = len(_ti['members'])
+                    _sum_amt = _ti['sum_amount']
+
+                    # 팀장 calc_row 찾기
+                    leader_cr = next((cr for cr in calc_rows if cr['이름'] == _leader and cr.get('_팀코드') == _tc), None)
+                    leader_gross = leader_cr['총액'] if leader_cr else _sum_amt
+                    leader_tax = leader_cr['공제'] if leader_cr else 0
+                    leader_net = leader_cr['실수령'] if leader_cr else _sum_amt
+                    leader_tax_label = leader_cr['공제율'] if leader_cr else default_tax_label
+                    leader_bank = leader_cr['은행'] if leader_cr else ''
+                    leader_acct = leader_cr['계좌'] if leader_cr else ''
+                    leader_paid = leader_cr['이체'] if leader_cr else False
+
+                    # 팀장 현장참여 여부
+                    _leader_onsite = _onsite_n >= _total_n  # 전원 현장이면 팀장도 참여
+                    # 좀 더 정확하게: assignment_df에서 직접 확인
+                    if onsite_col and name_col:
+                        _ldr_rows = assignment_df[assignment_df[name_col].astype(str).str.strip() == _leader]
+                        if not _ldr_rows.empty:
+                            _leader_onsite = str(_ldr_rows.iloc[0].get(onsite_col, 'Y')).strip().upper() != 'N'
+
+                    # 배지
+                    if leader_paid:
+                        _t_badge = "✅"
+                        _t_status = " [이체완료]"
+                    else:
+                        _t_badge = "👥"
+                        _t_status = ""
+
+                    bank_info = f"💳 {leader_bank} {leader_acct}" if leader_bank and leader_acct else "❗ 계좌 미등록"
+                    onsite_tag = "" if _leader_onsite else " 🚫팀장불참"
+
+                    with st.expander(
+                        f"{_t_badge} {_leader}팀{_t_status} ({_total_n}명, 현장{_onsite_n}명{onsite_tag}) "
+                        f"— ₩{leader_gross:,} [{leader_tax_label}] {bank_info}"
+                    ):
+                        # 팀 구성 상세
+                        st.markdown("**👥 팀 구성원**")
+                        _member_rows_html = ""
+                        for _m_name in _ti['members']:
+                            _is_leader = _m_name == _leader
+                            _m_onsite = True
+                            if _is_leader and not _leader_onsite:
+                                _m_onsite = False
+
+                            if _is_leader and not _m_onsite:
+                                _m_icon = "🚫"
+                                _m_label = f"**{_m_name}** (팀장·불참) — 결제 수령인"
+                                _m_amt = "본인분 제외"
+                                _m_color = "#DC2626"
+                            elif _is_leader:
+                                _m_icon = "👑"
+                                _m_label = f"**{_m_name}** (팀장·현장참여) — 결제 수령인"
+                                _m_amt = f"₩{_per_r:,} × {_per_d}일 = ₩{_per_r * _per_d:,}"
+                                _m_color = "#7C3AED"
+                            else:
+                                _m_icon = "👤"
+                                _m_label = f"{_m_name} (팀원)"
+                                _m_amt = f"₩{_per_r:,} × {_per_d}일 = ₩{_per_r * _per_d:,}"
+                                _m_color = "#374151"
+
+                            _member_rows_html += (
+                                f'<div style="display:flex;justify-content:space-between;padding:4px 0;'
+                                f'border-bottom:1px solid #f3f4f6;">'
+                                f'<span style="color:{_m_color};">{_m_icon} {_m_label}</span>'
+                                f'<span style="font-weight:600;color:{_m_color};">{_m_amt}</span>'
+                                f'</div>'
+                            )
+
+                        st.markdown(
+                            f'<div style="background:#F9FAFB;border-radius:8px;padding:10px 14px;">'
+                            f'{_member_rows_html}</div>', unsafe_allow_html=True
+                        )
+
+                        # 산출 내역
+                        st.markdown("")
+                        if not _leader_onsite:
+                            st.warning(
+                                f"🚫 **팀장 현장 불참** — 팀장 본인 몫(₩{_per_r:,}×{_per_d}일=₩{_per_r * _per_d:,}) 제외\n\n"
+                                f"팀원 {_onsite_n}명분만 지급: ₩{_per_r:,} × {_per_d}일 × {_onsite_n}명 = **₩{_sum_amt:,}**"
+                            )
+                        else:
+                            st.info(
+                                f"인당 ₩{_per_r:,} × {_per_d}일 × {_total_n}명 = **₩{_sum_amt:,}**"
+                            )
+
+                        # 지급 상세
+                        c1, c2 = st.columns([2, 1])
+                        with c1:
+                            st.markdown(f"""
+                            | 항목 | 금액 |
+                            |------|------|
+                            | 팀 합산 기본급 | ₩{_sum_amt:,} |
+                            | 식비 | ₩{leader_cr['식비']:,} |
+                            | 교통비 | ₩{leader_cr['교통비']:,} |
+                            | 연장 | ₩{leader_cr['연장']:,} |
+                            | 기타(숙박등) | ₩{leader_cr['기타(숙박등)']:,} |
+                            | **총액** | **₩{leader_gross:,}** |
+                            | 공제({leader_tax_label}) | -₩{leader_tax:,} |
+                            | **실수령 → {_leader} 계좌** | **₩{leader_net:,}** |
+                            """) if leader_cr else None
+                        with c2:
+                            if leader_bank and leader_acct:
+                                st.info(f"🏦 {leader_bank}\n\n📋 {leader_acct}\n\n👤 수령인: **{_leader}**")
+                            else:
+                                st.warning(f"❗ {_leader} 계좌 미등록")
+
             # ── 📄 개별 급여명세서 ──
-            st.subheader("📄 개별 급여명세서")
+            # 팀장(팀 결제)은 위에서 표시했으므로 개별에서는 건너뜀
+            individual_rows = [cr for cr in calc_rows if not cr.get('_팀코드')]
+            if individual_rows:
+                st.subheader(f"📄 개별 급여명세서 ({len(individual_rows)}명)")
             for cr in calc_rows:
                 e_name = cr['이름']
                 if not e_name or e_name == 'N/A':
+                    continue
+                # 팀장(팀 결제)은 위 팀 명세서에서 이미 표시 → 건너뜀
+                if cr.get('_팀코드'):
                     continue
                 gross = cr['총액']
                 is_sep = cr['별도']
