@@ -267,18 +267,18 @@ def show_settlement_overview():
                     _progress = _safe_html(r.get('진행상황', ''))
                     _client = _safe_html(r.get('업체', ''))
                     _venue = _safe_html(r.get('현장명', ''))
-                    st.markdown(f"""
-                    <div class="ov-card {_cls}{_sel_cls}">
-                        <div class="ov-client">{_client}</div>
-                        <div class="ov-event">{_venue}</div>
-                        <span class="ov-badge" style="background:{_clr}">{_lbl}</span>
-                        {f'<span style="font-size:10px;color:#6b7280;margin-left:4px">{_progress}</span>' if _progress else ''}
-                        <div class="ov-amount" style="margin-top:4px;">
-                            💰 ₩{_supply_v + _tax_v:,}
-                            {f'<span style="color:#ef4444"> 미수 ₩{_bal_v:,}</span>' if _bal_v > 0 else ''}
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    _progress_html = f'<span style="font-size:10px;color:#6b7280;margin-left:4px">{_progress}</span>' if _progress else ''
+                    _bal_html = f'<span style="color:#ef4444"> 미수 ₩{_bal_v:,}</span>' if _bal_v > 0 else ''
+                    st.markdown(
+                        f'<div class="ov-card {_cls}{_sel_cls}">'
+                        f'<div class="ov-client">{_client}</div>'
+                        f'<div class="ov-event">{_venue}</div>'
+                        f'<span class="ov-badge" style="background:{_clr}">{_lbl}</span>'
+                        f'{_progress_html}'
+                        f'<div class="ov-amount" style="margin-top:4px">💰 ₩{_supply_v + _tax_v:,}{_bal_html}</div>'
+                        f'</div>',
+                        unsafe_allow_html=True
+                    )
                     if st.button("선택", key=f"_ov_sel_{tab_key}_{r['label']}", use_container_width=True):
                         st.session_state['_ov_selected'] = r['label']
                         st.rerun()
@@ -2039,18 +2039,36 @@ def show_settlement_detail(data):
                         _is_hq = cr['구분'] == '본사'
 
                         if _is_hq:
-                            # 본사 인원: 확인 버튼만
+                            # 본사 인원: 확인 버튼 (지급기록 없어도 직접 확인 가능)
                             if _ind_pay_status == '확인완료':
                                 st.success("✅ 본사 확인 완료")
                                 if st.button("↩ 되돌리기", key=f"undo_hq_{_ind_aid}"):
                                     db.update_payment_status(_ind_aid, '대기', '')
                                     st.rerun()
-                            elif _ind_pay_status == '대기':
+                            elif _ind_pay_status in ('대기', '-', ''):
+                                # 지급기록이 없으면 자동 생성 후 확인
                                 if st.button("🏢 본사 확인", key=f"confirm_hq_{_ind_aid}", type="primary", use_container_width=True):
+                                    # 지급기록이 없으면 자동 생성
+                                    if _ind_pay_status in ('-', ''):
+                                        try:
+                                            payment_dict = {
+                                                '배정ID': _ind_aid,
+                                                '인력명': cr['이름'],
+                                                '현장명': row['행사명'],
+                                                '소계': 0,
+                                                '최종지급액': 0,
+                                                '지급상태': '확인완료',
+                                                '비고': '[본사인원] 별도정산',
+                                            }
+                                            db.save_payment_record(payment_dict)
+                                        except Exception:
+                                            pass
                                     db.update_payment_status(_ind_aid, '확인완료', datetime.now().strftime('%Y-%m-%d'))
                                     st.rerun()
                             else:
-                                st.caption("📝 지급기록을 먼저 저장하세요")
+                                if st.button("🏢 본사 확인", key=f"confirm_hq_{_ind_aid}", type="primary", use_container_width=True):
+                                    db.update_payment_status(_ind_aid, '확인완료', datetime.now().strftime('%Y-%m-%d'))
+                                    st.rerun()
                         else:
                             # 외부 인력: 입금완료 버튼
                             if _ind_pay_status == '완료':
