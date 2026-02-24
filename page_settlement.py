@@ -249,9 +249,12 @@ def show_settlement_overview():
                     _cls, _lbl, _clr = _ov_pay_class(r)
                     _is_sel = st.session_state.get('_ov_selected') == r['label']
                     _sel_cls = ' ov-selected' if _is_sel else ''
-                    _supply_v = int(pd.to_numeric(r.get('공급가액', 0), errors='coerce') or 0)
-                    _tax_v = int(pd.to_numeric(r.get('부가세', 0), errors='coerce') or 0)
-                    _paid_v = int(pd.to_numeric(r.get('받은금액', 0), errors='coerce') or 0)
+                    _supply_n = pd.to_numeric(r.get('공급가액', 0), errors='coerce')
+                    _supply_v = 0 if pd.isna(_supply_n) else int(_supply_n)
+                    _tax_n = pd.to_numeric(r.get('부가세', 0), errors='coerce')
+                    _tax_v = 0 if pd.isna(_tax_n) else int(_tax_n)
+                    _paid_n = pd.to_numeric(r.get('받은금액', 0), errors='coerce')
+                    _paid_v = 0 if pd.isna(_paid_n) else int(_paid_n)
                     _bal_v = max(0, _supply_v + _tax_v - _paid_v)
                     _progress = str(r.get('진행상황', '')).strip()
                     st.markdown(f"""
@@ -615,8 +618,9 @@ def save_payment_record(inquiry_id, total_paid, total_invoice):
         # 해당 행 찾기
         all_records = wks.get_all_records()
         target_row = None
+        _inq_str = str(inquiry_id).strip()
         for idx, record in enumerate(all_records, start=2):  # 2부터 시작 (헤더는 1)
-            if record.get('문의ID') == inquiry_id:
+            if str(record.get('문의ID', '')).strip() == _inq_str:
                 target_row = idx
                 break
         
