@@ -613,10 +613,13 @@ def _render_candidate_pool_panel(sel_id, sel, df_staff, role_status):
                 with st.spinner("후보 등록 중..."):
                     event_name = sel.get('행사명', '')
                     ok, fail = db.save_candidates_batch(sel_id, event_name, cart)
+                    if ok > 0:
+                        st.session_state.assign_cart = []
+                        db.invalidate_dispatch_only()
+                        # Pre-warm: 캐시 즉시 재로딩 (rerun 시 API 대기 제거)
+                        db.load_dispatch_sheet()
                 if ok > 0:
-                    st.session_state.assign_cart = []
-                    db.invalidate_dispatch_only()
-                    st.success(f"✅ {ok}명 후보 등록 완료!")
+                    st.toast(f"✅ {ok}명 후보 등록 완료!", icon="✅")
                     st.rerun()
                 else:
                     st.error("❌ 등록 실패")
@@ -629,6 +632,7 @@ def _render_candidate_pool_panel(sel_id, sel, df_staff, role_status):
     st.markdown("##### 📋 등록된 후보 목록")
     if st.button("🔄 새로고침", key="refresh_candidates"):
         db.invalidate_dispatch_only()
+        db.load_dispatch_sheet()  # pre-warm
         st.rerun()
 
     candidates_df = db.get_candidates_by_inquiry(sel_id)
@@ -666,6 +670,7 @@ def _render_candidate_pool_panel(sel_id, sel, df_staff, role_status):
                         if aid:
                             db.remove_candidate(aid)
                             db.invalidate_dispatch_only()
+                            db.load_dispatch_sheet()  # pre-warm
                             st.rerun()
 
         st.caption(f"총 {len(candidates_df)}명 후보 등록됨")
@@ -1083,6 +1088,7 @@ def _step2_role_assignment(sel_id, sel, role_status, start_d=None, end_d=None, d
     with hdr2:
         if st.button("🔄 새로고침", key="refresh_role_assign", use_container_width=True):
             db.invalidate_dispatch_only()
+            db.load_dispatch_sheet()  # pre-warm
             st.rerun()
 
     # ── 충돌 경고 ──
@@ -2163,7 +2169,7 @@ def tab_payment(data):
                     if db.save_payment_record(payment_dict):
                         saved += 1
             if saved > 0:
-                db.invalidate_data()
+                db.invalidate_dispatch_only()  # 지급기록은 배정/정산만 영향
                 st.balloons()
                 msg = f"✅ {saved}명 저장!"
                 if skipped > 0: msg += f" ({skipped}명 별도정산 제외)"
@@ -2255,7 +2261,7 @@ def tab_evaluation(data):
         }
         with st.spinner("평가를 저장 중..."):
             if db.save_evaluation(eval_dict):
-                db.invalidate_data()
+                db.invalidate_dispatch_only()  # 평가는 배정시트만 영향
                 st.balloons()
                 st.success("✅ 평가 저장 완료!")
             else:

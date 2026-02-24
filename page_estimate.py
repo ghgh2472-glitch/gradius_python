@@ -33,6 +33,24 @@ def apply_styles():
         .history-card { background:white; border:1px solid #e5e7eb; padding:14px; border-radius:8px; margin-bottom:8px; border-left:4px solid #6366f1; }
         .recommend-box { background:#eff6ff; border:2px solid #3b82f6; padding:12px 16px; border-radius:10px; margin-bottom:8px; }
         .saved-banner { background:#dcfce7; border:2px solid #22c55e; padding:12px 16px; border-radius:8px; margin-bottom:10px; text-align:center; font-weight:bold; color:#166534; }
+        /* 프로젝트 카드 스타일 */
+        .proj-card {
+            background: white; border: 1px solid #e5e7eb; border-radius: 8px;
+            padding: 10px 12px; margin-bottom: 6px; cursor: pointer;
+            border-left: 4px solid #94a3b8; transition: all 0.15s;
+        }
+        .proj-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.1); transform: translateY(-1px); }
+        .proj-card.status-new { border-left-color: #22c55e; }
+        .proj-card.status-edit { border-left-color: #3b82f6; }
+        .proj-card.status-contracted { border-left-color: #f59e0b; }
+        .proj-card .card-status { font-size: 11px; font-weight: 700; margin-bottom: 4px; }
+        .proj-card .card-status.new { color: #16a34a; }
+        .proj-card .card-status.edit { color: #2563eb; }
+        .proj-card .card-status.contracted { color: #d97706; }
+        .proj-card .card-client { font-size: 14px; font-weight: 700; color: #1e293b; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .proj-card .card-event { font-size: 12px; color: #475569; margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .proj-card .card-meta { font-size: 11px; color: #94a3b8; line-height: 1.5; }
+        .proj-card .card-meta span { margin-right: 8px; }
         /* data_editor 스크롤바 겹침 해소 */
         [data-testid="stDataFrame"] > div { padding-bottom: 12px; }
         div[data-testid="stDataEditor"] iframe { min-height: 200px; }
@@ -195,64 +213,126 @@ def show(data):
     _frames = [df for df in [pending_new, pending_edit, pending_contracted] if not df.empty]
     all_pending = pd.concat(_frames, ignore_index=True) if _frames else pd.DataFrame()
 
-    est_left, est_right = st.columns([1, 3])
-    with est_left:
-        st.markdown("##### 📂 프로젝트")
-        # 신규작성 버튼
-        _new_selected = st.session_state.get('_est_selected', '(신규작성)') == '(신규작성)'
-        _new_border = "2px solid #10b981" if _new_selected else "1px solid #e5e7eb"
-        _new_bg = "#ecfdf5" if _new_selected else "white"
-        st.markdown(f"""
-        <div style="background:{_new_bg}; border:{_new_border}; border-radius:8px; padding:10px; margin-bottom:4px; text-align:center;">
-            <span style="font-weight:700; font-size:13px;">➕ 신규 작성</span>
-        </div>
-        """, unsafe_allow_html=True)
-        if st.button("신규", key="_est_sel_new", use_container_width=True):
-            st.session_state['_est_selected'] = '(신규작성)'
-            st.rerun()
+    p_list = ["(신규작성)"]
+    if not all_pending.empty:
+        p_list += all_pending['label'].tolist()
 
-        # 프로젝트 카드 목록
-        for idx, lbl in enumerate(p_list[1:]):  # [1:]은 (신규작성) 제외
-            # 상태별 색상
-            if lbl.startswith("[접수]"):
-                badge = "🆕"; color = "#10b981"; bg_sel = "#ecfdf5"
-            elif lbl.startswith("[수정]"):
-                badge = "📝"; color = "#f59e0b"; bg_sel = "#fffbeb"
-            else:
-                badge = "⚠️"; color = "#ef4444"; bg_sel = "#fef2f2"
+    # ── 카드 선택 → selectbox 연동 ──
+    if '_card_selected' in st.session_state:
+        _pre_sel = st.session_state.pop('_card_selected')
+        if _pre_sel in p_list:
+            st.session_state['est_project_sel'] = _pre_sel
 
-            is_sel = st.session_state.get('_est_selected') == lbl
-            border = f"2px solid {color}" if is_sel else "1px solid #e5e7eb"
-            bg = bg_sel if is_sel else "white"
-            # 라벨에서 업체/행사 추출
-            _display = lbl.split("] ", 1)[-1] if "] " in lbl else lbl
-            _parts = _display.split(" (")
-            _company = _parts[0] if _parts else _display
-            _event = _parts[1].rstrip(")") if len(_parts) > 1 else ""
-
-            st.markdown(f"""
-            <div style="background:{bg}; border:{border}; border-radius:8px; padding:8px 10px; margin-bottom:4px;">
-                <div style="font-weight:700; font-size:12px; color:#111;">{badge} {_company}</div>
-                <div style="font-size:11px; color:#6b7280; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{_event}</div>
-            </div>
-            """, unsafe_allow_html=True)
-            if st.button("선택", key=f"_est_sel_{idx}", use_container_width=True):
-                st.session_state['_est_selected'] = lbl
-                st.rerun()
-
-        # 기본 선택
-        if '_est_selected' not in st.session_state:
-            st.session_state['_est_selected'] = p_list[0]
-
-    sel_p = st.session_state.get('_est_selected', p_list[0])
-
-    with est_right:
+    # ── 검색 바 + 직접 선택 ──
+    _search_col1, _search_col2, _search_col3 = st.columns([2, 2, 1])
+    with _search_col1:
+        _search_text = st.text_input("🔍 업체/행사명 검색", key="est_search", placeholder="업체명 또는 행사명 입력...")
+    with _search_col2:
+        sel_p = st.selectbox("📂 직접 선택", p_list, key="est_project_sel")
+    with _search_col3:
+        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
         if sel_p.startswith("[체결수정]"):
-            st.warning("⚠️ 체결된 견적을 수정합니다. 저장 시 기존 데이터를 덮어씁니다.")
+            st.warning("⚠️ 체결 수정")
         elif sel_p.startswith("[수정]"):
-            st.info("📝 기존 견적을 수정합니다. 저장 시 기존 데이터를 덮어씁니다.")
+            st.info("📝 견적 수정")
         elif sel_p.startswith("[접수]"):
-            st.success("🆕 새 견적을 작성합니다.")
+            st.success("🆕 신규 작성")
+
+    # ── 상태별 탭 + 카드 그리드 (4열) ──
+    _cnt_new = len(pending_new)
+    _cnt_edit = len(pending_edit)
+    _cnt_contracted = len(pending_contracted)
+    _cnt_total = _cnt_new + _cnt_edit + _cnt_contracted
+
+    def _render_cards(df_cards, tab_prefix="all"):
+        """카드 그리드 렌더링 — 한 행에 4개"""
+        if df_cards.empty:
+            st.caption("해당 상태의 프로젝트가 없습니다.")
+            return
+
+        # 검색 필터 적용
+        _filtered = df_cards
+        if _search_text:
+            _q = _search_text.strip().lower()
+            _mask = (
+                df_cards['업체명'].astype(str).str.lower().str.contains(_q, na=False) |
+                df_cards['행사명'].astype(str).str.lower().str.contains(_q, na=False)
+            )
+            _filtered = df_cards[_mask]
+
+        if _filtered.empty:
+            st.caption(f"'{_search_text}' 검색 결과가 없습니다.")
+            return
+
+        # 4열 그리드로 렌더링
+        cols_per_row = 4
+        rows_data = [_filtered.iloc[i:i+cols_per_row] for i in range(0, len(_filtered), cols_per_row)]
+
+        for row_chunk in rows_data:
+            cols = st.columns(cols_per_row)
+            for col_idx, (_, row) in enumerate(row_chunk.iterrows()):
+                with cols[col_idx]:
+                    _client = _safe_str(row.get('업체명', ''), '—')
+                    _event = _safe_str(row.get('행사명', ''), '—')
+                    _date = _safe_str(row.get('행사시작일', row.get('시작일', '')))
+                    _end = _safe_str(row.get('행사종료일', row.get('종료일', '')))
+                    _qty = _safe_str(row.get('필요인력', row.get('요청인원', '')))
+                    _dress = _safe_str(row.get('복장', ''))
+                    _label = str(row.get('label', ''))
+
+                    _date_str = _date
+                    if _end and _end != _date:
+                        _date_str = f"{_date}~{_end}"
+
+                    _meta_parts = []
+                    if _qty: _meta_parts.append(f"👥{_qty}")
+                    if _date_str: _meta_parts.append(f"📅{_date_str}")
+                    if _dress: _meta_parts.append(f"👔{_dress}")
+                    _meta_html = " ".join([f"<span>{p}</span>" for p in _meta_parts])
+
+                    # 상태 라벨
+                    if _label.startswith("[접수]"):
+                        _s_cls, _c_cls, _s_txt = "status-new", "new", "🆕 신규접수"
+                    elif _label.startswith("[수정]"):
+                        _s_cls, _c_cls, _s_txt = "status-edit", "edit", "📝 견적수정"
+                    else:
+                        _s_cls, _c_cls, _s_txt = "status-contracted", "contracted", "⚡ 체결수정"
+
+                    st.markdown(f"""
+                    <div class="proj-card {_s_cls}">
+                        <div class="card-status {_c_cls}">{_s_txt}</div>
+                        <div class="card-client">{_client}</div>
+                        <div class="card-event">{_event}</div>
+                        <div class="card-meta">{_meta_html}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    if st.button("선택", key=f"sel_{tab_prefix}_{_label}", use_container_width=True):
+                        st.session_state['_card_selected'] = _label
+                        st.rerun()
+
+    with st.expander(f"📋 프로젝트 대기열 ({_cnt_total}건)", expanded=(_cnt_total > 0 and sel_p == "(신규작성)")):
+        tab_all, tab_new, tab_edit, tab_contracted = st.tabs([
+            f"전체 ({_cnt_total})",
+            f"🆕 신규접수 ({_cnt_new})",
+            f"📝 견적수정 ({_cnt_edit})",
+            f"⚡ 체결수정 ({_cnt_contracted})"
+        ])
+        with tab_all:
+            _render_cards(all_pending, "all")
+        with tab_new:
+            _render_cards(pending_new, "new")
+        with tab_edit:
+            _render_cards(pending_edit, "edit")
+        with tab_contracted:
+            _render_cards(pending_contracted, "cont")
+
+    # 상태 안내 배너
+    if sel_p.startswith("[체결수정]"):
+        st.warning("⚠️ 체결된 견적을 수정합니다. 저장 시 기존 데이터를 덮어씁니다.")
+    elif sel_p.startswith("[수정]"):
+        st.info("📝 기존 견적을 수정합니다. 저장 시 기존 데이터를 덮어씁니다.")
+    elif sel_p.startswith("[접수]"):
+        st.success("🆕 새 견적을 작성합니다.")
 
     # ── 세션 초기화 ──
     if 'est_items' not in st.session_state:
@@ -278,7 +358,7 @@ def show(data):
             _matched_pending = all_pending[all_pending['label'] == sel_p]
             if _matched_pending.empty:
                 st.warning("⚠️ 선택한 프로젝트를 찾을 수 없습니다. 목록을 다시 확인해주세요.")
-                st.session_state['_est_selected'] = '(신규작성)'
+                st.session_state['est_project_sel'] = '(신규작성)'
                 st.session_state['last_project'] = '(신규작성)'
                 st.rerun()
             target = _matched_pending.iloc[0]
@@ -1972,7 +2052,7 @@ def _show_send_status_section(df_est, df_inq):
                         res = db.update_estimate_send_status(inq_id, method, memo)
                     if res:
                         st.success(f"✅ {client} 견적서 발송 완료 기록됨!")
-                        db.invalidate_data()
+                        db.invalidate_main_only()  # 발송상태는 메인시트만 영향
                         import time; time.sleep(0.5)
                         st.rerun()
                     else:
@@ -1985,7 +2065,7 @@ def _show_send_status_section(df_est, df_inq):
                         res = db.cancel_estimate_send_status(inq_id)
                     if res:
                         st.success("발송 상태가 초기화되었습니다.")
-                        db.invalidate_data()
+                        db.invalidate_main_only()  # 발송취소는 메인시트만 영향
                         import time; time.sleep(0.5)
                         st.rerun()
                     else:

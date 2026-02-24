@@ -114,15 +114,22 @@ def show_settlement_overview():
         return
     
     if settlement_df.empty:
-        st.warning("⚠️ 정산 데이터가 없습니다.")
+        st.warning("⚠️ 정산 데이터가 없습니다. 계약 체결 후 생성됩니다.")
+        if st.button("🔄 다시 로드"):
+            db.invalidate_dispatch_only()
+            st.rerun()
         return
     
     # ✅ 행사종료 자동 체크 (파견일자 경과 + 진행상황=행사준비 → 행사종료)
-    auto_completed = _auto_check_event_completion(settlement_df)
-    if auto_completed > 0:
-        st.toast(f"📅 {auto_completed}건 행사종료 자동 전환", icon="✅")
-        db.invalidate_data()
-        st.rerun()
+    # 세션 가드: 같은 세션 내 중복 실행 방지 (rerun 루프 차단)
+    _auto_key = '_settlement_auto_checked'
+    if not st.session_state.get(_auto_key):
+        auto_completed = _auto_check_event_completion(settlement_df)
+        st.session_state[_auto_key] = True  # 이번 세션에서 1회만 실행
+        if auto_completed > 0:
+            st.toast(f"📅 {auto_completed}건 행사종료 자동 전환", icon="✅")
+            db.invalidate_dispatch_only()
+            st.rerun()
     
     # 데이터 정리
     settlement_df = settlement_df.fillna('').copy()
@@ -1416,9 +1423,10 @@ def show_settlement_detail(data):
             mc2.metric("총 지급액", f"₩{total_gross:,}")
             mc3.metric("공제 합계", f"-₩{total_tax:,}")
             mc4.metric("실수령 합계", f"₩{total_net:,}")
-            mc5.metric("지급 진행", f"{paid_count}/{len(calc_rows)}명",
-                       delta=f"{len(calc_rows)-paid_count}명 미처리" if paid_count < len(calc_rows) else "전원 완료",
-                       delta_color="inverse" if paid_count < len(calc_rows) else "off")
+            _ext_paid = sum(1 for r in normal if r['_지급상태'] in ('완료', '확인완료'))
+            mc5.metric("지급 진행", f"{_ext_paid}/{len(normal)}명",
+                       delta=f"{len(normal)-_ext_paid}명 미처리" if _ext_paid < len(normal) else "전원 완료",
+                       delta_color="inverse" if _ext_paid < len(normal) else "off")
 
             if separate:
                 sep_gross = sum(r['총액'] for r in separate)
@@ -1525,17 +1533,18 @@ def show_settlement_detail(data):
             st.divider()
 
             # ── 💰 지급 진행 현황 (calc_rows에 _배정ID, _지급상태 이미 매핑됨) ──
-            # 진행률 계산
-            _total_persons = len(calc_rows)
-            _completed_count = sum(1 for cr in calc_rows if cr['_지급상태'] in ('완료', '확인완료'))
-            _pending_count = sum(1 for cr in calc_rows if cr['_지급상태'] == '대기')
+            # 진행률 계산 (본사 인원은 별도정산이므로 지급 진행에서 제외)
+            _hq_total = sum(1 for cr in calc_rows if cr['구분'] == '본사')
+            _ext_rows = [cr for cr in calc_rows if cr['구분'] != '본사']
+            _total_persons = len(_ext_rows)  # 외부 인원만 카운트
+            _completed_count = sum(1 for cr in _ext_rows if cr['_지급상태'] in ('완료', '확인완료'))
+            _pending_count = sum(1 for cr in _ext_rows if cr['_지급상태'] == '대기')
             _no_record = _total_persons - _completed_count - _pending_count
             _progress_pct = (_completed_count / _total_persons * 100) if _total_persons > 0 else 0
 
             _hq_done = sum(1 for cr in calc_rows if cr['구분'] == '본사' and cr['_지급상태'] == '확인완료')
-            _ext_done = sum(1 for cr in calc_rows if cr['구분'] != '본사' and cr['_지급상태'] == '완료')
-            _hq_total = sum(1 for cr in calc_rows if cr['구분'] == '본사')
-            _ext_total = _total_persons - _hq_total
+            _ext_done = _completed_count
+            _ext_total = _total_persons
 
             st.subheader("💰 지급 진행 현황")
             _prog_col1, _prog_col2 = st.columns([3, 1])
@@ -1859,8 +1868,9 @@ def show_settlement_detail(data):
                     st.balloons(); st.success("모든 정산이 완료되었습니다!"); st.rerun()
             else:
                 _remain = _total_persons - _completed_count if '_total_persons' in dir() else 0
-                st.button(f"🏁 최종 정산 완료 (미처리 {_remain}명)", type="primary", disabled=True)
-                st.caption("⚠️ 모든 인원의 입금확인/본사확인이 완료되어야 정산을 마감할 수 있습니다.")
+                _hq_note = f" (본사 {_hq_total}명 별도)" if '_hq_total' in dir() and _hq_total > 0 else ""
+                st.button(f"🏁 최종 정산 완료 (미처리 {_remain}명{_hq_note})", type="primary", disabled=True)
+                st.caption("⚠️ 외부 인원의 입금확인이 모두 완료되어야 정산을 마감할 수 있습니다. (본사 인원은 별도정산)")
 
 
 def show_tax_invoice_management():
