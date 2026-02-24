@@ -27,8 +27,9 @@ def apply_styles():
     st.markdown("""
     <style>
         .block-container { max-width: 1400px; padding-top: 1rem; }
+        /* st.tabs 스타일 */
         .stTabs [data-baseweb="tab-list"] button {
-            font-size: 15px; font-weight: 700; padding: 10px 20px;
+            font-weight: 700; font-size: 14px;
         }
         .stButton>button { border-radius: 8px; font-weight: 700; font-size: 13px; }
         .section-title {
@@ -59,6 +60,21 @@ def _col(df, *candidates):
         if c in df.columns:
             return c
     return candidates[0] if candidates else None
+
+
+def _team_prefix(row):
+    """팀 배정 인력이면 [팀] 프리픽스 반환, 팀장 현장불참이면 추가 표기"""
+    cat = str(row.get('구분', '')).strip()
+    tc = str(row.get('팀코드', '')).strip()
+    onsite = str(row.get('현장참여', '')).strip().upper()
+    if cat == '팀장' or cat == '팀원' or (tc and tc != 'nan' and tc != ''):
+        if cat == '팀장' and onsite == 'N':
+            return '[팀장·불참] '
+        elif cat == '팀장':
+            return '[팀장] '
+        else:
+            return '[팀] '
+    return ''
 
 def _select_contract(df_inq, statuses, key_prefix):
     """배정 가능 계약 선택. 없으면 (None, None)"""
@@ -114,43 +130,110 @@ def _parse_date_safe(date_str):
     return None
 
 
+def _strip_date_tag(name):
+    """품목/직군명에서 날짜 태그 제거 → 기본 직군명 반환
+    예: '경호원\\n(03/01 토)' → '경호원', '안내원 [팀장]' → '안내원 [팀장]'"""
+    if not name:
+        return ''
+    return re.sub(r'\s*\n\(\d{2}/\d{2}\s*[^\)]*\)', '', str(name)).strip()
+
+
 def _get_role_status(est_items, assignments_df):
     """견적품목과 배정기록에서 직군별 배정 현황 계산 ([지원] 품목 제외)
+    ★ 날짜별 견적 품목을 기본 직군명으로 그룹핑하여 통합 관리
     인일(man-day) 기반 진행률 포함"""
     role_status = []
     if est_items.empty:
         return role_status
+
+    # ── 1단계: 품목을 기본 직군명으로 그룹핑 ──
+    # 날짜별 품목 (경호원\n(03/01 토)) → 기본 직군명 (경호원)으로 묶기
+    grouped = {}  # {base_role: {needed_total, days_total, pay_rate, time, date_details}}
     for _, item in est_items.iterrows():
-        # [지원] 품목은 인력이 아니므로 제외
         item_name = str(item.get('품목', item.get('직군명', '')))
         if item_name.startswith('[지원]'):
             continue
-        role_name = str(item.get('직군명', item_name))
-        if not role_name or role_name == 'nan':
+        raw_role = str(item.get('직군명', item_name))
+        if not raw_role or raw_role == 'nan':
+            continue
+        base_role = _strip_date_tag(raw_role)
+        if not base_role:
             continue
         needed = int(item.get('인원수', item.get('수량', 0)) or 0)
         est_days = int(item.get('일수', 0) or 0)
-        needed_mandays = needed * est_days  # 필요 인일
+        pay_rate = int(item.get('매입단가', 0) or 0)
+        time_str = str(item.get('근무시간', item.get('규격', '')))
 
+        # 날짜 태그에서 날짜 추출 (MM/DD)
+        date_match = re.search(r'\n\((\d{2}/\d{2})', raw_role)
+        date_tag = date_match.group(1) if date_match else None
+
+        if base_role not in grouped:
+            grouped[base_role] = {
+                'needed_total': 0, 'days_total': 0,
+                'pay_rate': pay_rate, 'time': time_str,
+                'date_details': {},  # {날짜문자열: 필요인원}
+                'has_date_items': False,
+            }
+        g = grouped[base_role]
+        if date_tag:
+            # 날짜별 품목: 인원은 그 날짜의 필요인원
+            g['date_details'][date_tag] = needed
+            g['has_date_items'] = True
+            g['days_total'] += 1  # 각 날짜 행 = 1일
+            g['needed_total'] += needed  # 인일 합산
+        else:
+            # 일반 품목: 수량 × 일수
+            g['needed_total'] += needed * est_days
+            g['days_total'] += est_days
+        # 더 높은 단가가 있으면 갱신 (날짜별 단가 차이 시 대표값)
+        if pay_rate > g['pay_rate']:
+            g['pay_rate'] = pay_rate
+
+    # ── 2단계: 배정기록 매칭 (기본 직군명 기준) ──
+    for base_role, g in grouped.items():
         assigned_count = 0
         actual_mandays = 0
         if not assignments_df.empty:
             role_col = '직무' if '직무' in assignments_df.columns else '역할'
             days_col = '근무일수' if '근무일수' in assignments_df.columns else '일수'
+            onsite_col = '현장참여' if '현장참여' in assignments_df.columns else None
             if role_col in assignments_df.columns:
+                # ★ 수정: 배정기록의 직무가 base_role을 포함하는지 확인
+                # (배정 시 직무='경호원'으로 저장되므로 정확 매칭 + 포함 매칭 모두 처리)
                 role_rows = assignments_df[
-                    assignments_df[role_col].astype(str).str.contains(role_name, na=False)]
-                assigned_count = len(role_rows)
-                if days_col in role_rows.columns:
+                    assignments_df[role_col].astype(str).str.strip().apply(
+                        lambda x: x == base_role or base_role in x or x in base_role
+                    )]
+                # ★ 현장불참 팀장은 인원/인일 카운트에서 제외
+                if onsite_col:
+                    onsite_rows = role_rows[role_rows[onsite_col].astype(str).str.strip().str.upper() != 'N']
+                else:
+                    onsite_rows = role_rows
+                assigned_count = len(onsite_rows)
+                if days_col in onsite_rows.columns:
                     actual_mandays = int(pd.to_numeric(
-                        role_rows[days_col], errors='coerce').fillna(0).sum())
+                        onsite_rows[days_col], errors='coerce').fillna(0).sum())
+
+        # 날짜별 품목의 경우 needed는 최대일 인원 (배정 현황 카드 표시용)
+        if g['has_date_items'] and g['date_details']:
+            max_needed = max(g['date_details'].values())
+            total_days = len(g['date_details'])
+        else:
+            max_needed = g['needed_total'] // max(g['days_total'], 1)
+            total_days = g['days_total']
+
         role_status.append({
-            'role': role_name, 'needed': needed, 'assigned': assigned_count,
-            'pay_rate': int(item.get('매입단가', 0) or 0),
-            'days': est_days,
-            'time': str(item.get('근무시간', '')),
-            'needed_mandays': needed_mandays,
+            'role': base_role,
+            'needed': max_needed,           # 최대 일 인원 (카드 표시)
+            'assigned': assigned_count,
+            'pay_rate': g['pay_rate'],
+            'days': total_days,
+            'time': g['time'],
+            'needed_mandays': g['needed_total'],  # 총 인일
             'actual_mandays': actual_mandays,
+            'date_details': g['date_details'],    # 날짜별 필요인원
+            'has_date_items': g['has_date_items'],
         })
     return role_status
 
@@ -209,11 +292,23 @@ def _auto_update_status(inquiry_id, role_status):
             active = assignments_df
         if role_status:
             total_needed = sum(rs['needed'] for rs in role_status)
-            total_assigned = len(active) if not active.empty else 0
+            # 현장불참 팀장은 인원 카운트에서 제외
+            if not active.empty:
+                _onsite_col = '현장참여' if '현장참여' in active.columns else None
+                if _onsite_col:
+                    _onsite_active = active[active[_onsite_col].astype(str).str.strip().str.upper() != 'N']
+                    total_assigned = len(_onsite_active)
+                else:
+                    total_assigned = len(active)
+            else:
+                total_assigned = 0
             if total_needed > 0 and total_assigned >= total_needed:
                 db.update_status(inquiry_id, sc.STATUS_FLOW[3])  # '배정완료'
+                # ✅ 정산 시트 진행상황도 '행사준비'로 자동 전환
+                db.update_settlement_progress(inquiry_id, '행사준비')
         elif not active.empty:
             db.update_status(inquiry_id, sc.STATUS_FLOW[3])
+            db.update_settlement_progress(inquiry_id, '행사준비')
     except Exception:
         pass
 
@@ -357,13 +452,21 @@ def tab_assignment(data):
                     rc1, rc2 = st.columns([2, 1])
                     with rc1:
                         st.markdown(f"**{rs['role']}**")
-                        st.caption(f"₩{rs['pay_rate']:,}/일 · {rs['days']}일 · {rs['time']}")
+                        _time_display = rs['time'] if rs['time'] and rs['time'] != 'nan' else ''
+                        st.caption(f"₩{rs['pay_rate']:,}/일 · {rs['days']}일{(' · ' + _time_display) if _time_display else ''}")
                     with rc2:
                         over_tag = " 초과OK" if rs['assigned'] > rs['needed'] else ""
                         st.markdown(f"**{rs['assigned']}/{rs['needed']}명**{over_tag}")
                     st.progress(min(md_p / 100.0, 1.0))
                     md_icon = '✅' if md_p >= 100 else ''
                     st.caption(f"인일: {rs['actual_mandays']}/{rs['needed_mandays']} {md_icon}")
+                    # ★ 날짜별 인원 차이가 있으면 미니 표시
+                    if rs.get('has_date_items') and rs.get('date_details'):
+                        dd = rs['date_details']
+                        vals = list(dd.values())
+                        if len(set(vals)) > 1:  # 날짜별 인원이 다를 때만
+                            parts = [f"{k}:{v}명" for k, v in dd.items()]
+                            st.caption(f"📅 {' · '.join(parts)}")
 
         # 전체 인일 요약 (마지막 컬럼)
         with cols[len(role_status) % (len(role_status) + 1)]:
@@ -386,11 +489,25 @@ def tab_assignment(data):
             if event_dates_top and len(event_dates_top) <= 30:
                 st.caption("📅 일자별 충원 상태 (배정중+확정 인원 기준)")
                 day_cols = st.columns(min(len(event_dates_top), 10))
-                total_needed_p = sum(rs['needed'] for rs in role_status)
+                # ★ 날짜별 필요인원 계산 (date_details가 있으면 해당 날짜의 인원, 없으면 전체 합)
+                _date_needs = {}  # {'03/01': 전체필요인원}
+                for rs in role_status:
+                    if rs.get('has_date_items') and rs.get('date_details'):
+                        for dk, dv in rs['date_details'].items():
+                            _date_needs[dk] = _date_needs.get(dk, 0) + dv
+                    else:
+                        # 날짜 상세 없으면 모든 날짜에 필요인원 추가
+                        for dd in event_dates_top:
+                            dk = dd.strftime('%m/%d')
+                            _date_needs[dk] = _date_needs.get(dk, 0) + rs['needed']
+                # 기본값 (date_details 없을 때)
+                _default_needed = sum(rs['needed'] for rs in role_status)
                 for di, dd in enumerate(event_dates_top[:10]):
                     wd = '월화수목금토일'[dd.weekday()]
+                    dk = dd.strftime('%m/%d')
+                    needed_today = _date_needs.get(dk, _default_needed)
                     with day_cols[di]:
-                        st.caption(f"{dd.strftime('%m/%d')}{wd}")
+                        st.caption(f"{dk}{wd}\n필요:{needed_today}명")
                 if len(event_dates_top) > 10:
                     st.caption(f"⋯ +{len(event_dates_top) - 10}일 더")
 
@@ -409,19 +526,16 @@ def tab_assignment(data):
     # ================================================================
     # 3단계 서브탭
     # ================================================================
-    step1, step2, step3 = st.tabs([
-        "① 후보 등록",
-        "② 직군별 배정",
-        "③ 확정 & 일정관리"
-    ])
+    _sub_tabs = ["① 후보 등록", "② 직군별 배정", "③ 확정 & 일정관리"]
+    step_tab1, step_tab2, step_tab3 = st.tabs(_sub_tabs)
 
-    with step1:
+    with step_tab1:
         _step1_candidate_pool(sel_id, sel, df_staff, role_status, est_items)
 
-    with step2:
+    with step_tab2:
         _step2_role_assignment(sel_id, sel, role_status, start_d, end_d, df_inq, df_staff)
 
-    with step3:
+    with step_tab3:
         _step3_confirm_and_schedule(sel_id, sel, role_status, is_long_term, start_d, end_d)
 
 
@@ -441,257 +555,443 @@ def _step1_candidate_pool(sel_id, sel, df_staff, role_status, est_items):
 
         if 'assign_cart' not in st.session_state:
             st.session_state.assign_cart = []
+        if 'team_members' not in st.session_state:
+            st.session_state.team_members = []
 
-        # ── 본사 인력 ──
-        st.markdown("##### 🏢 본사 인원")
-        hq_cols = st.columns(min(len(db.HQ_STAFF) + 1, 5))
-        for i, hq in enumerate(db.HQ_STAFF):
-            with hq_cols[i % len(hq_cols)]:
-                if st.button(f"➕ {hq['이름']}", key=f"hq_{hq['이름']}", use_container_width=True):
-                    st.session_state.assign_cart.append({
-                        '인력명': hq['이름'], '구분': '본사',
-                        '직무': hq['직무'], '지급단가': 0, '근무일수': 1, '총지급액': 0,
-                    })
-                    st.rerun()
+        # ══ 배정 유형 선택: 개별 / 팀 ══
+        assign_type = st.radio("배정 유형", ["개별 배정", "👥 팀 배정"], horizontal=True, key="assign_type")
+        st.divider()
 
-        # ── 외부 인력 검색 ──
-        st.markdown("##### 👥 외부 인력 검색")
-        col_name, col_gender = st.columns([3, 1])
-        with col_name:
-            search_q = st.text_input("🔍 이름 / 지역 / 직무 검색", placeholder="예: 김, 서울, 경호",
-                                     key="staff_search")
-        with col_gender:
-            gender_f = st.radio("성별", ["전체", "M", "F"], horizontal=True, key="gender_f")
-
-        with st.expander("🔧 상세 필터", expanded=False):
-            fc1, fc2, fc3 = st.columns(3)
-            with fc1:
-                age_filter = st.multiselect("연령대", ["20대", "30대", "40대", "50대↑"], key="age_f")
-                rec_filter = st.multiselect("추천도", ["우선투입", "일반", "보류"], key="rec_f")
-            with fc2:
-                role_filter = st.text_input("가능직무", placeholder="예: 경호, 안내", key="role_f")
-                region_filter = st.text_input("이동가능지역", placeholder="예: 서울, 경기", key="region_f")
-            with fc3:
-                min_height = st.number_input("최소 키(cm)", min_value=0, value=0, step=5, key="height_f")
-                min_score = st.number_input("최소 총점", min_value=0, value=0, step=10, key="score_f")
-                ec1, ec2 = st.columns(2)
-                with ec1:
-                    english_f = st.selectbox("영어", ["무관", "가능"], key="eng_f")
-                with ec2:
-                    driving_f = st.selectbox("운전", ["무관", "가능"], key="drv_f")
-
-        col_ai, col_manual = st.columns(2)
-        do_ai = col_ai.button("🤖 AI 추천", use_container_width=True, type="primary", key="ai_btn")
-        do_search = col_manual.button("🔍 검색", use_container_width=True, key="search_btn")
-
-        if do_ai or do_search:
-            with st.spinner("인력을 검색 중..."):
-                if do_ai:
-                    from smart_assignment import SmartAssignment
-                    dispatch_data = db.get_dispatch()
-                    df_dispatch = dispatch_data.get('dispatch', pd.DataFrame())
-                    location = str(sel.get('장소', ''))
-                    g_val = gender_f if gender_f != "전체" else None
-                    # 필요 직군 중 미충원 1순위 자동 선택
-                    auto_role = None
-                    for rs in (role_status or []):
-                        if rs['assigned'] < rs['needed']:
-                            auto_role = rs['role']
-                            break
-                    result = SmartAssignment.ai_recommend(
-                        staff_df=df_staff, dispatch_df=df_dispatch,
-                        job_type=auto_role, location=location.split()[0] if location else None,
-                        gender=g_val, top_n=20)
-                else:
-                    result = _search_staff(
-                        df_staff, search_q, gender_f, age_filter, rec_filter,
-                        role_filter, region_filter, min_height, min_score,
-                        english_f, driving_f)
-
-                st.session_state.search_results = result
-                st.session_state.search_done = True
-
-        # 검색 결과
-        if st.session_state.get('search_done') and not st.session_state.get('search_results', pd.DataFrame()).empty:
-            results = st.session_state.search_results
-            st.markdown(f"**{len(results)}명 검색됨** — 체크하여 후보풀에 추가")
-
-            selected_indices = []
-            for idx, row in results.reset_index(drop=True).iterrows():
-                name = row.get('이름', 'N/A')
-                gender = row.get('성별', '-')
-                age = row.get('나이', '-')
-                region = row.get('이동가능지역', row.get('거주지', '-'))
-                role = row.get('가능직무', '-')
-                height = row.get('키', '-')
-                score = row.get('총점', '-')
-                recommend = row.get('추천도', '-')
-                ai_score = row.get('AI점수', '')
-                ai_txt = f" · AI:{ai_score}" if ai_score != '' else ''
-
-                label = (f"{name}  |  {gender}/{age}  |  📍{region}  |  🔧{role}  "
-                         f"|  📏{height}cm  |  ⭐{score}  |  {recommend}{ai_txt}")
-
-                if st.checkbox(label, key=f"staff_sel_{idx}"):
-                    selected_indices.append(idx)
-
-            if selected_indices:
-                if st.button(f"✅ 선택한 {len(selected_indices)}명 후보풀에 추가",
-                             type="primary", use_container_width=True, key="add_to_pool"):
-                    for si in selected_indices:
-                        row = results.iloc[si]
-                        st.session_state.assign_cart.append({
-                            '인력명': row.get('이름', ''), '구분': '외부',
-                            '직무': '', '지급단가': 0, '근무일수': 0, '총지급액': 0,
-                        })
-                    st.rerun()
-
-        # ── 신규 인력 직접 입력 ──
-        st.markdown("##### ✍️ 신규 인력 직접 입력")
-        st.caption("💡 인력풀에 없는 신규 인력을 등록하고 바로 후보풀에 추가합니다.")
-        with st.expander("➕ 신규 인력 입력", expanded=False):
-            nc1, nc2, nc3 = st.columns([1.5, 1, 0.8])
-            with nc1:
-                new_name = st.text_input("이름 *", placeholder="홍길동", key="new_staff_name")
-            with nc2:
-                new_phone = st.text_input("연락처", placeholder="010-0000-0000", key="new_staff_phone")
-            with nc3:
-                new_gender = st.selectbox("성별", ["M", "F"], key="new_staff_gender")
-
-            nc4, nc5, nc6 = st.columns([1.5, 1, 0.8])
-            with nc4:
-                new_job = st.text_input("가능직무", placeholder="경호, 안내", key="new_staff_job")
-            with nc5:
-                new_region = st.text_input("지역", placeholder="서울, 경기", key="new_staff_region")
-            with nc6:
-                new_age = st.number_input("나이", min_value=18, max_value=70, value=30, key="new_staff_age")
-
-            _save_to_staff = st.checkbox("STAFF 시트에도 등록", value=True, key="save_new_to_staff")
-
-            if st.button("✅ 후보풀에 추가", type="primary", use_container_width=True, key="add_new_staff_btn"):
-                if not new_name.strip():
-                    st.warning("이름을 입력해주세요.")
-                else:
-                    st.session_state.assign_cart.append({
-                        '인력명': new_name.strip(), '구분': '외부',
-                        '직무': new_job if new_job else '', '지급단가': 0, '근무일수': 0, '총지급액': 0,
-                    })
-                    if _save_to_staff:
-                        staff_data = {
-                            '이름': new_name.strip(), '연락처': new_phone.strip() if new_phone else '',
-                            '성별': new_gender, '나이': str(new_age),
-                            '가능직무': new_job, '이동가능지역': new_region.strip() if new_region else '',
-                            '추천도': '일반',
-                        }
-                        if db.add_new_staff(staff_data):
-                            st.success(f"✅ {new_name} — 후보 추가 + STAFF 등록 완료!")
-                        else:
-                            st.warning(f"⚠️ {new_name} — 후보 추가됨 (STAFF 등록 실패)")
-                    else:
-                        st.success(f"✅ {new_name} — 후보풀에 추가!")
-                    st.rerun()
+        if assign_type == "👥 팀 배정":
+            _render_team_assignment_ui(df_staff, role_status)
+        else:
+            _render_individual_assignment_ui(sel, df_staff, role_status)
 
     # ── 오른쪽: 후보풀 (로컬 대기 + 서버 저장됨) ──
     with col_right:
-        st.markdown('<div class="section-title">👥 후보풀</div>', unsafe_allow_html=True)
+        _render_candidate_pool_panel(sel_id, sel, df_staff, role_status)
 
-        # 로컬 대기 카트 (아직 서버 미저장)
-        cart = st.session_state.get('assign_cart', [])
-        if cart:
-            st.markdown(f"##### 🕐 등록 대기 ({len(cart)}명)")
-            cart_df = pd.DataFrame(cart)
-            display_cart_cols = ['인력명', '구분']
-            avail_cart = [c for c in display_cart_cols if c in cart_df.columns]
-            st.dataframe(cart_df[avail_cart], use_container_width=True, hide_index=True,
-                         height=min(180, 35 * len(cart) + 38))
 
-            for ci_idx in range(len(cart)):
-                item = cart[ci_idx]
-                dc1, dc2 = st.columns([3, 1])
-                with dc1:
-                    st.caption(f"{item['인력명']} ({item['구분']})")
-                with dc2:
-                    if st.button(f"🗑️", key=f"del_cart_{ci_idx}", help=f"{item['인력명']} 제거"):
-                        st.session_state.assign_cart.pop(ci_idx)
-                        st.rerun()
+def _render_candidate_pool_panel(sel_id, sel, df_staff, role_status):
+    """오른쪽 패널: 후보풀 + 확정 인력"""
+    st.markdown('<div class="section-title">👥 후보풀</div>', unsafe_allow_html=True)
 
-            col_a1, col_a2 = st.columns(2)
-            with col_a1:
-                if st.button("💾 후보풀에 등록", type="primary", use_container_width=True, key="save_pool"):
-                    with st.spinner("후보 등록 중..."):
-                        event_name = sel.get('행사명', '')
-                        ok, fail = db.save_candidates_batch(sel_id, event_name, cart)
-                    if ok > 0:
-                        st.session_state.assign_cart = []
-                        db.invalidate_dispatch_only()
-                        st.success(f"✅ {ok}명 후보 등록 완료!")
-                        st.rerun()
-                    else:
-                        st.error("❌ 등록 실패")
-            with col_a2:
-                if st.button("🗑️ 전체 비우기", use_container_width=True, key="clear_cart"):
-                    st.session_state.assign_cart = []
+    # 로컬 대기 카트 (아직 서버 미저장)
+    cart = st.session_state.get('assign_cart', [])
+    if cart:
+        st.markdown(f"##### 🕐 등록 대기 ({len(cart)}명)")
+        cart_df = pd.DataFrame(cart)
+        display_cart_cols = ['인력명', '구분', '팀코드']
+        avail_cart = [c for c in display_cart_cols if c in cart_df.columns]
+        st.dataframe(cart_df[avail_cart], use_container_width=True, hide_index=True,
+                     height=min(180, 35 * len(cart) + 38))
+
+        # 팀별 요약 (카트에 팀 배정이 있을 때)
+        if '팀코드' in cart_df.columns:
+            team_cart = cart_df[cart_df['팀코드'].astype(str).str.strip() != '']
+            if not team_cart.empty:
+                for tc in team_cart['팀코드'].unique():
+                    tc_df = team_cart[team_cart['팀코드'] == tc]
+                    leader = tc_df[tc_df['구분'] == '팀장']
+                    leader_name = leader['인력명'].iloc[0] if not leader.empty else '?'
+                    total = int(tc_df['총지급액'].sum()) if '총지급액' in tc_df.columns else 0
+                    st.caption(f"👥 {leader_name}팀 ({len(tc_df)}명) — ₩{total:,}")
+
+        for ci_idx in range(len(cart)):
+            item = cart[ci_idx]
+            dc1, dc2 = st.columns([3, 1])
+            with dc1:
+                st.caption(f"{item['인력명']} ({item['구분']})")
+            with dc2:
+                if st.button(f"🗑️", key=f"del_cart_{ci_idx}", help=f"{item['인력명']} 제거"):
+                    st.session_state.assign_cart.pop(ci_idx)
                     st.rerun()
 
-        # 서버 저장된 후보 목록
-        st.markdown("##### 📋 등록된 후보 목록")
-        if st.button("🔄 새로고침", key="refresh_candidates"):
-            db.invalidate_dispatch_only()
+        col_a1, col_a2 = st.columns(2)
+        with col_a1:
+            if st.button("💾 후보풀에 등록", type="primary", use_container_width=True, key="save_pool"):
+                with st.spinner("후보 등록 중..."):
+                    event_name = sel.get('행사명', '')
+                    ok, fail = db.save_candidates_batch(sel_id, event_name, cart)
+                if ok > 0:
+                    st.session_state.assign_cart = []
+                    db.invalidate_dispatch_only()
+                    st.success(f"✅ {ok}명 후보 등록 완료!")
+                    st.rerun()
+                else:
+                    st.error("❌ 등록 실패")
+        with col_a2:
+            if st.button("🗑️ 전체 비우기", use_container_width=True, key="clear_cart"):
+                st.session_state.assign_cart = []
+                st.rerun()
+
+    # 서버 저장된 후보 목록
+    st.markdown("##### 📋 등록된 후보 목록")
+    if st.button("🔄 새로고침", key="refresh_candidates"):
+        db.invalidate_dispatch_only()
+        st.rerun()
+
+    candidates_df = db.get_candidates_by_inquiry(sel_id)
+    if not candidates_df.empty:
+        name_col = _col(candidates_df, '인력명', '이름')
+        status_col = _col(candidates_df, '지급상태', '상태')
+        role_col = _col(candidates_df, '직무', '역할')
+
+        for idx, row in candidates_df.iterrows():
+            cname = row.get(name_col, 'N/A')
+            cstatus = str(row.get(status_col, '후보'))
+            crole = row.get(role_col, '')
+            ctype = row.get('구분', '외부')
+            badge_icon = "🏢" if ctype == '본사' else "👤"
+            status_badge = "🟡 후보" if '후보' in cstatus else "🔵 배정중"
+            role_text = f" → {crole}" if crole and str(crole) != 'nan' and str(crole).strip() else ""
+            team_tag = _team_prefix(row)
+
+            # STAFF 정보 조회
+            sinfo = _lookup_staff_brief(df_staff, cname)
+            info_line = ""
+            if sinfo:
+                phone_display = sinfo['연락처'] if sinfo['연락처'] else '-'
+                info_line = f"{sinfo['성별']}/{sinfo['나이']} · 📱{phone_display} · ⭐{sinfo['총점']}"
+
+            c1, c2 = st.columns([3, 1])
+            with c1:
+                st.markdown(f"{badge_icon} {team_tag}**{cname}** {status_badge}{role_text}")
+                if info_line:
+                    st.caption(f"  {info_line}")
+            with c2:
+                if '후보' in cstatus:
+                    if st.button("❌", key=f"rm_cand_{idx}", help=f"{cname} 제거"):
+                        aid = row.get('배정ID', '')
+                        if aid:
+                            db.remove_candidate(aid)
+                            db.invalidate_dispatch_only()
+                            st.rerun()
+
+        st.caption(f"총 {len(candidates_df)}명 후보 등록됨")
+    else:
+        st.info("👈 왼쪽에서 인력을 검색하고 후보풀에 등록하세요")
+
+    # 기존 확정 인력
+    all_assignments = db.get_assignments_by_inquiry(sel_id)
+    if not all_assignments.empty:
+        status_col = _col(all_assignments, '지급상태', '상태')
+        confirmed = all_assignments[
+            all_assignments[status_col].astype(str).str.contains('확정', na=False)]
+        if not confirmed.empty:
+            name_col = _col(confirmed, '인력명', '이름')
+            st.markdown(f"##### ✅ 확정 인력 ({len(confirmed)}명)")
+            display_cols = ['인력명', '이름', '직무', '역할', '팀코드', '지급단가', '단가', '근무일수', '일수']
+            avail = [c for c in display_cols if c in confirmed.columns]
+            st.dataframe(confirmed[avail], use_container_width=True, hide_index=True,
+                         height=min(200, 35 * len(confirmed) + 38))
+
+            # 팀별 요약 표시
+            if '팀코드' in confirmed.columns:
+                team_confirmed = confirmed[confirmed['팀코드'].astype(str).str.strip() != '']
+                if not team_confirmed.empty:
+                    st.markdown("##### 👥 팀 배정 요약")
+                    for tc in team_confirmed['팀코드'].unique():
+                        tc_members = team_confirmed[team_confirmed['팀코드'] == tc]
+                        leader = tc_members[tc_members['구분'].astype(str) == '팀장'] if '구분' in tc_members.columns else pd.DataFrame()
+                        leader_name = leader['인력명'].iloc[0] if not leader.empty and '인력명' in leader.columns else '?'
+                        tc_total = int(pd.to_numeric(tc_members.get('총지급액', 0), errors='coerce').sum())
+                        st.info(f"👤 **{leader_name}팀** ({len(tc_members)}명) — 합계: ₩{tc_total:,} → 팀장 지급")
+
+
+def _render_team_assignment_ui(df_staff, role_status):
+    """팀 배정 모드 UI — 팀장 검색 + 팀원 수기 입력"""
+
+    # 직군 선택 (공통)
+    role_options = [rs['role'] for rs in role_status] if role_status else []
+    role_options.append("기타 (직접입력)")
+    col_role, col_custom = st.columns([2, 1])
+    with col_role:
+        sel_role = st.selectbox("배정 직군", role_options, key="team_assign_role")
+    with col_custom:
+        if sel_role == "기타 (직접입력)":
+            sel_role = st.text_input("직군명 입력", key="team_custom_role")
+        else:
+            st.empty()
+
+    role_info = next((rs for rs in role_status if rs['role'] == sel_role), None)
+    default_rate = role_info['pay_rate'] if role_info else 100000
+    default_days = role_info['days'] if role_info else 1
+
+    st.markdown("##### 👤 팀장 선택 (STAFF에서 검색)")
+    leader_search = st.text_input("🔍 팀장 이름 검색", placeholder="예: 강정호", key="leader_search")
+
+    selected_leader = None
+    if leader_search:
+        mask = df_staff['이름'].astype(str).str.contains(leader_search, na=False, case=False)
+        leaders = df_staff[mask].head(10)
+        if not leaders.empty:
+            leader_options = {
+                idx: f"{row.get('이름', '')} | {row.get('성별', '-')} | {row.get('가능직무', '-')}"
+                for idx, row in leaders.iterrows()
+            }
+            sel_leader_idx = st.selectbox(
+                "팀장 선택", list(leader_options.keys()),
+                format_func=lambda x: leader_options[x], key="sel_leader")
+            selected_leader = leaders.loc[sel_leader_idx]
+            st.success(f"✅ 팀장: **{selected_leader.get('이름', '')}**")
+        else:
+            st.warning("검색 결과가 없습니다.")
+
+    st.markdown("##### 👥 팀원 추가 (수기 입력)")
+    st.caption("팀원은 STAFF에 없어도 됩니다. 이름만 입력하세요.")
+
+    col_add, col_btn = st.columns([3, 1])
+    with col_add:
+        new_member = st.text_input("팀원 이름", placeholder="예: 김철수", key="new_member", label_visibility="collapsed")
+    with col_btn:
+        if st.button("➕ 추가", key="add_member"):
+            if new_member.strip():
+                st.session_state.team_members.append(new_member.strip())
+                st.rerun()
+
+    if st.session_state.team_members:
+        st.markdown(f"**현재 팀원:** {len(st.session_state.team_members)}명")
+        for i, member in enumerate(st.session_state.team_members):
+            mc1, mc2 = st.columns([4, 1])
+            mc1.write(f"• {member}")
+            if mc2.button("🗑️", key=f"del_member_{i}"):
+                st.session_state.team_members.pop(i)
+                st.rerun()
+
+    st.divider()
+
+    col_rate, col_days = st.columns(2)
+    with col_rate:
+        team_rate = st.number_input("인당 단가 (원/일)", value=default_rate, step=10000, key="team_rate")
+    with col_days:
+        team_days = st.number_input("근무일수", value=default_days, min_value=1, key="team_days")
+
+    # 팀장 현장참여 여부
+    leader_onsite = st.checkbox("✅ 팀장 현장 참여", value=True, key="leader_onsite",
+                                help="체크 해제 시 팀장은 결제만 받고 현장에 나오지 않습니다")
+
+    team_member_count = len(st.session_state.team_members)
+    onsite_count = (1 if leader_onsite else 0) + team_member_count
+    # 총 지급액: 현장 투입 인원 기준 (불참 팀장 본인 몫 제외)
+    team_total = team_rate * team_days * onsite_count
+
+    st.info(f"""
+    📊 **팀 합계**
+    - 팀 인원: {1 + team_member_count}명 (팀장 1 + 팀원 {team_member_count})
+    - 현장 투입: **{onsite_count}명** {'(팀장 불참 → 팀장 본인 몫 제외)' if not leader_onsite else ''}
+    - 총 지급액: **{team_total:,}원** → 팀장 계좌로 일괄 지급
+    """)
+
+    if st.button("✅ 팀 배정 추가", type="primary", use_container_width=True, key="add_team"):
+        if selected_leader is None:
+            st.error("팀장을 선택해주세요.")
+        else:
+            from uuid import uuid4
+            team_code = f"T-{datetime.now().strftime('%y%m%d')}-{str(uuid4())[:4]}"
+            leader_name = selected_leader.get('이름', '')
+
+            # 팀장 추가 (결제대상 = Y, 현장참여는 체크박스 반영)
+            # 불참 팀장: 총지급액=0 (본인 몫 없음, 팀원분만 수령)
+            leader_own_pay = int(team_rate * team_days) if leader_onsite else 0
+            st.session_state.assign_cart.append({
+                '인력명': leader_name, '구분': '팀장',
+                '직무': sel_role, '지급단가': int(team_rate),
+                '근무일수': int(team_days) if leader_onsite else 0,
+                '총지급액': leader_own_pay,
+                '팀코드': team_code, '결제대상': 'Y',
+                '현장참여': 'Y' if leader_onsite else 'N',
+            })
+
+            # 팀원 추가 (결제대상 = N, 현장참여 = Y)
+            for member in st.session_state.team_members:
+                st.session_state.assign_cart.append({
+                    '인력명': member, '구분': '팀원',
+                    '직무': sel_role, '지급단가': int(team_rate),
+                    '근무일수': int(team_days), '총지급액': int(team_rate * team_days),
+                    '팀코드': team_code, '결제대상': 'N',
+                    '현장참여': 'Y',
+                })
+
+            st.session_state.team_members = []
+            st.success(f"✅ {leader_name}팀 ({1 + team_member_count}명, 현장{onsite_count}명) 배정 추가!")
             st.rerun()
 
-        candidates_df = db.get_candidates_by_inquiry(sel_id)
-        if not candidates_df.empty:
-            name_col = _col(candidates_df, '인력명', '이름')
-            status_col = _col(candidates_df, '지급상태', '상태')
-            role_col = _col(candidates_df, '직무', '역할')
 
-            for idx, row in candidates_df.iterrows():
-                cname = row.get(name_col, 'N/A')
-                cstatus = str(row.get(status_col, '후보'))
-                crole = row.get(role_col, '')
-                ctype = row.get('구분', '외부')
-                badge_icon = "🏢" if ctype == '본사' else "👤"
-                status_badge = "🟡 후보" if '후보' in cstatus else "🔵 배정중"
-                role_text = f" → {crole}" if crole and str(crole) != 'nan' and str(crole).strip() else ""
+def _render_individual_assignment_ui(sel, df_staff, role_status):
+    """개별 배정 모드 UI — 본사 인원 + 외부 인력 검색"""
 
-                # STAFF 정보 조회
-                sinfo = _lookup_staff_brief(df_staff, cname)
-                info_line = ""
-                if sinfo:
-                    phone_display = sinfo['연락처'] if sinfo['연락처'] else '-'
-                    info_line = f"{sinfo['성별']}/{sinfo['나이']} · 📱{phone_display} · ⭐{sinfo['총점']}"
+    # ── 본사 인력 ──
+    st.markdown("##### 🏢 본사 인원")
+    hq_cols = st.columns(min(len(db.HQ_STAFF) + 1, 5))
+    for i, hq in enumerate(db.HQ_STAFF):
+        with hq_cols[i % len(hq_cols)]:
+            if st.button(f"➕ {hq['이름']}", key=f"hq_{hq['이름']}", use_container_width=True):
+                st.session_state.assign_cart.append({
+                    '인력명': hq['이름'], '구분': '본사',
+                    '직무': hq['직무'], '지급단가': 0, '근무일수': 1, '총지급액': 0,
+                })
+                st.rerun()
 
-                c1, c2 = st.columns([3, 1])
-                with c1:
-                    st.markdown(f"{badge_icon} **{cname}** {status_badge}{role_text}")
-                    if info_line:
-                        st.caption(f"  {info_line}")
-                with c2:
-                    if '후보' in cstatus:
-                        if st.button("❌", key=f"rm_cand_{idx}", help=f"{cname} 제거"):
-                            aid = row.get('배정ID', '')
-                            if aid:
-                                db.remove_candidate(aid)
-                                db.invalidate_dispatch_only()
-                                st.rerun()
+    # ── 외부 인력 검색 ──
+    st.markdown("##### 👥 외부 인력 검색")
+    col_name, col_gender = st.columns([3, 1])
+    with col_name:
+        search_q = st.text_input("🔍 이름 / 지역 / 직무 검색", placeholder="예: 김, 서울, 경호",
+                                 key="staff_search")
+    with col_gender:
+        gender_f = st.radio("성별", ["전체", "M", "F"], horizontal=True, key="gender_f")
 
-            st.caption(f"총 {len(candidates_df)}명 후보 등록됨")
-        else:
-            st.info("👈 왼쪽에서 인력을 검색하고 후보풀에 등록하세요")
+    with st.expander("🔧 상세 필터", expanded=False):
+        fc1, fc2, fc3 = st.columns(3)
+        with fc1:
+            age_filter = st.multiselect("연령대", ["20대", "30대", "40대", "50대↑"], key="age_f")
+            rec_filter = st.multiselect("추천도", ["우선투입", "일반", "보류"], key="rec_f")
+        with fc2:
+            role_filter = st.text_input("가능직무", placeholder="예: 경호, 안내", key="role_f")
+            region_filter = st.text_input("이동가능지역", placeholder="예: 서울, 경기", key="region_f")
+        with fc3:
+            min_height = st.number_input("최소 키(cm)", min_value=0, value=0, step=5, key="height_f")
+            min_score = st.number_input("최소 총점", min_value=0, value=0, step=10, key="score_f")
+            ec1, ec2 = st.columns(2)
+            with ec1:
+                english_f = st.selectbox("영어", ["무관", "가능"], key="eng_f")
+            with ec2:
+                driving_f = st.selectbox("운전", ["무관", "가능"], key="drv_f")
 
-        # 기존 확정 인력
-        all_assignments = db.get_assignments_by_inquiry(sel_id)
-        if not all_assignments.empty:
-            status_col = _col(all_assignments, '지급상태', '상태')
-            confirmed = all_assignments[
-                all_assignments[status_col].astype(str).str.contains('확정', na=False)]
-            if not confirmed.empty:
-                name_col = _col(confirmed, '인력명', '이름')
-                st.markdown(f"##### ✅ 확정 인력 ({len(confirmed)}명)")
-                display_cols = ['인력명', '이름', '직무', '역할', '지급단가', '단가', '근무일수', '일수']
-                avail = [c for c in display_cols if c in confirmed.columns]
-                st.dataframe(confirmed[avail], use_container_width=True, hide_index=True,
-                             height=min(200, 35 * len(confirmed) + 38))
+    col_ai, col_manual = st.columns(2)
+    do_ai = col_ai.button("🤖 AI 추천", use_container_width=True, type="primary", key="ai_btn")
+    do_search = col_manual.button("🔍 검색", use_container_width=True, key="search_btn")
+
+    if do_ai or do_search:
+        with st.spinner("인력을 검색 중..."):
+            if do_ai:
+                from smart_assignment import SmartAssignment
+                dispatch_data = db.get_dispatch()
+                df_dispatch = dispatch_data.get('dispatch', pd.DataFrame())
+                location = str(sel.get('장소', ''))
+                g_val = gender_f if gender_f != "전체" else None
+                # 필요 직군 중 미충원 1순위 자동 선택
+                auto_role = None
+                for rs in (role_status or []):
+                    if rs['assigned'] < rs['needed']:
+                        auto_role = rs['role']
+                        break
+                result = SmartAssignment.ai_recommend(
+                    staff_df=df_staff, dispatch_df=df_dispatch,
+                    job_type=auto_role, location=location.split()[0] if location else None,
+                    gender=g_val, top_n=20)
+            else:
+                result = _search_staff(
+                    df_staff, search_q, gender_f, age_filter, rec_filter,
+                    role_filter, region_filter, min_height, min_score,
+                    english_f, driving_f)
+
+            st.session_state.search_results = result
+            st.session_state.search_done = True
+
+    # 검색 결과
+    if st.session_state.get('search_done') and not st.session_state.get('search_results', pd.DataFrame()).empty:
+        results = st.session_state.search_results
+        st.markdown(f"**{len(results)}명 검색됨** — 체크하여 후보풀에 추가")
+
+        selected_indices = []
+        # 카드형 레이아웃: 3열 그리드
+        card_cols = st.columns(3)
+        for idx, row in results.reset_index(drop=True).iterrows():
+            name = row.get('이름', 'N/A')
+            gender = row.get('성별', '-')
+            age = row.get('나이', '-')
+            region = row.get('이동가능지역', row.get('거주지', '-'))
+            role = row.get('가능직무', '-')
+            height = row.get('키', '-')
+            score = row.get('총점', '-')
+            recommend = row.get('추천도', '-')
+            ai_score = row.get('AI점수', '')
+            
+            # 추천도별 색상
+            if str(recommend) in ['A', 'S']:
+                rec_color = "#10b981"; rec_bg = "#ecfdf5"
+            elif str(recommend) == 'B':
+                rec_color = "#3b82f6"; rec_bg = "#eff6ff"
+            else:
+                rec_color = "#6b7280"; rec_bg = "#f9fafb"
+            
+            ai_badge = f'<span style="background:#7c3aed;color:white;padding:1px 6px;border-radius:8px;font-size:10px;">AI {ai_score}</span>' if ai_score != '' else ''
+
+            with card_cols[idx % 3]:
+                st.markdown(f"""
+                <div style="background:white; border:1px solid #e5e7eb; border-radius:10px; padding:12px; margin-bottom:8px; box-shadow:0 1px 4px rgba(0,0,0,0.05);">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                        <span style="font-weight:800; font-size:15px; color:#111;">{name}</span>
+                        <span style="background:{rec_color}; color:white; padding:2px 8px; border-radius:10px; font-size:11px;">{recommend}</span>
+                    </div>
+                    <div style="font-size:12px; color:#4b5563; line-height:1.7;">
+                        👤 {gender}/{age}세 · 📏 {height}cm<br/>
+                        📍 {region}<br/>
+                        🔧 {role}<br/>
+                        ⭐ 총점: {score} {ai_badge}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+                if st.checkbox(f"{name} 선택", key=f"staff_sel_{idx}", label_visibility="collapsed"):
+                    selected_indices.append(idx)
+
+        if selected_indices:
+            if st.button(f"✅ 선택한 {len(selected_indices)}명 후보풀에 추가",
+                         type="primary", use_container_width=True, key="add_to_pool"):
+                for si in selected_indices:
+                    row = results.iloc[si]
+                    st.session_state.assign_cart.append({
+                        '인력명': row.get('이름', ''), '구분': '외부',
+                        '직무': '', '지급단가': 0, '근무일수': 0, '총지급액': 0,
+                    })
+                st.rerun()
+
+    # ── 신규 인력 직접 입력 ──
+    st.markdown("##### ✍️ 신규 인력 직접 입력")
+    st.caption("💡 인력풀에 없는 신규 인력을 등록하고 바로 후보풀에 추가합니다.")
+    with st.expander("➕ 신규 인력 입력", expanded=False):
+        nc1, nc2, nc3 = st.columns([1.5, 1, 0.8])
+        with nc1:
+            new_name = st.text_input("이름 *", placeholder="홍길동", key="new_staff_name")
+        with nc2:
+            new_phone = st.text_input("연락처", placeholder="010-0000-0000", key="new_staff_phone")
+        with nc3:
+            new_gender = st.selectbox("성별", ["M", "F"], key="new_staff_gender")
+
+        nc4, nc5, nc6 = st.columns([1.5, 1, 0.8])
+        with nc4:
+            new_job = st.text_input("가능직무", placeholder="경호, 안내", key="new_staff_job")
+        with nc5:
+            new_region = st.text_input("지역", placeholder="서울, 경기", key="new_staff_region")
+        with nc6:
+            new_age = st.number_input("나이", min_value=18, max_value=70, value=30, key="new_staff_age")
+
+        _save_to_staff = st.checkbox("STAFF 시트에도 등록", value=True, key="save_new_to_staff")
+
+        if st.button("✅ 후보풀에 추가", type="primary", use_container_width=True, key="add_new_staff_btn"):
+            if not new_name.strip():
+                st.warning("이름을 입력해주세요.")
+            else:
+                st.session_state.assign_cart.append({
+                    '인력명': new_name.strip(), '구분': '외부',
+                    '직무': new_job if new_job else '', '지급단가': 0, '근무일수': 0, '총지급액': 0,
+                })
+                if _save_to_staff:
+                    staff_data = {
+                        '이름': new_name.strip(), '연락처': new_phone.strip() if new_phone else '',
+                        '성별': new_gender, '나이': str(new_age),
+                        '가능직무': new_job, '이동가능지역': new_region.strip() if new_region else '',
+                        '추천도': '일반',
+                    }
+                    if db.add_new_staff(staff_data):
+                        st.success(f"✅ {new_name} — 후보 추가 + STAFF 등록 완료!")
+                    else:
+                        st.warning(f"⚠️ {new_name} — 후보 추가됨 (STAFF 등록 실패)")
+                else:
+                    st.success(f"✅ {new_name} — 후보풀에 추가!")
+                st.rerun()
 
 
 # ──────────────────────────────────────────────────────────
@@ -812,7 +1112,23 @@ def _step2_role_assignment(sel_id, sel, role_status, start_d=None, end_d=None, d
         elif len(event_dates) > 60:
             st.caption(f"행사 기간이 {len(event_dates)}일로 너무 깁니다. 매트릭스 생략.")
         else:
-            total_needed_per_day = sum(rs['needed'] for rs in role_status) if role_status else 0
+            # ★ 날짜별 필요인원 딕셔너리 구축
+            _date_needs_map = {}  # {'2026-03-01': 총필요인원}
+            _has_any_date_detail = any(rs.get('has_date_items') for rs in role_status)
+            for rs in role_status:
+                if rs.get('has_date_items') and rs.get('date_details'):
+                    for dk, dv in rs['date_details'].items():
+                        # dk = 'MM/DD' → ISO 날짜로 변환 시도
+                        for ed in event_dates:
+                            if ed.strftime('%m/%d') == dk:
+                                k = ed.isoformat()
+                                _date_needs_map[k] = _date_needs_map.get(k, 0) + dv
+                                break
+                else:
+                    for ed in event_dates:
+                        k = ed.isoformat()
+                        _date_needs_map[k] = _date_needs_map.get(k, 0) + rs['needed']
+            _default_needed_per_day = sum(rs['needed'] for rs in role_status) if role_status else 0
 
             # 페이징
             dates_per_page = 7
@@ -860,28 +1176,42 @@ def _step2_role_assignment(sel_id, sel, role_status, start_d=None, end_d=None, d
 
                     acols = st.columns([2.5] + [1] * len(page_dates) + [0.8, 0.8])
                     badge = "🏢" if a_type == '본사' else "👤"
+                    team_tag = _team_prefix(arow)
                     conflict_tag = ""
                     if a_name in conflict_map:
                         conflict_tag = " ⚠️"
-                    acols[0].caption(f"{badge}{a_name}{conflict_tag}\n({a_role})")
+                    acols[0].caption(f"{badge}{team_tag}{a_name}{conflict_tag}\n({a_role})")
+
+                    # 현장불참 팀장 여부 확인
+                    _is_offsite_leader = (
+                        str(arow.get('구분', '')).strip() == '팀장' and
+                        str(arow.get('현장참여', 'Y')).strip().upper() == 'N'
+                    )
 
                     person_days = 0
                     for di, dd in enumerate(page_dates):
                         d_iso = dd.isoformat()
                         # 근무일자 컬럼이 있으면 정확한 날짜 매칭, 없으면 순서 기반 폴백
-                        if a_work_dates_set is not None:
+                        if _is_offsite_leader:
+                            works_this_day = False  # 불참 팀장은 출근 없음
+                        elif a_work_dates_set is not None:
                             works_this_day = d_iso in a_work_dates_set
                         else:
                             day_idx = event_dates.index(dd) if dd in event_dates else -1
                             works_this_day = day_idx < a_days if a_days > 0 and day_idx >= 0 else False
                         with acols[di + 1]:
-                            if works_this_day:
+                            if _is_offsite_leader:
+                                st.markdown("🚫")  # 불참 표시
+                            elif works_this_day:
                                 st.markdown("✅")
                                 day_counts[d_iso] = day_counts.get(d_iso, 0) + 1
                                 person_days += 1
                             else:
                                 st.markdown("·")
-                    acols[-2].caption(f"**{person_days}**")
+                    if _is_offsite_leader:
+                        acols[-2].caption("**불참**")
+                    else:
+                        acols[-2].caption(f"**{person_days}**")
 
                     # 관리 버튼: ✏️ 수정 / ❌ 배정취소
                     with acols[-1]:
@@ -955,14 +1285,16 @@ def _step2_role_assignment(sel_id, sel, role_status, start_d=None, end_d=None, d
             short_days = 0
             for di, dd in enumerate(page_dates):
                 cnt = day_counts.get(dd.isoformat(), 0)
-                if cnt >= total_needed_per_day:
+                # ★ 날짜별 필요인원 적용
+                needed_today = _date_needs_map.get(dd.isoformat(), _default_needed_per_day)
+                if cnt >= needed_today:
                     icon = "🟢"
                 elif cnt > 0:
                     icon = "🟡"
                 else:
                     icon = "🔴"
                     short_days += 1
-                scols[di + 1].caption(f"{icon}**{cnt}/{total_needed_per_day}**")
+                scols[di + 1].caption(f"{icon}**{cnt}/{needed_today}**")
             total_mandays_page = sum(day_counts.values())
             scols[-2].caption(f"**{total_mandays_page}**")
 
@@ -998,6 +1330,7 @@ def _step2_role_assignment(sel_id, sel, role_status, start_d=None, end_d=None, d
                 cname = row.get(name_col, 'N/A')
                 ctype = row.get('구분', '외부')
                 badge = "🏢" if ctype == '본사' else "👤"
+                team_tag = _team_prefix(row)
                 conflict_tag = ""
                 if cname in conflict_map:
                     total_overlap = sum(len(c['겹치는날짜']) for c in conflict_map[cname])
@@ -1009,7 +1342,7 @@ def _step2_role_assignment(sel_id, sel, role_status, start_d=None, end_d=None, d
                     info_txt = f" {sinfo['성별']}/{sinfo['나이']} · 📱{phone_display} · ⭐{sinfo['총점']}"
                 else:
                     info_txt = ""
-                st.markdown(f"{badge} **{cname}**{info_txt}{conflict_tag}")
+                st.markdown(f"{badge} {team_tag}**{cname}**{info_txt}{conflict_tag}")
 
         st.divider()
 
@@ -1022,8 +1355,9 @@ def _step2_role_assignment(sel_id, sel, role_status, start_d=None, end_d=None, d
                 days = rs['days']
 
                 role_assigned = assigned[
-                    assigned[role_col_name].astype(str).str.contains(role_name, na=False)
-                ] if not assigned.empty else pd.DataFrame()
+                    assigned[role_col_name].astype(str).str.strip().apply(
+                        lambda x: x == role_name or role_name in x or x in role_name
+                    )] if not assigned.empty else pd.DataFrame()
                 current_count = len(role_assigned)
 
                 # 인일 기반 진행률
@@ -1045,10 +1379,11 @@ def _step2_role_assignment(sel_id, sel, role_status, start_d=None, end_d=None, d
                     for _, rr in role_assigned.iterrows():
                         rr_name = rr.get(name_col, '')
                         rr_days = int(rr.get('근무일수', rr.get('일수', 0)) or 0)
+                        rr_team = _team_prefix(rr)
                         ct = ""
                         if rr_name in conflict_map:
                             ct = f" ⚠️충돌"
-                        st.caption(f"  ✔ {rr_name} ({rr_days}일){ct}")
+                        st.caption(f"  ✔ {rr_team}{rr_name} ({rr_days}일){ct}")
 
                 # 미배정 후보를 이 직군에 배정 (인원 초과 허용)
                 has_manday_shortage = rs['actual_mandays'] < rs['needed_mandays']
@@ -1057,10 +1392,12 @@ def _step2_role_assignment(sel_id, sel, role_status, start_d=None, end_d=None, d
                         candidate_names = [r.get(name_col, 'N/A') for _, r in unassigned.iterrows()]
                         candidate_ids = [r.get('배정ID', '') for _, r in unassigned.iterrows()]
 
+                        # 팀 배정 인력에 [팀] 프리픽스 추가
+                        candidate_team_tags = [_team_prefix(r) for _, r in unassigned.iterrows()]
                         selected_candidates = st.multiselect(
                             f"{role_name} 배정할 후보",
                             range(len(candidate_names)),
-                            format_func=lambda x: f"{candidate_names[x]}{' ⚠️' if candidate_names[x] in conflict_map else ''}",
+                            format_func=lambda x: f"{candidate_team_tags[x]}{candidate_names[x]}{' ⚠️' if candidate_names[x] in conflict_map else ''}",
                             key=f"role_select_{ri}",
                         )
 
@@ -1279,8 +1616,9 @@ def _step3_confirm_and_schedule(sel_id, sel, role_status, is_long_term, start_d,
             r_role = row.get(role_col, '')
             r_rate = int(row.get('지급단가', row.get('단가', 0)) or 0)
             r_days = int(row.get('근무일수', row.get('일수', 0)) or 0)
+            team_tag = _team_prefix(row)
             confirm_data.append({
-                '인력명': r_name, '구분': row.get('구분', ''), '직무': r_role,
+                '인력명': f"{team_tag}{r_name}", '구분': row.get('구분', ''), '직무': r_role,
                 '단가': f"₩{r_rate:,}", '일수': r_days,
                 '총액': f"₩{r_rate * r_days:,}",
                 '배정ID': row.get('배정ID', '')
@@ -1349,7 +1687,7 @@ def _step3_confirm_and_schedule(sel_id, sel, role_status, is_long_term, start_d,
 
         # 개별 관리
         st.markdown("##### 🔧 배정 관리")
-        manage_labels = [f"{row.get(name_col, 'N/A')} — {row.get(role_col, '-')}"
+        manage_labels = [f"{_team_prefix(row)}{row.get(name_col, 'N/A')} — {row.get(role_col, '-')}"
                          for _, row in confirmed.iterrows()]
         sel_manage = st.selectbox("대상", range(len(manage_labels)),
                                    format_func=lambda x: manage_labels[x], key="manage_confirmed")
@@ -1424,82 +1762,224 @@ def _step3_confirm_and_schedule(sel_id, sel, role_status, is_long_term, start_d,
 
 
 # ==============================================================================
-# 2. 탭2: 평가 (STAFF DB 일치: 근태/수행/외모/팀워크)
+# 2. 탭2: 출석/근무
 # ==============================================================================
 
-def tab_evaluation(data):
-    """평가 — STAFF DB 평가항목과 일치 (근태/수행/외모/팀워크) + 캐시 최적화"""
+def tab_attendance(data):
+    """출석부 — 견적 연동 시간/날짜 + 스케줄표 + 행사완료 처리"""
     df_inq = data.get('inq', pd.DataFrame())
-    sel_id, sel = _select_contract(df_inq, ['진행중', '완료'], "eval")
+    sel_id, sel = _select_contract(df_inq, ['배정완료', '진행중', '완료'], "att")
     if sel_id is None:
-        st.info("📌 진행중 또는 완료 상태의 계약이 필요합니다.")
+        st.info("📌 배정완료/진행중 상태의 계약이 필요합니다.")
         return
 
-    # 배정 인력 캐시 (selectbox 변경 시 재로딩 방지)
-    cache_key = f"_eval_assignments_{sel_id}"
-    if cache_key not in st.session_state or st.session_state.get('_eval_last_id') != sel_id:
-        st.session_state[cache_key] = db.get_assignments_by_inquiry(sel_id)
-        st.session_state['_eval_last_id'] = sel_id
-    
-    assignments_df = st.session_state[cache_key]
+    assignments_df = db.get_assignments_by_inquiry(sel_id)
     if assignments_df.empty:
-        st.info("배정된 인력이 없습니다.")
+        st.info("이 계약에 배정된 인력이 없습니다.")
         return
 
-    name_col = '인력명' if '인력명' in assignments_df.columns else '이름'
-    eval_labels = [f"{row.get(name_col, 'N/A')} — {row.get('직무', row.get('역할', ''))}"
-                   for _, row in assignments_df.iterrows()]
-    sel_idx = st.selectbox("평가 대상", range(len(eval_labels)),
-                            format_func=lambda x: eval_labels[x], key="eval_target")
-    target = assignments_df.iloc[sel_idx]
+    # 현장참여=N인 인력 제외 (팀장이 현장에 안 오는 경우)
+    onsite_col = '현장참여' if '현장참여' in assignments_df.columns else None
+    offsite_names = []
+    if onsite_col:
+        offsite_mask = assignments_df[onsite_col].astype(str).str.strip().str.upper() == 'N'
+        offsite_names = assignments_df.loc[offsite_mask, _col(assignments_df, '인력명', '이름') or '인력명'].tolist()
+        assignments_df = assignments_df[~offsite_mask].reset_index(drop=True)
 
-    st.markdown(f"**{target.get(name_col, '')}** 평가")
+    name_col = _col(assignments_df, '인력명', '이름') or '인력명'
+    rate_col = _col(assignments_df, '지급단가', '단가') or '지급단가'
+    current_status = str(sel.get('상태', ''))
 
-    # STAFF DB와 일치하는 4개 평가항목 — form으로 감싸서 불필요한 rerun 방지
-    st.caption("💡 평가 항목은 STAFF 인력 DB와 동일합니다. 슬라이더 조정 후 '평가 저장'을 누르세요.")
+    onsite_note = f" (비현장: {', '.join(offsite_names)})" if offsite_names else ""
+    st.markdown(f"**{sel.get('행사명', '')}** — 현장 인력 {len(assignments_df)}명{onsite_note} · 상태: {current_status}")
+
+    # ── 행사완료 처리 ──
+    if current_status == '진행중':
+        if st.button("🏁 행사 완료 처리", type="primary", key="complete_event"):
+            db.update_status(sel_id, sc.STATUS_FLOW[5])  # '완료'
+            db.invalidate_data()
+            st.balloons()
+            st.success("✅ 행사가 완료 처리되었습니다. 이제 정산을 진행하세요.")
+            st.rerun()
+    elif current_status == '완료':
+        st.success("✅ 행사 완료 — 정산 페이지에서 후속 처리를 진행하세요.")
+
+    st.divider()
+
+    # ── 다일 행사 스케줄표 (일차별 인원 배분) ──
+    raw_start = str(sel.get('행사시작일', '')).strip()
+    raw_end = str(sel.get('행사종료일', '')).strip()
+    if '/' in raw_start:
+        _parts = [p.strip() for p in raw_start.split('/') if p.strip()]
+        start_date = _parse_date_safe(_parts[0]) if _parts else None
+    else:
+        start_date = _parse_date_safe(raw_start)
+    if '/' in raw_end:
+        _parts = [p.strip() for p in raw_end.split('/') if p.strip()]
+        end_date = _parse_date_safe(_parts[-1]) if _parts else None
+    else:
+        end_date = _parse_date_safe(raw_end)
     
-    with st.form(key=f"eval_form_{sel_id}_{sel_idx}"):
-        col1, col2 = st.columns(2)
-        s1 = col1.slider("근태", 1, 5, 3, key="e_s1", help="출퇴근 시간 준수, 결근율")
-        s2 = col2.slider("수행", 1, 5, 3, key="e_s2", help="업무 수행 능력, 전문성")
-        col3, col4 = st.columns(2)
-        s3 = col3.slider("외모", 1, 5, 3, key="e_s3", help="복장, 단정함, 서비스 이미지")
-        s4 = col4.slider("팀워크", 1, 5, 3, key="e_s4", help="협업, 의사소통, 현장 적응")
+    if start_date and end_date and (end_date - start_date).days >= 1:
+        num_days = (end_date - start_date).days + 1
+        st.markdown(f'<div class="section-title">📅 일자별 스케줄표 ({num_days}일 행사)</div>', unsafe_allow_html=True)
+        st.caption("💡 각 인력의 일자별 투입 여부를 체크하세요.")
+        
+        date_list = [start_date + timedelta(days=d) for d in range(num_days)]
+        date_labels = [f"{d.month}/{d.day}({['월','화','수','목','금','토','일'][d.weekday()]})" for d in date_list]
+        
+        sched_key = f"schedule_{sel_id}"
+        if sched_key not in st.session_state:
+            st.session_state[sched_key] = {
+                str(row.get(name_col, '')): [True] * num_days
+                for _, row in assignments_df.iterrows()
+            }
+        
+        schedule_data = st.session_state[sched_key]
+        
+        page_size = 7
+        if num_days > page_size:
+            sched_page = st.radio(
+                "주차 선택",
+                [f"{i*page_size+1}~{min((i+1)*page_size, num_days)}일차" for i in range((num_days + page_size - 1) // page_size)],
+                horizontal=True, key="sched_page"
+            )
+            page_idx = [f"{i*page_size+1}~{min((i+1)*page_size, num_days)}일차" for i in range((num_days + page_size - 1) // page_size)].index(sched_page)
+            day_start = page_idx * page_size
+            day_end = min(day_start + page_size, num_days)
+        else:
+            day_start = 0
+            day_end = num_days
+        
+        visible_dates = date_labels[day_start:day_end]
+        visible_count = len(visible_dates)
+        
+        header_cols = st.columns([2] + [1] * visible_count)
+        with header_cols[0]:
+            st.markdown("**인력명**")
+        for di, dl in enumerate(visible_dates):
+            with header_cols[di + 1]:
+                st.markdown(f"**{dl}**")
+        
+        daily_counts = [0] * visible_count
+        for row_idx, (_, row) in enumerate(assignments_df.iterrows()):
+            staff_name = str(row.get(name_col, ''))
+            role = str(row.get('직무', row.get('역할', '')))
+            assign_id = str(row.get('배정ID', row_idx))
+            
+            sched_name_key = f"{staff_name}_{assign_id}"
+            if sched_name_key not in schedule_data:
+                schedule_data[sched_name_key] = [True] * num_days
+            
+            row_cols = st.columns([2] + [1] * visible_count)
+            with row_cols[0]:
+                st.markdown(f"👤 **{staff_name}** <span style='color:#6B7280;font-size:12px;'>({role})</span>", unsafe_allow_html=True)
+            
+            for di in range(visible_count):
+                actual_di = day_start + di
+                with row_cols[di + 1]:
+                    checked = st.checkbox(
+                        "✓", value=schedule_data[sched_name_key][actual_di],
+                        key=f"sched_{sel_id}_{staff_name}_{assign_id}_{actual_di}",
+                        label_visibility="collapsed"
+                    )
+                    schedule_data[sched_name_key][actual_di] = checked
+                    if checked:
+                        daily_counts[di] += 1
+        
+        st.markdown("---")
+        summary_cols = st.columns([2] + [1] * visible_count)
+        with summary_cols[0]:
+            st.markdown("**일자별 인원**")
+        for di in range(visible_count):
+            with summary_cols[di + 1]:
+                st.markdown(f"**{daily_counts[di]}명**")
+        
+        st.session_state[sched_key] = schedule_data
+        st.divider()
 
-        total = round((s1 + s2 + s3 + s4) / 4, 1)
-        grade = "A" if total >= 4.5 else "B" if total >= 3.5 else "C" if total >= 2.5 else "D"
+    # ── 출석 날짜 ──
+    today = datetime.now().date()
+    if start_date and end_date:
+        default_date = max(start_date, min(today, end_date))
+        att_date = st.date_input("출석 날짜", value=default_date,
+                                 min_value=start_date, max_value=end_date, key="att_date")
+        st.caption(f"📅 행사 기간: {start_date} ~ {end_date}")
+    elif start_date:
+        att_date = st.date_input("출석 날짜", value=max(start_date, today), key="att_date")
+    else:
+        att_date = st.date_input("출석 날짜", value=today, key="att_date")
 
-        cr1, cr2 = st.columns(2)
-        cr1.metric("총점", f"{total}")
-        cr2.metric("등급", grade)
+    # ── 출퇴근 시간 ──
+    est_items = db.load_estimate_items(sel_id)
+    work_time_str = ''
+    if not est_items.empty:
+        work_time_str = str(est_items.iloc[0].get('근무시간', ''))
 
-        total_comment = st.text_area("총평", key="e_comment", placeholder="종합 평가 내용을 입력하세요")
-        recommend = st.checkbox("재추천 (다음에도 배정 추천)", value=total >= 3.5, key="e_rec")
+    default_start, default_end = _parse_work_time(work_time_str)
+    col_t1, col_t2 = st.columns(2)
+    start_time = col_t1.time_input("출근", value=default_start, key="att_start")
+    end_time = col_t2.time_input("퇴근", value=default_end, key="att_end")
 
-        submitted = st.form_submit_button("✅ 평가 저장", type="primary", use_container_width=True)
-    
-    if submitted:
-        eval_dict = {
-            '배정ID': target.get('배정ID', ''),
-            '인력명': target.get(name_col, ''),
-            '현장명': sel.get('행사명', ''),
-            '근태': s1, '수행': s2, '외모': s3, '팀워크': s4,
-            '총점': total, '평가등급': grade,
-            '평가자': '', '평가일시': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            '강점': total_comment,
-            '재추천': 'Yes' if recommend else 'No', '비고': '',
-        }
-        with st.spinner("평가를 저장 중..."):
-            if db.save_evaluation(eval_dict):
-                db.invalidate_data()
-                st.balloons()
-                st.success("✅ 평가 저장 완료!")
-            else:
-                st.error("❌ 평가 저장 실패")
+    if work_time_str:
+        st.caption(f"⏰ 견적 기준 근무시간: {work_time_str} (수동 변경 가능)")
+
+    start_dt = datetime.combine(today, start_time)
+    end_dt = datetime.combine(today, end_time)
+    if end_dt < start_dt:
+        end_dt += timedelta(days=1)
+    worked_hours = (end_dt - start_dt).total_seconds() / 3600
+    st.caption(f"근무시간: {worked_hours:.1f}시간")
+
+    # ── 개인별 출석 ──
+    st.markdown("##### 개인별 출석")
+    att_records = []
+    for idx, row in assignments_df.iterrows():
+        name = row.get(name_col, 'N/A')
+        assign_id = row.get('배정ID', '')
+        category = row.get('구분', '외부')
+        hourly_rate = int(row.get(rate_col, 0) or 0)
+        daily_wage = int(worked_hours * (hourly_rate / 8)) if hourly_rate > 0 else 0
+        badge = "🏢" if category == '본사' else "👤"
+
+        col1, col2, col3 = st.columns([2, 1, 1])
+        with col1:
+            st.markdown(f"{badge} **{name}** — ₩{daily_wage:,}")
+        with col2:
+            status = st.selectbox("상태", ["출근", "지각", "조퇴", "결근"], key=f"att_st_{idx}")
+        with col3:
+            reason = st.text_input("사유", key=f"att_rs_{idx}", label_visibility="collapsed", placeholder="사유")
+
+        att_records.append({
+            '배정ID': assign_id, '문의ID': sel_id, '인력명': name,
+            '출석날짜': att_date.strftime('%Y-%m-%d'),
+            '출근시간': start_time.strftime('%H:%M'),
+            '퇴근시간': end_time.strftime('%H:%M'),
+            '근무시간': worked_hours, '일급여': daily_wage,
+            '출석상태': status, '사유': reason,
+            '비고': f'구분:{category}',
+            '기록일시': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        })
+
+    if st.button("✅ 출석 일괄 저장", type="primary", use_container_width=True, key="save_att_batch"):
+        saved = 0
+        with st.spinner("출석 기록 저장 중..."):
+            for rec in att_records:
+                if db.save_attendance_record(rec):
+                    saved += 1
+        if saved > 0:
+            if current_status == '배정완료':
+                try:
+                    db.update_status(sel_id, sc.STATUS_FLOW[4])  # '진행중'
+                except Exception:
+                    pass
+            db.invalidate_data()
+            st.balloons()
+            st.success(f"✅ {saved}명 출석 기록 완료!")
 
 
 # ==============================================================================
-# 4. 탭4: 지급 (수동 편집, 자동수당/세금 제외)
+# 3. 탭3: 평가 (STAFF DB 일치: 근태/수행/외모/팀워크)
 # ==============================================================================
 
 def tab_payment(data):
@@ -1629,7 +2109,7 @@ def tab_payment(data):
             f'⚡ {n}: {", ".join(c)}</span>' for n, c in changed
         )
         st.markdown(f'<div style="background:#FFFBEB;border:1px solid #F59E0B;border-radius:8px;padding:8px 12px;margin:6px 0;">'
-                     f'<b style="font-size:12px;">📋 변동내역</b><br/>{badges}</div>', unsafe_allow_html=True)
+                    f'<b style="font-size:12px;">📋 변동내역</b><br/>{badges}</div>', unsafe_allow_html=True)
 
     # 요약 메트릭 (별도정산 제외)
     normal = [r for r in calc_rows if not r['sep']]
@@ -1711,6 +2191,79 @@ def tab_payment(data):
             st.button("📥 이체용 엑셀", disabled=True, use_container_width=True, key=f"dl_xls_{sel_id}")
 
 
+def tab_evaluation(data):
+    """평가 — STAFF DB 평가항목과 일치 (근태/수행/외모/팀워크) + 캐시 최적화"""
+    df_inq = data.get('inq', pd.DataFrame())
+    sel_id, sel = _select_contract(df_inq, ['진행중', '완료'], "eval")
+    if sel_id is None:
+        st.info("📌 진행중 또는 완료 상태의 계약이 필요합니다.")
+        return
+
+    # 배정 인력 캐시 (selectbox 변경 시 재로딩 방지)
+    cache_key = f"_eval_assignments_{sel_id}"
+    if cache_key not in st.session_state or st.session_state.get('_eval_last_id') != sel_id:
+        st.session_state[cache_key] = db.get_assignments_by_inquiry(sel_id)
+        st.session_state['_eval_last_id'] = sel_id
+    
+    assignments_df = st.session_state[cache_key]
+    if assignments_df.empty:
+        st.info("배정된 인력이 없습니다.")
+        return
+
+    name_col = '인력명' if '인력명' in assignments_df.columns else '이름'
+    eval_labels = [f"{row.get(name_col, 'N/A')} — {row.get('직무', row.get('역할', ''))}"
+                   for _, row in assignments_df.iterrows()]
+    sel_idx = st.selectbox("평가 대상", range(len(eval_labels)),
+                            format_func=lambda x: eval_labels[x], key="eval_target")
+    target = assignments_df.iloc[sel_idx]
+
+    st.markdown(f"**{target.get(name_col, '')}** 평가")
+
+    # STAFF DB와 일치하는 4개 평가항목 — form으로 감싸서 불필요한 rerun 방지
+    st.caption("💡 평가 항목은 STAFF 인력 DB와 동일합니다. 슬라이더 조정 후 '평가 저장'을 누르세요.")
+    
+    with st.form(key=f"eval_form_{sel_id}_{sel_idx}"):
+        col1, col2 = st.columns(2)
+        s1 = col1.slider("근태", 1, 5, 3, key="e_s1", help="출퇴근 시간 준수, 결근율")
+        s2 = col2.slider("수행", 1, 5, 3, key="e_s2", help="업무 수행 능력, 전문성")
+        col3, col4 = st.columns(2)
+        s3 = col3.slider("외모", 1, 5, 3, key="e_s3", help="복장, 단정함, 서비스 이미지")
+        s4 = col4.slider("팀워크", 1, 5, 3, key="e_s4", help="협업, 의사소통, 현장 적응")
+
+        total = round((s1 + s2 + s3 + s4) / 4, 1)
+        grade = "A" if total >= 4.5 else "B" if total >= 3.5 else "C" if total >= 2.5 else "D"
+
+        cr1, cr2 = st.columns(2)
+        cr1.metric("총점", f"{total}")
+        cr2.metric("등급", grade)
+
+        total_comment = st.text_area("총평", key="e_comment", placeholder="종합 평가 내용을 입력하세요")
+        recommend = st.checkbox("재추천 (다음에도 배정 추천)", value=total >= 3.5, key="e_rec")
+
+        submitted = st.form_submit_button("✅ 평가 저장", type="primary", use_container_width=True)
+    
+    if submitted:
+        eval_dict = {
+            '배정ID': target.get('배정ID', ''),
+            '인력명': target.get(name_col, ''),
+            '현장명': sel.get('행사명', ''),
+            '근태': s1, '수행': s2, '외모': s3, '팀워크': s4,
+            '총점': total, '평가등급': grade,
+            '평가자': '', '평가일시': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            '강점': total_comment,
+            '재추천': 'Yes' if recommend else 'No', '비고': '',
+        }
+        with st.spinner("평가를 저장 중..."):
+            if db.save_evaluation(eval_dict):
+                db.invalidate_data()
+                st.balloons()
+                st.success("✅ 평가 저장 완료!")
+            else:
+                st.error("❌ 평가 저장 실패")
+
+
+# ==============================================================================
+
 # ==============================================================================
 # 5. 메인 페이지
 # ==============================================================================
@@ -1774,10 +2327,12 @@ def show(data):
     c3.metric("🏢 본사 투입", f"{hq_count}명")
     c4.metric("👥 외부 인력", f"{ext_count}명")
 
-    tab1, tab2, tab3 = st.tabs(["🎯 인력배정", "⭐ 평가", "💰 지급"])
+    tab1, tab2, tab3, tab4 = st.tabs(["🎯 인력배정", "📋 출석/근무", "⭐ 평가", "💰 지급"])
     with tab1:
         tab_assignment(data)
     with tab2:
-        tab_evaluation(data)
+        tab_attendance(data)
     with tab3:
+        tab_evaluation(data)
+    with tab4:
         tab_payment(data)
