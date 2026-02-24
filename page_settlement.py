@@ -240,6 +240,14 @@ def show_settlement_overview():
         if _filtered.empty:
             st.caption("해당 조건의 데이터가 없습니다.")
             return
+
+        def _safe_html(v):
+            """NaN/NA/None → 빈문자열, HTML 특수문자 이스케이프"""
+            s = str(v).strip() if v is not None else ''
+            if s in ('', 'nan', 'None', '<NA>', 'NaT'):
+                return ''
+            return s.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
         cols_per_row = 4
         rows_data = [_filtered.iloc[i:i+cols_per_row] for i in range(0, len(_filtered), cols_per_row)]
         for row_chunk in rows_data:
@@ -256,12 +264,13 @@ def show_settlement_overview():
                     _paid_n = pd.to_numeric(r.get('받은금액', 0), errors='coerce')
                     _paid_v = 0 if pd.isna(_paid_n) else int(_paid_n)
                     _bal_v = max(0, _supply_v + _tax_v - _paid_v)
-                    _progress_raw = r.get('진행상황', '')
-                    _progress = str(_progress_raw).strip() if _progress_raw and str(_progress_raw).strip() not in ('', 'nan', 'None') else ''
+                    _progress = _safe_html(r.get('진행상황', ''))
+                    _client = _safe_html(r.get('업체', ''))
+                    _venue = _safe_html(r.get('현장명', ''))
                     st.markdown(f"""
                     <div class="ov-card {_cls}{_sel_cls}">
-                        <div class="ov-client">{r.get('업체', '')}</div>
-                        <div class="ov-event">{r.get('현장명', '')}</div>
+                        <div class="ov-client">{_client}</div>
+                        <div class="ov-event">{_venue}</div>
                         <span class="ov-badge" style="background:{_clr}">{_lbl}</span>
                         {f'<span style="font-size:10px;color:#6b7280;margin-left:4px">{_progress}</span>' if _progress else ''}
                         <div class="ov-amount" style="margin-top:4px;">
