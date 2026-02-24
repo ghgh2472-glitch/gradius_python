@@ -48,12 +48,12 @@ def get_connection(max_retries=3):
 # ---------------------------------------------------------
 # 2. 데이터 로드 (최신성 유지 및 타입 정제)
 # ---------------------------------------------------------
-@st.cache_data(ttl=300)  # 300초(5분) - 더 자주 새로고침
+@st.cache_data(ttl=1800)  # 1800초(30분) - 저장 시 invalidate로 즉시 갱신, 평상시 로딩 최소화
 def load_all_data():
     data = {}
     client = get_connection()
     
-    # 필수 시트 로드 (견적 시스템용 Roles/Factors/Guides + 배정/정산 포함)
+    # 필수 시트 로드 (견적 시스템용 Roles/Factors/Guides 포함)
     sheet_map = {
         "inq": "문의작성",
         "staff": "STAFF",
@@ -62,8 +62,6 @@ def load_all_data():
         "factors": "Factors",
         "guides": "Guides",
         "estimate": "견적상세",
-        "dispatch": "배정기록",
-        "settlement": "계약건은청구금액적기",
     }
     
     if not client:
@@ -156,7 +154,7 @@ def load_all_data():
 # ---------------------------------------------------------
 # 2-1. 인력배정 데이터 지연 로드 (Lazy Load - 필요할 때만 로드)
 # ---------------------------------------------------------
-@st.cache_data(ttl=300)  # 5분 캐시
+@st.cache_data(ttl=1800)  # 30분 캐시 — 저장 시 invalidate로 즉시 갱신
 def load_dispatch_data():
     """배정기록과 계약건은청구금액적기를 함께 로드 (인력배정/정산 탭에서 사용)"""
     client = get_connection()
@@ -236,15 +234,23 @@ def get_data():
     if '_app_data' not in st.session_state or st.session_state['_app_data'] is None:
         progress_bar = st.progress(0, text="📡 데이터를 불러오는 중...")
         try:
-            st.session_state['_app_data'] = load_all_data_with_progress(progress_bar)
+            all_data = load_all_data_with_progress(progress_bar)
+            st.session_state['_app_data'] = all_data
+            # 배정/정산 데이터도 함께 세션에 저장 (별도 로드 불필요)
+            if 'dispatch' in all_data or 'settlement' in all_data:
+                st.session_state['_dispatch_data'] = {
+                    'dispatch': all_data.get('dispatch', pd.DataFrame()),
+                    'settlement': all_data.get('settlement', pd.DataFrame()),
+                }
         except Exception as e:
             progress_bar.empty()
             st.error(f"❌ 데이터 로드 실패: {e}")
-            # 빈 데이터 반환 (앱은 계속 동작)
             st.session_state['_app_data'] = {
                 "inq": pd.DataFrame(), "staff": pd.DataFrame(), "client": pd.DataFrame(),
                 "roles": pd.DataFrame(), "factors": pd.DataFrame(), "guides": pd.DataFrame(),
                 "estimate": pd.DataFrame(), "dispatch": pd.DataFrame(), "settlement": pd.DataFrame(),
+                "estimate_items": pd.DataFrame(), "estimate_versions": pd.DataFrame(),
+                "attendance": pd.DataFrame(), "payment": pd.DataFrame(), "evaluation": pd.DataFrame(),
             }
         st.session_state['_data_loaded_at'] = datetime.now().strftime("%H:%M:%S")
         print(f"[SESSION] Main data loaded at {st.session_state['_data_loaded_at']}")
@@ -252,9 +258,12 @@ def get_data():
 
 
 def load_all_data_with_progress(progress_bar=None):
-    """진행바 표시와 함께 데이터 로드 (개별 시트 타임아웃 포함)"""
+    """진행바 표시와 함께 데이터 로드 (개별 시트 타임아웃 포함)
+    모든 시트를 사전로딩하여 중간 로딩을 최소화합니다.
+    """
     import time as _time
 
+    # 메인 시트 + 배정/정산 + 견적품목/견적안/출석부/지급내역/평가표 모두 사전로딩
     sheet_map = {
         "inq": "문의작성",
         "staff": "STAFF",
@@ -265,6 +274,11 @@ def load_all_data_with_progress(progress_bar=None):
         "estimate": "견적상세",
         "dispatch": "배정기록",
         "settlement": "계약건은청구금액적기",
+        "estimate_items": "견적품목",
+        "estimate_versions": "견적안",
+        "attendance": "출석부",
+        "payment": "지급내역",
+        "evaluation": "평가표",
     }
     data = {}
     client = get_connection()
@@ -362,30 +376,17 @@ def load_all_data_with_progress(progress_bar=None):
 def get_dispatch():
     """
     세션에 캐시된 배정/정산 데이터를 반환합니다.
-    초기 로딩 시 이미 포함되어 있으면 그대로 사용, 없으면 지연 로드.
+    최초 호출 시 배정기록 시트 컨텍스트도 함께 워밍업하여 이후 작업 속도를 높임.
     """
     if '_dispatch_data' not in st.session_state or st.session_state['_dispatch_data'] is None:
-        # 초기 로딩에서 이미 읽어왔는지 확인
-        app_data = st.session_state.get('_app_data')
-        if app_data and 'dispatch' in app_data and not app_data['dispatch'].empty:
-            st.session_state['_dispatch_data'] = {
-                "dispatch": app_data['dispatch'],
-                "settlement": app_data.get('settlement', pd.DataFrame()),
-            }
-            # 배정기록 시트 컨텍스트 프리-워밍
+        with st.spinner("📡 배정 데이터를 불러오는 중..."):
+            st.session_state['_dispatch_data'] = load_dispatch_data()
+            # 배정기록 시트 컨텍스트 프리-워밍 (이후 배정/취소 작업에서 API 절약)
             try:
                 _get_assign_sheet_ctx()
-                print("[SESSION] Dispatch data from initial load + assign ctx warmed")
+                print("[SESSION] Dispatch data loaded + assign ctx warmed")
             except Exception as e:
-                print(f"[SESSION] Dispatch data from initial load (assign ctx warm failed: {e})")
-        else:
-            with st.spinner("📡 배정 데이터를 불러오는 중..."):
-                st.session_state['_dispatch_data'] = load_dispatch_data()
-                try:
-                    _get_assign_sheet_ctx()
-                    print("[SESSION] Dispatch data loaded + assign ctx warmed")
-                except Exception as e:
-                    print(f"[SESSION] Dispatch data loaded (assign ctx warm failed: {e})")
+                print(f"[SESSION] Dispatch data loaded (assign ctx warm failed: {e})")
     return st.session_state['_dispatch_data']
 
 
@@ -438,6 +439,127 @@ def invalidate_dispatch_only():
     print("[SESSION] Dispatch-only cache invalidated (main data preserved)")
 
 
+def invalidate_main_only():
+    """메인 7시트 캐시만 선택적으로 초기화 (배정/정산은 보존).
+    문의 저장, 견적 저장 등 메인 데이터만 변경하는 작업 후 사용.
+    배정/정산 데이터는 그대로 유지 → rerun 시 재로드 불필요.
+    """
+    st.session_state.pop('_app_data', None)
+    st.session_state.pop('_data_loaded_at', None)
+    try:
+        load_all_data.clear()
+    except Exception:
+        pass
+    try:
+        load_all_data_with_progress.clear() if hasattr(load_all_data_with_progress, 'clear') else None
+    except Exception:
+        pass
+    print("[SESSION] Main-only cache invalidated (dispatch data preserved)")
+
+
+# ---------------------------------------------------------
+# 2-4. 문의작성 시트 헤더 자동 확장 (복장/식사/주차)
+# ---------------------------------------------------------
+
+def ensure_inquiry_headers():
+    """
+    문의작성 시트에 '복장', '식사', '주차' 헤더(24~26번)가 없으면 자동 추가합니다.
+    기존 데이터 중 특이사항에 [복장:xxx] 등으로 합쳐진 항목을 개별 컬럼으로 마이그레이션합니다.
+    앱 시작 시 1회만 실행됩니다.
+    """
+    if st.session_state.get('_inq_headers_checked'):
+        return  # 이미 확인 완료
+    
+    client = get_connection()
+    if not client:
+        return
+    
+    try:
+        import re as _re
+        sh = client.open_by_key(SHEET_ID)
+        wks = sh.worksheet("문의작성")
+        headers = wks.row_values(1)
+        headers_clean = [str(h).strip() for h in headers]
+        
+        needed = ['복장', '식사', '주차']
+        missing = [h for h in needed if h not in headers_clean]
+        
+        if not missing:
+            st.session_state['_inq_headers_checked'] = True
+            print("[OK] 문의작성 시트: 복장/식사/주차 헤더 확인됨")
+            return
+        
+        # ── 1) 누락된 헤더 추가 ──
+        next_col = len(headers) + 1
+        import gspread
+        cells_to_add = []
+        col_map = {}  # {'복장': col_index, ...}
+        for h in missing:
+            cells_to_add.append(gspread.Cell(1, next_col, h))
+            col_map[h] = next_col
+            next_col += 1
+        wks.update_cells(cells_to_add, value_input_option='RAW')
+        print(f"[OK] 문의작성 시트: 헤더 추가됨 → {missing}")
+        
+        # ── 2) 기존 데이터 마이그레이션: 특이사항에서 [복장:xxx] 파싱 → 개별 컬럼 ──
+        if '특이사항' in headers_clean:
+            note_col_idx = headers_clean.index('특이사항')  # 0-based
+            all_values = wks.get_all_values()
+            
+            if len(all_values) > 1:
+                # 헤더를 다시 읽기 (추가된 상태)
+                updated_headers = wks.row_values(1)
+                updated_clean = [str(h).strip() for h in updated_headers]
+                
+                cells_to_update = []
+                patterns = {
+                    '복장': _re.compile(r'\[복장:([^\]]+)\]'),
+                    '식사': _re.compile(r'\[식사:([^\]]+)\]'),
+                    '주차': _re.compile(r'\[주차:([^\]]+)\]'),
+                }
+                
+                migrated = 0
+                for row_idx, row in enumerate(all_values[1:], start=2):  # 2부터 (1은 헤더)
+                    if note_col_idx >= len(row):
+                        continue
+                    note_text = str(row[note_col_idx]).strip()
+                    if not note_text:
+                        continue
+                    
+                    note_modified = note_text
+                    for field_name, pattern in patterns.items():
+                        match = pattern.search(note_text)
+                        if match and field_name in col_map:
+                            # 개별 컬럼에 값 기록
+                            cells_to_update.append(
+                                gspread.Cell(row_idx, col_map[field_name], match.group(1).strip())
+                            )
+                            note_modified = note_modified.replace(match.group(0), '').strip()
+                    
+                    # 특이사항에서 태그 제거 (순수 메모만 남김)
+                    if note_modified != note_text:
+                        cells_to_update.append(
+                            gspread.Cell(row_idx, note_col_idx + 1, note_modified)  # 1-based col
+                        )
+                        migrated += 1
+                
+                if cells_to_update:
+                    # 50개씩 배치 업데이트 (API 할당량 관리)
+                    for i in range(0, len(cells_to_update), 50):
+                        batch = cells_to_update[i:i+50]
+                        wks.update_cells(batch, value_input_option='RAW')
+                    print(f"[OK] 문의작성 마이그레이션: {migrated}건 처리됨")
+        
+        st.session_state['_inq_headers_checked'] = True
+        # 캐시 무효화 (마이그레이션 결과 반영)
+        invalidate_data()
+        print("[OK] 문의작성 시트 헤더 확장 완료")
+        
+    except Exception as e:
+        print(f"[WARN] ensure_inquiry_headers 실패: {e}")
+        st.session_state['_inq_headers_checked'] = True  # 실패해도 재시도 방지
+
+
 # ---------------------------------------------------------
 # 3. 데이터 업데이트 (계약/견적 통합 처리)
 # ---------------------------------------------------------
@@ -456,124 +578,6 @@ def update_status(inquiry_id, new_status, col_idx=14):
                 return True
         except: pass
     return False
-
-
-def update_estimate_send_status(inquiry_id: str, send_method: str, send_memo: str = ""):
-    """
-    견적상세 시트의 발송 상태를 업데이트합니다.
-    발송여부, 발송일시, 발송방법, 발송메모 4개 컬럼을 한 번에 업데이트합니다.
-    컬럼이 없으면 자동으로 추가합니다.
-
-    Args:
-        inquiry_id (str): 문의ID
-        send_method (str): 발송방법 (이메일/카카오톡/팩스/직접전달)
-        send_memo (str): 발송 메모 (선택)
-    Returns:
-        bool: 성공 여부
-    """
-    client = get_connection()
-    if not client:
-        return False
-
-    try:
-        sh = client.open_by_key(SHEET_ID)
-        wks = sh.worksheet("견적상세")
-        headers = wks.row_values(1)
-        headers_clean = [str(h).strip() for h in headers]
-
-        # 필요한 컬럼이 없으면 자동 추가 (시트 크기 부족 시 자동 확장)
-        send_cols = ["발송여부", "발송일시", "발송방법", "발송메모"]
-        missing_cols = [c for c in send_cols if c not in headers_clean]
-        if missing_cols:
-            current_cols = wks.col_count
-            needed_cols = len(headers_clean) + len(missing_cols)
-            if needed_cols > current_cols:
-                wks.resize(cols=needed_cols + 2)
-                logger.info(f"📝 견적상세 시트 컬럼 확장: {current_cols} → {needed_cols + 2}")
-            for col_name in missing_cols:
-                next_col = len(headers_clean) + 1
-                wks.update_cell(1, next_col, col_name)
-                headers_clean.append(col_name)
-                logger.info(f"📝 견적상세 시트에 '{col_name}' 컬럼 추가 (col {next_col})")
-
-        # 문의ID로 행 찾기
-        id_col_idx = headers_clean.index('문의ID') + 1 if '문의ID' in headers_clean else 1
-        id_col = wks.col_values(id_col_idx)
-        id_col_clean = [str(x).strip() for x in id_col]
-
-        target_row = None
-        for i, cid in enumerate(id_col_clean):
-            if cid == str(inquiry_id).strip():
-                target_row = i + 1
-                break
-
-        if target_row is None:
-            logger.error(f"❌ 견적상세에서 문의ID '{inquiry_id}'를 찾을 수 없습니다")
-            return False
-
-        # 4개 컬럼 일괄 업데이트
-        from gspread.cell import Cell
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-        cells = [
-            Cell(row=target_row, col=headers_clean.index("발송여부") + 1, value="발송완료"),
-            Cell(row=target_row, col=headers_clean.index("발송일시") + 1, value=now_str),
-            Cell(row=target_row, col=headers_clean.index("발송방법") + 1, value=send_method),
-            Cell(row=target_row, col=headers_clean.index("발송메모") + 1, value=send_memo),
-        ]
-        wks.update_cells(cells, value_input_option='RAW')
-        logger.info(f"✅ 견적 발송 기록: {inquiry_id} → {send_method} ({now_str})")
-        return True
-
-    except Exception as e:
-        logger.error(f"❌ update_estimate_send_status 오류: {e}")
-        return False
-
-
-def cancel_estimate_send_status(inquiry_id: str):
-    """
-    견적 발송 상태를 취소(초기화)합니다.
-    """
-    client = get_connection()
-    if not client:
-        return False
-
-    try:
-        sh = client.open_by_key(SHEET_ID)
-        wks = sh.worksheet("견적상세")
-        headers = wks.row_values(1)
-        headers_clean = [str(h).strip() for h in headers]
-
-        if "발송여부" not in headers_clean:
-            return False
-
-        id_col_idx = headers_clean.index('문의ID') + 1 if '문의ID' in headers_clean else 1
-        id_col = wks.col_values(id_col_idx)
-        id_col_clean = [str(x).strip() for x in id_col]
-
-        target_row = None
-        for i, cid in enumerate(id_col_clean):
-            if cid == str(inquiry_id).strip():
-                target_row = i + 1
-                break
-
-        if target_row is None:
-            return False
-
-        from gspread.cell import Cell
-        cells = [
-            Cell(row=target_row, col=headers_clean.index("발송여부") + 1, value=""),
-            Cell(row=target_row, col=headers_clean.index("발송일시") + 1, value=""),
-            Cell(row=target_row, col=headers_clean.index("발송방법") + 1, value=""),
-            Cell(row=target_row, col=headers_clean.index("발송메모") + 1, value=""),
-        ]
-        wks.update_cells(cells, value_input_option='RAW')
-        logger.info(f"✅ 견적 발송 취소: {inquiry_id}")
-        return True
-
-    except Exception as e:
-        logger.error(f"❌ cancel_estimate_send_status 오류: {e}")
-        return False
-
 
 def update_cell(sheet_name, inquiry_id, col_name=None, value=""):
     """
@@ -625,19 +629,6 @@ def update_cell(sheet_name, inquiry_id, col_name=None, value=""):
     except Exception as e:
         print(f"❌ update_cell 오류: {e}")
         return False
-
-
-def update_settlement_progress(inquiry_id, progress):
-    """계약건은청구금액적기 시트의 '진행상황' 컬럼만 업데이트
-    
-    Args:
-        inquiry_id: 문의ID
-        progress: 진행상황 값 (계약체결/행사준비/행사종료/정산완료)
-    Returns:
-        bool: 성공 여부
-    """
-    return update_cell("계약건은청구금액적기", inquiry_id, "진행상황", progress)
-
 
 def save_estimate_details(est_data, metadata=None):
     """
@@ -924,11 +915,6 @@ def save_settlement_record(settlement_data, site_info=None):
                 else:
                     value = ""
             
-            # ✅ Google Sheets 셀 제한: 50,000자 초과 시 빈값 처리 (base64 잘라내면 깨짐)
-            if isinstance(value, str) and len(value) > 49000:
-                logger.warning(f"⚠️ {header} 컬럼 데이터 초과 ({len(value)}자) → 빈값 처리")
-                value = ""
-            
             cells_to_update.append(Cell(row=target_row, col=col_idx, value=value))
         
         # 8. 일괄 업데이트
@@ -1053,45 +1039,6 @@ def _get_assign_sheet_ctx(force=False):
         except Exception as e:
             print(f"[Migration] 근무일자 헤더 추가 실패: {e}")
 
-    # 팀코드/결제대상/현장참여 헤더 자동 추가 (17-19번째 — 최초 1회)
-    _team_headers = ['팀코드', '결제대상', '현장참여']
-    for _th in _team_headers:
-        if _th not in headers:
-            try:
-                next_col = len(headers) + 1
-                wks.update_cell(1, next_col, _th)
-                headers.append(_th)
-                print(f"[Migration] '{_th}' 헤더 추가 (Col {next_col})")
-            except Exception as e:
-                print(f"[Migration] {_th} 헤더 추가 실패: {e}")
-
-    # ── 기존 데이터 마이그레이션: 팀코드/결제대상/현장참여가 20-22번 컬럼에 있으면 17-19번으로 이동 ──
-    try:
-        tc_idx = headers.index('팀코드') + 1 if '팀코드' in headers else None
-        if tc_idx and tc_idx <= 19:
-            # 헤더가 올바른 위치(<=19)에 있으면, 20-22번에 잘못 저장된 기존 데이터 체크
-            all_vals = wks.get_all_values()
-            migrated = 0
-            batch_cells = []
-            for ri, row_vals in enumerate(all_vals[1:], start=2):  # 데이터 행만
-                # 20-22번 컬럼(인덱스 19-21)에 데이터가 있고 17-19번(인덱스 tc_idx-1~)에 없으면 이동
-                if len(row_vals) > 21 and row_vals[19]:  # 20번 컬럼에 값이 있음
-                    if len(row_vals) <= tc_idx or not str(row_vals[tc_idx - 1]).strip():
-                        # 20→tc_idx, 21→tc_idx+1, 22→tc_idx+2 이동
-                        for offset in range(3):
-                            old_col = 20 + offset  # 1-based
-                            new_col = tc_idx + offset  # 1-based
-                            val = row_vals[19 + offset] if (19 + offset) < len(row_vals) else ''
-                            if val:
-                                batch_cells.append(gspread.Cell(ri, new_col, str(val)))
-                                batch_cells.append(gspread.Cell(ri, old_col, ''))  # 옛 위치 지우기
-                                migrated += 1
-            if batch_cells:
-                wks.update_cells(batch_cells, value_input_option='RAW')
-                print(f"[Migration] 팀 데이터 {migrated}건 위치 이동 (Col 20-22 → {tc_idx}-{tc_idx+2})")
-    except Exception as e:
-        print(f"[Migration] 팀 데이터 이동 실패 (무시): {e}")
-
     id_col = [str(v).strip() for v in wks.col_values(1)]
 
     # 자주 쓰는 컬럼 위치 사전 계산
@@ -1110,9 +1057,6 @@ def _get_assign_sheet_ctx(force=False):
         '근무일자': _fc('근무일자'),
         '구분': _fc('구분'),
         '인력명': _fc('인력명', '이름'),
-        '팀코드': _fc('팀코드'),
-        '결제대상': _fc('결제대상'),
-        '현장참여': _fc('현장참여'),
     }
 
     cache.update(wks=wks, headers=headers, id_col=id_col, col_map=col_map, ts=now)
@@ -1175,32 +1119,27 @@ def save_candidates_batch(inquiry_id: str, event_name: str, candidates: list):
                 if not account: account = staff_info.get('계좌번호', '')
             
             batch_rows.append([
-                assign_id,                          # Col 1: 배정ID
-                str(inquiry_id),                    # Col 2: 문의ID
-                str(event_name),                    # Col 3: 행사명
-                staff_name,                         # Col 4: 인력명
-                c.get('구분', '외부'),              # Col 5: 구분
-                c.get('직무', ''),                  # Col 6: 직무
-                contact,                            # Col 7: 연락처
-                ssn,                                # Col 8: 주민등록번호
-                bank,                               # Col 9: 은행명
-                account,                            # Col 10: 계좌번호
-                c.get('지급단가', ''),              # Col 11: 지급단가
-                c.get('근무일수', ''),              # Col 12: 근무일수
-                c.get('총지급액', ''),              # Col 13: 총지급액
-                ASSIGN_STATUS_CANDIDATE,            # Col 14: 지급상태 = '후보'
-                now_str,                            # Col 15: 배정일시
-                '',                                 # Col 16: 근무일자 (후보 단계에서는 빈칸)
-                c.get('팀코드', ''),                # Col 17: 팀코드
-                c.get('결제대상', 'Y'),             # Col 18: 결제대상
-                c.get('현장참여', 'Y'),             # Col 19: 현장참여 (Y/N)
+                assign_id,                          # 배정ID
+                str(inquiry_id),                    # 문의ID
+                str(event_name),                    # 행사명
+                staff_name,                         # 인력명
+                c.get('구분', '외부'),              # 구분
+                c.get('직무', ''),                  # 직무 (후보 단계에서는 빈칸 가능)
+                contact,                            # 연락처
+                ssn,                                # 주민등록번호
+                bank,                               # 은행명
+                account,                            # 계좌번호
+                c.get('지급단가', ''),              # 지급단가
+                c.get('근무일수', ''),              # 근무일수
+                c.get('총지급액', ''),              # 총지급액
+                ASSIGN_STATUS_CANDIDATE,            # 지급상태 = '후보'
+                now_str,                            # 배정일시
+                '',                                 # 근무일자 (후보 단계에서는 빈칸)
             ])
         
-        # 한 번의 API 호출로 배치 저장 (Col 1~19)
+        # 한 번의 API 호출로 배치 저장
         if batch_rows:
-            num_cols = len(batch_rows[0])
-            end_col_letter = chr(ord('A') + num_cols - 1)  # 19 → 'S'
-            cell_range = f'A{next_row}:{end_col_letter}{next_row + len(batch_rows) - 1}'
+            cell_range = f'A{next_row}:P{next_row + len(batch_rows) - 1}'
             _invalidate_assign_ctx()
             wks.update(cell_range, batch_rows, value_input_option='RAW')
             print(f"[Batch] Saved {len(batch_rows)} candidates for {inquiry_id}")
@@ -1813,12 +1752,6 @@ def load_dispatch_sheet():
         sh = client.open_by_key(SHEET_ID)
         wks = sh.worksheet("배정기록")
         
-        # ★ 읽기 전 헤더 마이그레이션: 팀코드/결제대상/현장참여 헤더 보장 + 데이터 위치 보정
-        try:
-            _get_assign_sheet_ctx()  # 헤더 추가 + 기존 데이터 이동 (자체 캐시 60초)
-        except Exception as _mig_err:
-            print(f"[Dispatch-Migration] 헤더/데이터 마이그레이션 건너뜀: {_mig_err}")
-        
         # get_all_records 시도
         try:
             records = wks.get_all_records()
@@ -2320,25 +2253,6 @@ def delete_estimate_version(inquiry_id: str, version_name: str):
 # 견적품목 관리
 # ---------------------------------------------------------
 
-# 견적품목 표준 헤더 (save/load 동기화)
-_ESTIMATE_ITEMS_HEADERS = ['품목ID', '문의ID', '직군명', '수량', '일수', '매출단가', '매입단가', '규격', '비고', '팀장여부', '할인액']
-
-
-def _safe_num(val, default=0):
-    """NaN/문자열 안전 정수 변환"""
-    try:
-        if val is None or (isinstance(val, float) and str(val) == 'nan'):
-            return default
-        if isinstance(val, str):
-            clean = val.replace(',', '').replace('원', '').strip()
-            if not clean:
-                return default
-            return int(float(clean))
-        return int(float(val))
-    except (ValueError, TypeError):
-        return default
-
-
 def save_estimate_items(inquiry_id: str, items_df):
     """견적품목 시트에 직군별 품목 저장 (기존 항목 삭제 후 재작성)"""
     client = get_connection()
@@ -2350,14 +2264,10 @@ def save_estimate_items(inquiry_id: str, items_df):
         
         # 기존 해당 문의의 품목 삭제 (전체 재작성)
         all_vals = wks.get_all_values()
-        # 헤더를 표준 형식으로 고정 (기존 헤더 불일치 문제 방지)
-        rows_to_keep = [_ESTIMATE_ITEMS_HEADERS]
-        old_headers = all_vals[0] if all_vals else []
+        rows_to_keep = [all_vals[0]]  # 헤더
         for row in all_vals[1:]:
             if len(row) >= 2 and str(row[1]).strip() != str(inquiry_id).strip():
-                # 기존 데이터 행을 표준 헤더 길이에 맞춤
-                padded = list(row) + [''] * max(0, len(_ESTIMATE_ITEMS_HEADERS) - len(row))
-                rows_to_keep.append(padded[:len(_ESTIMATE_ITEMS_HEADERS)])
+                rows_to_keep.append(row)
         
         # 시트 클리어 후 재작성
         wks.clear()
@@ -2369,19 +2279,17 @@ def save_estimate_items(inquiry_id: str, items_df):
         for idx, item in items_df.iterrows():
             item_id = f"I-{datetime.now().strftime('%y%m%d')}-{str(uuid4())[:4]}"
             role_name = str(item.get('품목', '')).replace('[팀장]', '').strip()
-            # NaN 안전 변환
             row = [
                 item_id,
                 str(inquiry_id),
                 role_name,
-                _safe_num(item.get('수량', 0)),
-                _safe_num(item.get('일수', 0)),
-                _safe_num(item.get('매출단가', 0)),
-                _safe_num(item.get('매입단가', 0)),
-                str(item.get('규격', '') if pd.notna(item.get('규격', '')) else ''),
-                str(item.get('비고', '') if pd.notna(item.get('비고', '')) else ''),
+                int(item.get('수량', 0)),
+                int(item.get('일수', 0)),
+                int(item.get('매출단가', 0)),
+                int(item.get('매입단가', 0)),
+                str(item.get('규격', '')),
+                str(item.get('비고', '')),
                 '팀장' if '[팀장]' in str(item.get('품목', '')) else '',
-                _safe_num(item.get('할인액', 0)),
             ]
             wks.update(f'A{next_row}', [row], value_input_option='RAW')
             next_row += 1
@@ -2406,15 +2314,6 @@ def load_estimate_items(inquiry_id: str):
         if not records:
             return pd.DataFrame()
         df = pd.DataFrame(records)
-        # 구버전 헤더 호환: 인원수→수량, 근무시간→규격 등
-        _col_map = {'인원수': '수량', '근무시간': '규격', '할증옵션': '비고_old'}
-        for old_name, new_name in _col_map.items():
-            if old_name in df.columns and new_name not in df.columns:
-                df = df.rename(columns={old_name: new_name})
-        # 숫자 컬럼 타입 보정
-        for nc in ['수량', '일수', '매출단가', '매입단가', '할인액']:
-            if nc in df.columns:
-                df[nc] = pd.to_numeric(df[nc], errors='coerce').fillna(0).astype(int)
         if '문의ID' in df.columns:
             df = df[df['문의ID'].astype(str).str.strip() == str(inquiry_id).strip()]
         return df.reset_index(drop=True)
@@ -2545,113 +2444,9 @@ def save_payment_record(payment_dict: dict):
         
         wks.update(f'A{target_row}', [row_values], value_input_option='RAW')
         print(f"✅ 지급내역 저장: {payment_dict.get('인력명', '')} at row {target_row}")
-        invalidate_payment_cache()
         return True
     except Exception as e:
         print(f"❌ save_payment_record 오류: {e}")
-        return False
-
-
-@st.cache_data(ttl=120)  # 지급내역 시트 120초 캐시 (API 할당량 절약)
-def _load_payment_sheet_cached():
-    """지급내역 시트 전체를 캐시하여 반복 API 호출 방지"""
-    try:
-        ensure_payment_sheet()
-        client = get_connection()
-        if not client:
-            return pd.DataFrame()
-        sh = client.open_by_key(SHEET_ID)
-        wks = sh.worksheet("지급내역")
-        try:
-            records = wks.get_all_records()
-        except Exception:
-            all_vals = wks.get_all_values()
-            if len(all_vals) <= 1:
-                return pd.DataFrame()
-            records = [dict(zip(all_vals[0], row)) for row in all_vals[1:]]
-        if not records:
-            return pd.DataFrame()
-        pay_df = pd.DataFrame(records)
-        if '지급ID' in pay_df.columns:
-            pay_df = pay_df[pay_df['지급ID'].astype(str).str.strip() != '']
-        print(f"[Payment] Loaded {len(pay_df)} payment records (cached)")
-        return pay_df.reset_index(drop=True)
-    except Exception as e:
-        print(f"_load_payment_sheet_cached error: {e}")
-        return pd.DataFrame()
-
-
-def invalidate_payment_cache():
-    """지급내역 캐시 초기화 (저장/수정 후 호출)"""
-    try:
-        _load_payment_sheet_cached.clear()
-    except Exception:
-        pass
-    print("[SESSION] Payment cache invalidated")
-
-
-def get_payment_records_by_inquiry(inquiry_id: str) -> pd.DataFrame:
-    """특정 문의ID에 해당하는 지급내역 조회 (캐시된 시트 사용, 배정ID → 배정기록.문의ID 매칭)"""
-    try:
-        pay_df = _load_payment_sheet_cached()
-        if pay_df.empty:
-            return pd.DataFrame()
-
-        # 배정ID → 배정기록에서 문의ID로 필터
-        assignments = get_assignments_by_inquiry(inquiry_id)
-        if assignments.empty:
-            return pd.DataFrame()
-        valid_aids = set(assignments['배정ID'].astype(str).str.strip()) if '배정ID' in assignments.columns else set()
-        if not valid_aids or '배정ID' not in pay_df.columns:
-            return pd.DataFrame()
-        pay_df = pay_df[pay_df['배정ID'].astype(str).str.strip().isin(valid_aids)]
-        return pay_df.reset_index(drop=True)
-    except Exception as e:
-        print(f"get_payment_records_by_inquiry error: {e}")
-        return pd.DataFrame()
-
-
-def update_payment_status(assign_id: str, new_status: str, pay_date: str = '') -> bool:
-    """지급내역 시트에서 배정ID로 찾아 지급상태와 지급일을 업데이트.
-    레코드가 없으면 새로 생성 (최소 정보만).
-    """
-    try:
-        ensure_payment_sheet()
-        client = get_connection()
-        if not client:
-            return False
-        sh = client.open_by_key(SHEET_ID)
-        wks = sh.worksheet("지급내역")
-        all_vals = wks.get_all_values()
-        headers = all_vals[0] if all_vals else []
-        bid_col = headers.index('배정ID') + 1 if '배정ID' in headers else 2
-        status_col_idx = headers.index('지급상태') + 1 if '지급상태' in headers else 15
-        date_col_idx = headers.index('지급일') + 1 if '지급일' in headers else 16
-
-        target_row = None
-        for i, row in enumerate(all_vals[1:], 2):
-            if len(row) >= bid_col and str(row[bid_col - 1]).strip() == str(assign_id).strip():
-                target_row = i
-                break
-
-        if target_row:
-            # 기존 레코드 업데이트
-            from gspread.cell import Cell
-            cells = [
-                Cell(row=target_row, col=status_col_idx, value=new_status),
-            ]
-            if pay_date:
-                cells.append(Cell(row=target_row, col=date_col_idx, value=pay_date))
-            wks.update_cells(cells, value_input_option='RAW')
-            print(f"✅ 지급상태 업데이트: {assign_id} → {new_status}")
-            invalidate_payment_cache()
-            return True
-        else:
-            # 레코드 없으면 무시 (먼저 지급기록 저장 필요)
-            print(f"⚠️ 지급내역에 {assign_id} 미존재 — 지급기록 저장을 먼저 해주세요")
-            return False
-    except Exception as e:
-        print(f"❌ update_payment_status 오류: {e}")
         return False
 
 

@@ -124,13 +124,14 @@ class SettlementBrain:
 
         # 품목별 상세 행
         item_rows = ""
+        items_sum = 0
         if items and len(items) > 0:
             for idx, it in enumerate(items, 1):
-                it_name = it.get('품목명', it.get('직종', f'항목{idx}'))
+                it_name = it.get('품목명', it.get('직군명', it.get('직종', it.get('품목', f'항목{idx}'))))
                 it_qty = it.get('수량', it.get('인원수', 1))
-                it_unit = it.get('단가', it.get('단가(일)', 0))
-                it_days = it.get('일수', it.get('일수', 1))
-                it_amt = it.get('금액', it.get('소계', 0))
+                it_unit = it.get('단가', it.get('매출단가', it.get('단가(일)', 0)))
+                it_days = it.get('일수', 1)
+                it_amt = it.get('금액', it.get('매출합계', it.get('소계', 0)))
                 try:
                     it_qty = int(float(it_qty or 0))
                     it_unit = int(float(it_unit or 0))
@@ -140,6 +141,7 @@ class SettlementBrain:
                     it_qty, it_unit, it_days, it_amt = 1, 0, 1, 0
                 if it_amt == 0:
                     it_amt = it_qty * it_unit * it_days
+                items_sum += it_amt
                 item_rows += f"""
                 <tr>
                     <td style="padding:8px; border:1px solid #ddd;">{idx}</td>
@@ -149,6 +151,11 @@ class SettlementBrain:
                     <td style="padding:8px; border:1px solid #ddd;">{it_days}</td>
                     <td style="padding:8px; border:1px solid #ddd; text-align:right; font-weight:bold;">{it_amt:,}</td>
                 </tr>"""
+            # 품목 합산이 있으면 그 값으로 공급가액 대체
+            if items_sum > 0:
+                amount = items_sum
+                amount_vat = int(amount * 1.1)
+                vat = amount_vat - amount
         else:
             item_rows = f"""
             <tr>
@@ -219,7 +226,7 @@ class SettlementBrain:
         overtime = int(overtime) if overtime else 0
         etc_cost = int(etc_cost) if etc_cost else 0
         base_pay = int(pay) * int(days)
-        gross = base_pay + meal + transport + overtime + etc_cost  # 모든 수당 포함
+        gross = base_pay + meal + transport + overtime + etc_cost  # total 대신 직접 계산
         tax = int(gross * tax_rate)
         net = gross - tax
         tax_pct = f"{tax_rate * 100:.1f}%"
@@ -244,7 +251,7 @@ class SettlementBrain:
         if overtime > 0:
             extra_rows += f"""
             <tr>
-                <td style="padding:8px; border:1px solid #ddd;">⏰ 연장수당</td>
+                <td style="padding:8px; border:1px solid #ddd;">⏰ 연장</td>
                 <td style="padding:8px; border:1px solid #ddd;">연장근무 수당</td>
                 <td style="padding:8px; border:1px solid #ddd; text-align:right;">{overtime:,}원</td>
             </tr>"""
@@ -252,7 +259,7 @@ class SettlementBrain:
             extra_rows += f"""
             <tr>
                 <td style="padding:8px; border:1px solid #ddd;">🏨 기타(숙박등)</td>
-                <td style="padding:8px; border:1px solid #ddd;">기타 비용</td>
+                <td style="padding:8px; border:1px solid #ddd;">숙박비 등 기타 수당</td>
                 <td style="padding:8px; border:1px solid #ddd; text-align:right;">{etc_cost:,}원</td>
             </tr>"""
         # 부대비용 있으면 소계 행 추가

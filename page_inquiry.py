@@ -53,24 +53,18 @@ def save_inquiry():
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     new_id = str(uuid.uuid4())[:8]
 
-    # 복장/식사/주차를 특이사항에 통합 저장
+    # 복장/식사/주차를 개별 컬럼에 저장 (24~26번)
     _dress = st.session_state.get('form_dress', '').strip()
     _meal = st.session_state.get('form_meal', '').strip()
     _parking = st.session_state.get('form_parking', '').strip()
     _note_raw = st.session_state.get('form_note', '').strip()
-    
-    _note_parts = []
-    if _dress: _note_parts.append(f"[복장:{_dress}]")
-    if _meal: _note_parts.append(f"[식사:{_meal}]")
-    if _parking: _note_parts.append(f"[주차:{_parking}]")
-    if _note_raw: _note_parts.append(_note_raw)
-    combined_note = " ".join(_note_parts)
 
-    # [매우 중요] 구글 시트 '문의작성' 탭의 23개 헤더 순서와 100% 일치시킴
+    # [매우 중요] 구글 시트 '문의작성' 탭의 26개 헤더 순서와 100% 일치시킴
     # 1.문의ID | 2.작성일 | 3.업체명 | 4.담당자 | 5.연락처 | 6.행사명 | 7.장소 |
     # 8.행사시작일 | 9.행사종료일 | 10.행사시간 | 11.서비스종류 | 12.필요인력 |
     # 13.페이 | 14.상태 | 15.특이사항 | 16.비고 | 17.만족도 | 18.관계 |
-    # 19.구분 | 20.진행여부 | 21.진행상태 | 22.인력세팅현황 | 23.상담내용및 고객성향
+    # 19.구분 | 20.진행여부 | 21.진행상태 | 22.인력세팅현황 | 23.상담내용및 고객성향 |
+    # 24.복장 | 25.식사 | 26.주차
     
     # 다중 기간 처리: 추가 기간이 있으면 / 구분자로 합침
     _main_start = st.session_state.get('form_date_start', '')
@@ -100,7 +94,7 @@ def save_inquiry():
         st.session_state.get('form_headcount', ''),  # 12. 필요인력
         st.session_state.get('form_pay', ''),        # 13. 페이
         sc.STATUS_FLOW[0],                              # 14. 상태 ('접수')
-        combined_note,                                   # 15. 특이사항 (복장/식사/주차 포함)
+        _note_raw,                                       # 15. 특이사항 (순수 메모만)
         "",                                          # 16. 비고
         "",                                          # 17. 만족도
         "",                                          # 18. 관계
@@ -109,6 +103,9 @@ def save_inquiry():
         "",                                          # 21. 진행상태
         "",                                          # 22. 인력세팅현황
         "",                                          # 23. 상담내용및 고객성향
+        _dress,                                      # 24. 복장
+        _meal,                                       # 25. 식사
+        _parking,                                    # 26. 주차
     ]
 
     # 4. 신규 업체면 고객 DB에 추가
@@ -126,9 +123,6 @@ def save_inquiry():
     res, msg = db.append_row("inq", inq_row)
 
     if res:
-        # 성공 시 데이터 캐시 초기화 (다른 페이지에서 즉시 반영)
-        db.invalidate_data()
-        
         # 성공 시 입력 폼 초기화 (여기서 초기화하면 에러 안 남)
         keys_to_clear = [
             'form_evt_name', 'form_evt_place', 'form_date_start', 'form_date_end', 
@@ -138,6 +132,9 @@ def save_inquiry():
         ]
         for k in keys_to_clear:
             st.session_state[k] = ""
+        
+        # ▶ 캐시 무효화 — 견적 페이지에서 즉시 새 문의를 볼 수 있도록 (배정/정산 캐시는 보존)
+        db.invalidate_main_only()
         
         # 성공 메시지를 위한 플래그 설정
         st.session_state['save_success'] = True
@@ -194,10 +191,10 @@ def show(data):
                     st.session_state['form_pay'] = parsed.get('pay', '')
                     st.session_state['form_contact'] = parsed.get('contact', '')
                     st.session_state['form_manager'] = parsed.get('manager', '')
+                    st.session_state['form_note'] = parsed.get('note_detail', raw_text)
                     st.session_state['form_dress'] = parsed.get('dress', '')
                     st.session_state['form_meal'] = parsed.get('meal', '')
                     st.session_state['form_parking'] = parsed.get('parking', '')
-                    st.session_state['form_note'] = parsed.get('note_detail', raw_text)
                     
                     # 업체명 매칭 로직
                     p_client = parsed.get('client_name', '')
@@ -329,70 +326,3 @@ def show(data):
         # ----------------------------------------------------------------------
         # on_click에 save_inquiry 함수를 연결하여 위젯 렌더링 충돌 방지
         st.button("🚀 문의 접수 등록", type="primary", use_container_width=True, on_click=save_inquiry)
-
-    # ==========================================================================
-    # 최근 등록 문의 미니카드
-    # ==========================================================================
-    st.markdown("---")
-    st.markdown("#### 📋 최근 등록된 문의")
-    
-    df_inq = data.get('inq', pd.DataFrame())
-    if not df_inq.empty and len(df_inq) > 0:
-        # 최근 5건 (마지막 행이 최신)
-        recent = df_inq.tail(5).iloc[::-1]
-        
-        # 컬럼명 찾기
-        cols_map = {}
-        for target, candidates in [
-            ('업체명', ['업체명', '회사명']),
-            ('행사명', ['행사명', '프로젝트명']),
-            ('행사시작일', ['행사시작일', '시작일', '일시']),
-            ('상태', ['체결', '상태', '진행상태']),
-            ('작성일', ['작성일', '등록일']),
-        ]:
-            for c in candidates:
-                if c in recent.columns:
-                    cols_map[target] = c
-                    break
-        
-        card_cols = st.columns(min(len(recent), 5))
-        for i, (_, row) in enumerate(recent.iterrows()):
-            with card_cols[i % len(card_cols)]:
-                client = str(row.get(cols_map.get('업체명', ''), '')).strip()
-                event = str(row.get(cols_map.get('행사명', ''), '')).strip()
-                date_val = str(row.get(cols_map.get('행사시작일', ''), '')).strip()[:10]
-                status = str(row.get(cols_map.get('상태', ''), '')).strip()
-                reg_date = str(row.get(cols_map.get('작성일', ''), '')).strip()[:10]
-                
-                # 상태 색상
-                if status in ('접수', '상담'):
-                    s_color, s_bg = '#3B82F6', '#EFF6FF'
-                elif '견적' in status:
-                    s_color, s_bg = '#F59E0B', '#FFFBEB'
-                elif '체결' in status or '완료' in status:
-                    s_color, s_bg = '#10B981', '#F0FDF4'
-                else:
-                    s_color, s_bg = '#6B7280', '#F9FAFB'
-                
-                st.markdown(f"""
-                <div style="background: white; border: 1px solid #e5e7eb; border-radius: 10px; 
-                            padding: 14px; box-shadow: 0 1px 4px rgba(0,0,0,0.06); min-height: 130px;">
-                    <div style="font-size: 13px; font-weight: 700; color: #111827; margin-bottom: 6px; 
-                                overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                        {client or '-'}
-                    </div>
-                    <div style="font-size: 12px; color: #6B7280; margin-bottom: 4px;
-                                overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                        📌 {event or '-'}
-                    </div>
-                    <div style="font-size: 11px; color: #9CA3AF; margin-bottom: 8px;">
-                        📅 {date_val or '-'} &nbsp;|&nbsp; 🕐 {reg_date or '-'}
-                    </div>
-                    <span style="background: {s_bg}; color: {s_color}; padding: 2px 8px; 
-                                 border-radius: 8px; font-size: 11px; font-weight: 600;">
-                        {status or '-'}
-                    </span>
-                </div>
-                """, unsafe_allow_html=True)
-    else:
-        st.info("등록된 문의가 없습니다.")

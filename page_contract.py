@@ -138,31 +138,24 @@ def show(data):
         key=f"biz_upload_{sel_id}"
     )
     
-    # base64 변환 (업로드된 경우) — Google Sheets 50,000자 셀 제한 대응
+    # base64 변환 (업로드된 경우)
     _biz_b64 = ''
     if uploaded_biz_file is not None:
         try:
             uploaded_biz_file.seek(0)
             _img_bytes = uploaded_biz_file.read()
+            # 압축 (50KB 제한 대응 — 시트 셀 제한)
             if Image is not None:
                 uploaded_biz_file.seek(0)
                 _img = Image.open(uploaded_biz_file)
-                # 점진적 압축: 크기/품질을 줄여가며 50KB(base64 ~49000자) 이내로
-                for _max_dim, _quality in [(600, 50), (500, 40), (400, 30), (300, 25)]:
-                    _img_copy = _img.copy()
-                    if max(_img_copy.size) > _max_dim:
-                        _img_copy.thumbnail((_max_dim, _max_dim), Image.LANCZOS)
-                    _buf = io.BytesIO()
-                    _img_copy.save(_buf, format='JPEG', quality=_quality)
-                    _img_bytes = _buf.getvalue()
-                    _b64_len = len(base64.b64encode(_img_bytes))
-                    if _b64_len < 49000:
-                        break
+                # 큰 이미지 리사이즈 (800px 이하)
+                _max_dim = 800
+                if max(_img.size) > _max_dim:
+                    _img.thumbnail((_max_dim, _max_dim), Image.LANCZOS)
+                _buf = io.BytesIO()
+                _img.save(_buf, format='JPEG', quality=60)
+                _img_bytes = _buf.getvalue()
             _biz_b64 = base64.b64encode(_img_bytes).decode('utf-8')
-            # 최종 안전 체크
-            if len(_biz_b64) > 49000:
-                st.warning("⚠️ 사업자등록증 이미지가 너무 큽니다. 이미지 없이 저장합니다.")
-                _biz_b64 = ''
             uploaded_biz_file.seek(0)
         except Exception as _e:
             st.warning(f"이미지 처리 오류: {_e}")

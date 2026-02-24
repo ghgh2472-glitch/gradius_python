@@ -11,8 +11,6 @@ import data_management                   # 데이터 관리 도구
 import page_attendance # 5단계: 출석부
 import page_settlement  # 6단계: 정산
 import page_project_detail  # 프로젝트 상세확인
-import page_search  # 스마트 데이터 조회
-import page_guide  # 사용 가이드
 
 # 데이터 모듈 임포트
 import data_loader as db
@@ -26,6 +24,7 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
 # ==============================================================================
 # 2. 스타일링 (전체 공통)
 # ==============================================================================
@@ -85,8 +84,8 @@ with st.sidebar:
     st.markdown("---")
     
     # 메뉴 선택
-    menu_options = [
-        "🚀 경영 대시보드",
+    _menu_items = [
+        "📊 경영 대시보드",
         "📞 문의 접수 및 관리",
         "🧮 견적 통합 관리",
         "📝 계약 관리 및 승인",
@@ -94,22 +93,23 @@ with st.sidebar:
         "📋 출석부 관리",
         "💰 정산 및 급여 관리",
         "🔍 프로젝트 상세확인",
-        "📊 데이터 조회",
-        "📘 사용 가이드",
         "🛠️ 데이터 관리"
     ]
-    # 대시보드 바로가기에서 네비게이션된 경우
-    nav_target = st.session_state.pop('_nav_target', None)
-    default_idx = 0
-    if nav_target:
-        for i, opt in enumerate(menu_options):
-            if nav_target in opt:
-                default_idx = i
-                break
+    
+    # 대시보드 바로가기 버튼 → 메뉴 전환
+    _nav_map = {
+        "문의": 1, "견적": 2, "계약": 3, "인원": 4,
+        "출석": 5, "정산": 6, "상세확인": 7, "데이터": 8
+    }
+    _default_idx = 0
+    if '_nav_target' in st.session_state:
+        _target = st.session_state.pop('_nav_target')
+        _default_idx = _nav_map.get(_target, 0)
+    
     menu = st.radio(
         "업무 선택",
-        menu_options,
-        index=default_idx
+        _menu_items,
+        index=_default_idx
     )
     
     st.markdown("---")
@@ -149,6 +149,8 @@ with st.sidebar:
 # ==============================================================================
 # 데이터 로드 (세션 캐시 활용 — 최초 1회만 구글시트 호출)
 try:
+    # 문의작성 시트 헤더 자동 확장 (복장/식사/주차 컬럼 보장)
+    db.ensure_inquiry_headers()
     data = db.get_data()
 except Exception as e:
     st.error(f"데이터 로드 중 오류 발생: {e}")
@@ -178,12 +180,6 @@ elif "정산" in menu:
 
 elif "상세확인" in menu:
     page_project_detail.show(data)
-
-elif "데이터 조회" in menu:
-    page_search.show(data)
-
-elif "가이드" in menu:
-    page_guide.show(data)
 
 elif "데이터 관리" in menu:
     data_management.show_data_management()
