@@ -1,0 +1,38 @@
+#!/bin/bash
+# pre-commit hook — 커밋 전 코드 무결성 자동 검증
+# 대량 삭제, 핵심 함수 누락, 구문 오류를 사전 차단합니다.
+
+echo "🔍 커밋 전 무결성 검증 실행 중..."
+
+# verify_integrity.py 실행
+python "$(git rev-parse --show-toplevel)/verify_integrity.py" --quiet
+
+if [ $? -ne 0 ]; then
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "🚨 커밋 차단: 코드 무결성 검증 실패"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo "상세 내용 확인:  python verify_integrity.py"
+    echo "강제 커밋 (비추천): git commit --no-verify"
+    echo ""
+    exit 1
+fi
+
+# 추가: 대량 삭제 체크 (staged diff 기준)
+DELETIONS=$(git diff --cached --stat | tail -1 | grep -oP '\d+(?= deletion)')
+INSERTIONS=$(git diff --cached --stat | tail -1 | grep -oP '\d+(?= insertion)')
+
+if [ -n "$DELETIONS" ] && [ "$DELETIONS" -gt 500 ]; then
+    # 삭제가 500줄 이상이면서 삽입보다 2배 이상 많으면 경고
+    if [ -z "$INSERTIONS" ] || [ "$DELETIONS" -gt $((INSERTIONS * 2)) ]; then
+        echo ""
+        echo "⚠️  경고: 대량 삭제 감지 (+${INSERTIONS:-0} / -${DELETIONS})"
+        echo "   정말 의도한 변경인지 확인하세요."
+        echo "   계속하려면 10초 안에 Ctrl+C로 취소 가능합니다."
+        echo ""
+        sleep 3
+    fi
+fi
+
+echo "✅ 무결성 검증 통과"
