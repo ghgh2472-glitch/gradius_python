@@ -1175,32 +1175,8 @@ def _get_assign_sheet_ctx(force=False):
             except Exception as e:
                 print(f"[Migration] {_th} 헤더 추가 실패: {e}")
 
-    # ── 기존 데이터 마이그레이션: 팀코드/결제대상/현장참여가 20-22번 컬럼에 있으면 17-19번으로 이동 ──
-    try:
-        tc_idx = headers.index('팀코드') + 1 if '팀코드' in headers else None
-        if tc_idx and tc_idx <= 19:
-            # 헤더가 올바른 위치(<=19)에 있으면, 20-22번에 잘못 저장된 기존 데이터 체크
-            all_vals = wks.get_all_values()
-            migrated = 0
-            batch_cells = []
-            for ri, row_vals in enumerate(all_vals[1:], start=2):  # 데이터 행만
-                # 20-22번 컬럼(인덱스 19-21)에 데이터가 있고 17-19번(인덱스 tc_idx-1~)에 없으면 이동
-                if len(row_vals) > 21 and row_vals[19]:  # 20번 컬럼에 값이 있음
-                    if len(row_vals) <= tc_idx or not str(row_vals[tc_idx - 1]).strip():
-                        # 20→tc_idx, 21→tc_idx+1, 22→tc_idx+2 이동
-                        for offset in range(3):
-                            old_col = 20 + offset  # 1-based
-                            new_col = tc_idx + offset  # 1-based
-                            val = row_vals[19 + offset] if (19 + offset) < len(row_vals) else ''
-                            if val:
-                                batch_cells.append(gspread.Cell(ri, new_col, str(val)))
-                                batch_cells.append(gspread.Cell(ri, old_col, ''))  # 옛 위치 지우기
-                                migrated += 1
-            if batch_cells:
-                wks.update_cells(batch_cells, value_input_option='RAW')
-                print(f"[Migration] 팀 데이터 {migrated}건 위치 이동 (Col 20-22 → {tc_idx}-{tc_idx+2})")
-    except Exception as e:
-        print(f"[Migration] 팀 데이터 이동 실패 (무시): {e}")
+    # ── 참고: 팀코드/결제대상/현장참여는 투입시작일/투입종료일/메모 뒤(Col 20~22)에 위치함 ──
+    # save_candidates_batch는 헤더 기반으로 정확한 위치에 저장하므로 마이그레이션 불필요
 
     id_col = [str(v).strip() for v in wks.col_values(1)]
 
@@ -1249,16 +1225,19 @@ def save_candidates_batch(inquiry_id: str, event_name: str, candidates: list):
     candidates: list of dict with keys:
         인력명, 구분(본사/외부), 직무(빈칸 가능 - 추후 배정), 지급단가, 근무일수
     Returns: (성공수, 실패수)
+    
+    ★ 헤더 기반 저장: 실제 시트 헤더를 읽어 컬럼 위치를 동적으로 결정.
+       투입시작일/투입종료일/메모 등 추가 컬럼이 있어도 정확한 위치에 기록됨.
     """
     client = get_connection()
     if not client:
         return 0, len(candidates)
     try:
         invalidate_dispatch_only()
-        sh = client.open_by_key(SHEET_ID)
-        wks = sh.worksheet("배정기록")
         
-        id_col_vals = wks.col_values(1)
+        # ★ 캐시된 컨텍스트에서 실제 헤더 + 워크시트 가져오기
+        wks, headers, id_col_vals, col_map = _get_assign_sheet_ctx(force=True)
+        
         next_row = len(id_col_vals) + 1
         
         # 행 부족 시 확장
@@ -1266,7 +1245,11 @@ def save_candidates_batch(inquiry_id: str, event_name: str, candidates: list):
         if needed_rows > wks.row_count:
             wks.add_rows(max(200, needed_rows - wks.row_count + 50))
         
-        # 배치 데이터 준비
+        # 헤더명 → 0-based index 매핑
+        hdr_idx = {h: i for i, h in enumerate(headers)}
+        total_cols = len(headers)
+        
+        # 배치 데이터 준비 (헤더 순서에 맞춰 배치)
         batch_rows = []
         now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         for c in candidates:
@@ -1284,40 +1267,57 @@ def save_candidates_batch(inquiry_id: str, event_name: str, candidates: list):
                 if not bank: bank = staff_info.get('은행명', '')
                 if not account: account = staff_info.get('계좌번호', '')
             
-            batch_rows.append([
-                assign_id,                          # Col 1: 배정ID
-                str(inquiry_id),                    # Col 2: 문의ID
-                str(event_name),                    # Col 3: 행사명
-                staff_name,                         # Col 4: 인력명
-                c.get('구분', '외부'),              # Col 5: 구분
-                c.get('직무', ''),                  # Col 6: 직무
-                contact,                            # Col 7: 연락처
-                ssn,                                # Col 8: 주민등록번호
-                bank,                               # Col 9: 은행명
-                account,                            # Col 10: 계좌번호
-                c.get('지급단가', ''),              # Col 11: 지급단가
-                c.get('근무일수', ''),              # Col 12: 근무일수
-                c.get('총지급액', ''),              # Col 13: 총지급액
-                ASSIGN_STATUS_CANDIDATE,            # Col 14: 지급상태 = '후보'
-                now_str,                            # Col 15: 배정일시
-                '',                                 # Col 16: 근무일자 (후보 단계에서는 빈칸)
-                c.get('팀코드', ''),                # Col 17: 팀코드
-                c.get('결제대상', 'Y'),             # Col 18: 결제대상
-                c.get('현장참여', 'Y'),             # Col 19: 현장참여 (Y/N)
-            ])
+            # 빈 행 (헤더 수 만큼)
+            row = [''] * total_cols
+            
+            # 헤더명으로 정확한 위치에 값 배치
+            def _put(header_name, value):
+                if header_name in hdr_idx:
+                    row[hdr_idx[header_name]] = value
+            
+            _put('배정ID', assign_id)
+            _put('문의ID', str(inquiry_id))
+            _put('행사명', str(event_name))
+            _put('인력명', staff_name)
+            _put('구분', c.get('구분', '외부'))
+            _put('직무', c.get('직무', ''))
+            _put('연락처', contact)
+            _put('주민등록번호', ssn)
+            _put('은행명', bank)
+            _put('계좌번호', account)
+            _put('지급단가', c.get('지급단가', ''))
+            _put('근무일수', c.get('근무일수', ''))
+            _put('총지급액', c.get('총지급액', ''))
+            _put('지급상태', ASSIGN_STATUS_CANDIDATE)
+            _put('배정일시', now_str)
+            _put('팀코드', c.get('팀코드', ''))
+            _put('결제대상', c.get('결제대상', 'Y'))
+            _put('현장참여', c.get('현장참여', 'Y'))
+            
+            batch_rows.append(row)
         
-        # 한 번의 API 호출로 배치 저장 (Col 1~19)
+        # 한 번의 API 호출로 배치 저장 (실제 헤더 수만큼)
         if batch_rows:
-            num_cols = len(batch_rows[0])
-            end_col_letter = chr(ord('A') + num_cols - 1)  # 19 → 'S'
-            cell_range = f'A{next_row}:{end_col_letter}{next_row + len(batch_rows) - 1}'
+            # 컬럼 레터 계산 (A~Z, AA~AZ...)
+            def _col_letter(n):
+                """0-based index → 컬럼 레터 (A, B, ..., Z, AA, AB, ...)"""
+                s = ''
+                n += 1  # 1-based
+                while n > 0:
+                    n, r = divmod(n - 1, 26)
+                    s = chr(65 + r) + s
+                return s
+            
+            end_col = _col_letter(total_cols - 1)
+            cell_range = f'A{next_row}:{end_col}{next_row + len(batch_rows) - 1}'
             _invalidate_assign_ctx()
             wks.update(cell_range, batch_rows, value_input_option='RAW')
-            print(f"[Batch] Saved {len(batch_rows)} candidates for {inquiry_id}")
+            print(f"[Batch] Saved {len(batch_rows)} candidates for {inquiry_id} (cols: A~{end_col}, {total_cols}cols)")
             return len(batch_rows), 0
         return 0, 0
     except Exception as e:
         print(f"save_candidates_batch error: {e}")
+        import traceback; traceback.print_exc()
         return 0, len(candidates)
 
 
@@ -1979,6 +1979,20 @@ def load_dispatch_sheet():
                         return '연락처'
                     if any(x in k for x in ['소속', 'company', 'affil']):
                         return '소속'
+                    # 팀 관련 컬럼 (원본 유지)
+                    if k == '팀코드':
+                        return '팀코드'
+                    if k == '결제대상':
+                        return '결제대상'
+                    if k == '현장참여':
+                        return '현장참여'
+                    # 기타 유용 컬럼
+                    if k == '구분':
+                        return '구분'
+                    if k == '행사명':
+                        return '행사명'
+                    if k == '근무일자':
+                        return '근무일자'
                     return c
 
                 col_map = {orig: _canonical(orig) for orig in df.columns}
