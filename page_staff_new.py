@@ -707,6 +707,15 @@ def _render_candidate_pool_panel(sel_id, sel, df_staff, role_status):
 def _render_team_assignment_ui(df_staff, role_status):
     """팀 배정 모드 UI — 팀장 검색 + 팀원 수기 입력"""
 
+    st.markdown(
+        '<div style="background:#FEF3C7;border:1px solid #F59E0B;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:12px;">'
+        '<b>📌 팀 배정 안내</b><br/>'
+        '• 팀장 + 팀원을 <b>모두 등록</b>해야 팀으로 인식됩니다 (팀코드 자동 부여)<br/>'
+        '• 팀장 불참 시 「팀장 현장 참여」 체크 해제 → 출석부·평가에서 자동 제외, 정산 시 팀장 본인분 자동 제외<br/>'
+        '• 지급은 팀장 계좌로 일괄 지급 (팀원 개별 지급 X) → 실제 처리는 <b>정산 페이지</b>에서'
+        '</div>', unsafe_allow_html=True
+    )
+
     # 직군 선택 (공통)
     role_options = [rs['role'] for rs in role_status] if role_status else []
     role_options.append("기타 (직접입력)")
@@ -1989,11 +1998,11 @@ def tab_attendance(data):
 # ==============================================================================
 
 def tab_payment(data):
-    """지급 — 통합 테이블 + 변동내역 + 이체관리 + 엑셀 다운"""
+    """지급 현황 — 읽기전용 조회 (팀 로직 반영). 실제 지급 처리는 정산 페이지에서."""
     df_inq = data.get('inq', pd.DataFrame())
-    sel_id, sel = _select_contract(df_inq, ['진행중', '완료'], "pay")
+    sel_id, sel = _select_contract(df_inq, ['배정완료', '진행중', '완료'], "pay")
     if sel_id is None:
-        st.info("📌 진행중 또는 완료 상태의 계약이 필요합니다.")
+        st.info("📌 배정완료 이상 상태의 계약이 필요합니다.")
         return
 
     assignments_df = db.get_assignments_by_inquiry(sel_id)
@@ -2004,197 +2013,150 @@ def tab_payment(data):
     name_col = '인력명' if '인력명' in assignments_df.columns else '이름'
     rate_col = '지급단가' if '지급단가' in assignments_df.columns else '단가'
     days_col = '근무일수' if '근무일수' in assignments_df.columns else '일수'
+    team_code_col = '팀코드' if '팀코드' in assignments_df.columns else None
+    pay_target_col = '결제대상' if '결제대상' in assignments_df.columns else None
+    onsite_col = '현장참여' if '현장참여' in assignments_df.columns else None
 
-    st.markdown(f"**{sel.get('행사명', '')}** — 급여 관리")
-    st.caption("💡 단가·일수를 수정하면 기본급→공제→실수령이 자동 계산. `+`로 충원 인원 추가. 메모로 변경사유 기록.")
+    event_name = sel.get('행사명', '')
+    st.markdown(f"**{event_name}** — 예상 지급 현황 (읽기전용)")
 
-    # 공제율 일괄 기본값
-    TAX_OPTIONS = ["3.3%", "0.9%", "공제없음"]
-    tax_opt_col, _ = st.columns([1.5, 1.5])
-    with tax_opt_col:
-        tax_choice = st.radio(
-            "💰 기본 공제 방식",
-            ["3.3% 공제 (사업소득세)", "0.9% 공제 (일용직)", "공제 없음 (0%)"],
-            key=f"pay_tax_choice_{sel_id}",
-            horizontal=True,
-        )
-    if "3.3%" in tax_choice:
-        default_tax_label = "3.3%"
-    elif "0.9%" in tax_choice:
-        default_tax_label = "0.9%"
-    else:
-        default_tax_label = "공제없음"
-
-    def _parse_tax_rate(label):
-        if '3.3' in str(label): return 0.033
-        if '0.9' in str(label): return 0.009
-        return 0.0
+    st.info("💡 이 탭은 **배정 정보 기반 예상 지급 현황**입니다. 실제 공제·수당 조정 및 지급 처리는 **정산 및 급여관리** 페이지에서 진행하세요.")
 
     hq_names = [s['이름'] for s in db.HQ_STAFF] if hasattr(db, 'HQ_STAFF') else []
 
-    # 원본 데이터 + 편집용 DataFrame
-    orig_data = {}
-    pay_data = []
-    for _, row in assignments_df.iterrows():
-        name = row.get(name_col, '')
-        category = row.get('구분', '외부')
-        base_rate = int(row.get(rate_col, 0) or 0)
-        days = int(row.get(days_col, 0) or 0)
-        is_hq = name in hq_names or category == '본사'
-        orig_data[name] = {'단가': base_rate, '일수': days}
-
-        pay_data.append({
-            '이체': False,
-            '인력명': name,
-            '구분': '본사' if is_hq else category,
-            '공제율': default_tax_label,
-            '별도': True if is_hq else False,
-            '지급단가': base_rate,
-            '근무일수': days,
-            '기본급': base_rate * days,
-            '공제': 0,
-            '실수령': base_rate * days,
-            '메모': '',
-            '배정ID': row.get('배정ID', ''),
-        })
-
-    pay_df = pd.DataFrame(pay_data)
-
-    edited_df = st.data_editor(
-        pay_df.drop(columns=['배정ID']),
-        disabled=['인력명', '구분', '기본급', '공제', '실수령'],
-        use_container_width=True, hide_index=True, key="pay_editor",
-        num_rows="dynamic",
-        column_config={
-            '이체': st.column_config.CheckboxColumn("이체✓", width=50, help="이체 완료 체크"),
-            '인력명': st.column_config.TextColumn("이름", width=75),
-            '구분': st.column_config.TextColumn("구분", width=50),
-            '공제율': st.column_config.SelectboxColumn("공제율", width=80, options=TAX_OPTIONS),
-            '별도': st.column_config.CheckboxColumn("별도", width=45, help="별도정산 → 합계 제외"),
-            '지급단가': st.column_config.NumberColumn("단가", width=85, format="%d", min_value=0, step=10000),
-            '근무일수': st.column_config.NumberColumn("일수", width=50, min_value=0, step=1),
-            '기본급': st.column_config.NumberColumn("기본급", width=85, format="%d"),
-            '공제': st.column_config.NumberColumn("공제", width=70, format="%d"),
-            '실수령': st.column_config.NumberColumn("실수령", width=85, format="%d"),
-            '메모': st.column_config.TextColumn("메모", width=130),
-        }
-    )
-
-    # 자동 계산 + 변동 감지
-    calc_rows = []
-    for i, prow in edited_df.iterrows():
-        rate = int(prow.get('지급단가', 0) or 0)
-        days = int(prow.get('근무일수', 0) or 0)
-        is_sep = bool(prow.get('별도', False))
-        tax_r = _parse_tax_rate(prow.get('공제율', default_tax_label))
-        basic = rate * days
-        tax = int(basic * tax_r) if not is_sep else 0
-        net = basic - tax
-        name = str(prow.get('인력명', '')).strip()
-
-        changes = []
-        if name in orig_data:
-            o = orig_data[name]
-            if rate != o['단가']: changes.append(f"단가 {o['단가']:,}→{rate:,}")
-            if days != o['일수']: changes.append(f"일수 {o['일수']}→{days}")
-        elif name and name != '':
-            changes.append("신규 충원")
-
-        calc_rows.append({
-            'name': name, 'sep': is_sep, 'paid': bool(prow.get('이체', False)),
-            'basic': basic, 'tax': tax, 'net': net, 'changes': changes,
-            'memo': str(prow.get('메모', '')), 'tax_label': str(prow.get('공제율', default_tax_label)),
-            'days': days,
-        })
-
-    # 변동내역 배지
-    changed = [(r['name'], r['changes']) for r in calc_rows if r['changes']]
-    if changed:
-        badges = " ".join(
-            f'<span style="background:#FEF3C7;color:#92400E;padding:3px 8px;border-radius:6px;font-size:12px;margin:2px;">'
-            f'⚡ {n}: {", ".join(c)}</span>' for n, c in changed
-        )
-        st.markdown(f'<div style="background:#FFFBEB;border:1px solid #F59E0B;border-radius:8px;padding:8px 12px;margin:6px 0;">'
-                    f'<b style="font-size:12px;">📋 변동내역</b><br/>{badges}</div>', unsafe_allow_html=True)
-
-    # 요약 메트릭 (별도정산 제외)
-    normal = [r for r in calc_rows if not r['sep']]
-    paid_count = sum(1 for r in calc_rows if r['paid'])
-    total_basic = sum(r['basic'] for r in normal)
-    total_tax = sum(r['tax'] for r in normal)
-
-    mc1, mc2, mc3, mc4 = st.columns(4)
-    mc1.metric("지급 대상", f"{len(normal)}명")
-    mc2.metric("총 기본급", f"₩{total_basic:,}")
-    mc3.metric("공제→실수령", f"₩{total_basic - total_tax:,}")
-    mc4.metric("이체 진행", f"{paid_count}/{len(calc_rows)}명")
-    sep_count = len(calc_rows) - len(normal)
-    if sep_count > 0:
-        st.caption(f"🔸 별도정산 {sep_count}명은 위 합계에 미포함")
-
-    col_p1, col_p2 = st.columns(2)
-    pay_date = col_p1.date_input("지급일", value=datetime.now().date(), key="pay_date")
-    pay_status = col_p2.selectbox("지급상태", ["대기", "확정", "완료"], key="pay_status_sel")
-
-    btn_c1, btn_c2 = st.columns(2)
-    with btn_c1:
-        if st.button("💾 지급 내역 저장", type="primary", use_container_width=True, key="save_pay"):
-            saved = 0
-            skipped = 0
-            with st.spinner("저장 중..."):
-                for i, cr in enumerate(calc_rows):
-                    if cr['sep']:
-                        skipped += 1
-                        continue
-                    if cr['basic'] <= 0:
-                        continue
-                    period = f"{sel.get('행사시작일', '')}~{sel.get('행사종료일', '')}"
-                    a_id = pay_df.iloc[i]['배정ID'] if i < len(pay_df) else ''
-                    payment_dict = {
-                        '배정ID': a_id,
-                        '인력명': cr['name'],
-                        '현장명': sel.get('행사명', ''),
-                        '파견기간': period,
-                        '파견일수': cr['days'],
-                        '기본급': cr['basic'],
-                        '야근비': 0, '식사비': 0, '교통비': 0, '보너스': 0,
-                        '소계': cr['basic'],
-                        '세금공제': cr['tax'],
-                        '최종지급액': cr['net'],
-                        '지급상태': pay_status,
-                        '지급일': pay_date.strftime('%Y-%m-%d'),
-                        '지급담당자': '',
-                        '비고': f"{cr['tax_label']} 공제" + (f" | {cr['memo']}" if cr['memo'] else ""),
-                    }
-                    if db.save_payment_record(payment_dict):
-                        saved += 1
-            if saved > 0:
-                db.invalidate_dispatch_only()  # 지급기록은 배정/정산만 영향
-                st.balloons()
-                msg = f"✅ {saved}명 저장!"
-                if skipped > 0: msg += f" ({skipped}명 별도정산 제외)"
-                st.success(msg)
-            else:
-                st.error("❌ 저장 실패")
-
-    with btn_c2:
-        # 은행이체 엑셀 다운로드
-        import io as _io
-        xfer_rows = []
-        for cr in calc_rows:
-            if cr['sep'] or cr['net'] <= 0:
+    # ── 팀 그룹핑 (정산 페이지 로직과 동일) ──
+    team_info = {}
+    if team_code_col and pay_target_col:
+        for _, _tr in assignments_df.iterrows():
+            _tc = str(_tr.get(team_code_col, '')).strip()
+            if not _tc:
                 continue
-            xfer_rows.append({'이름': cr['name'], '이체금액': cr['net'], '메모': cr['memo'] or f"{sel.get('행사명','')} 급여"})
-        if xfer_rows:
-            buf = _io.BytesIO()
-            pd.DataFrame(xfer_rows).to_excel(buf, index=False, sheet_name='이체목록')
-            buf.seek(0)
-            st.download_button("📥 이체용 엑셀", data=buf.getvalue(),
-                              file_name=f"이체_{sel.get('행사명','')}_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                              mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                              use_container_width=True, key=f"dl_xls_{sel_id}")
+            if _tc not in team_info:
+                team_info[_tc] = {'members': [], 'leader': None, 'sum_amount': 0, 'per_rate': 0, 'per_days': 0, 'onsite_count': 0}
+            _t_name = str(_tr.get(name_col, ''))
+            _t_rate = int(float(_tr.get(rate_col, 0) or 0))
+            _t_days = int(float(_tr.get(days_col, 1) or 1))
+            _is_pay = str(_tr.get(pay_target_col, 'Y')).strip().upper() == 'Y'
+            _is_onsite = str(_tr.get(onsite_col, 'Y')).strip().upper() != 'N' if onsite_col else True
+            team_info[_tc]['members'].append(_t_name)
+            if _is_onsite:
+                team_info[_tc]['sum_amount'] += _t_rate * _t_days
+                team_info[_tc]['onsite_count'] += 1
+            team_info[_tc]['per_rate'] = _t_rate
+            team_info[_tc]['per_days'] = _t_days
+            if _is_pay:
+                team_info[_tc]['leader'] = _t_name
+
+    # ── 지급 기록 조회 (이미 처리된 건 표시) ──
+    _pay_records = db.get_payment_records_by_inquiry(sel_id)
+    _pay_status_map = {}
+    if not _pay_records.empty and '배정ID' in _pay_records.columns and '지급상태' in _pay_records.columns:
+        for _, _pr in _pay_records.iterrows():
+            _pay_status_map[str(_pr['배정ID']).strip()] = str(_pr['지급상태']).strip()
+
+    # ── 테이블 구성 (팀원은 팀장 합산, 불참 팀장은 표기) ──
+    display_rows = []
+    total_pay = 0
+    total_hq = 0
+    for _, row in assignments_df.iterrows():
+        name = str(row.get(name_col, ''))
+        category = str(row.get('구분', '외부'))
+        rate = int(float(row.get(rate_col, 0) or 0))
+        days = int(float(row.get(days_col, 0) or 0))
+        is_hq = name in hq_names or category == '본사'
+        _tc = str(row.get(team_code_col, '')).strip() if team_code_col else ''
+        _is_pay = str(row.get(pay_target_col, 'Y')).strip().upper() == 'Y' if pay_target_col else True
+        _is_onsite = str(row.get(onsite_col, 'Y')).strip().upper() != 'N' if onsite_col else True
+        _a_id = str(row.get('배정ID', '')).strip()
+        _pay_st = _pay_status_map.get(_a_id, '-')
+
+        # 팀원(결제대상=N)은 팀장 합산이므로 개별행 제외
+        if _tc and not _is_pay:
+            continue
+
+        # 팀장: 팀 합산금액 사용
+        if _tc and _tc in team_info:
+            ti = team_info[_tc]
+            basic = ti['sum_amount']
+            onsite_cnt = ti['onsite_count']
+            member_cnt = len(ti['members']) - 1  # 팀장 제외
+            offsite_note = ' 🚫불참' if not _is_onsite else ''
+            display_name = f"[팀장{offsite_note}] {name}"
+            note = f"팀원 {member_cnt}명 합산 (현장 {onsite_cnt}명)"
         else:
-            st.button("📥 이체용 엑셀", disabled=True, use_container_width=True, key=f"dl_xls_{sel_id}")
+            basic = rate * days
+            display_name = f"{'🏢 ' if is_hq else ''}{name}"
+            note = '본사 (별도)' if is_hq else ''
+
+        if is_hq:
+            total_hq += basic
+        else:
+            total_pay += basic
+
+        display_rows.append({
+            '이름': display_name,
+            '구분': category,
+            '단가': f"₩{rate:,}",
+            '일수': days,
+            '예상 기본급': f"₩{basic:,}",
+            '지급상태': _pay_st,
+            '비고': note,
+        })
+
+    if display_rows:
+        st.dataframe(
+            pd.DataFrame(display_rows),
+            use_container_width=True, hide_index=True,
+            column_config={
+                '이름': st.column_config.TextColumn("이름", width=140),
+                '구분': st.column_config.TextColumn("구분", width=55),
+                '단가': st.column_config.TextColumn("단가", width=85),
+                '일수': st.column_config.NumberColumn("일수", width=45),
+                '예상 기본급': st.column_config.TextColumn("예상 기본급", width=100),
+                '지급상태': st.column_config.TextColumn("상태", width=60),
+                '비고': st.column_config.TextColumn("비고", width=180),
+            }
+        )
+
+    # ── 요약 메트릭 ──
+    ext_persons = sum(1 for r in display_rows if '본사' not in r['구분'])
+    paid_done = sum(1 for r in display_rows if r['지급상태'] in ('완료', '확인완료'))
+    mc1, mc2, mc3, mc4 = st.columns(4)
+    mc1.metric("외부 인력", f"{ext_persons}명")
+    mc2.metric("예상 총 지급", f"₩{total_pay:,}")
+    mc3.metric("지급 완료", f"{paid_done}/{ext_persons}명")
+    mc4.metric("본사 별도", f"₩{total_hq:,}")
+
+    # ── 팀 상세 정보 ──
+    if team_info:
+        with st.expander(f"👥 팀 배정 상세 ({len(team_info)}팀)", expanded=False):
+            for tc, ti in team_info.items():
+                leader = ti['leader'] or '?'
+                members = [m for m in ti['members'] if m != leader]
+                onsite_cnt = ti['onsite_count']
+                _is_leader_onsite = onsite_cnt >= len(ti['members'])
+                offsite_tag = " 🚫불참" if not _is_leader_onsite else ""
+                st.markdown(
+                    f"**{leader}팀{offsite_tag}** — "
+                    f"팀원: {', '.join(members) if members else '-'} | "
+                    f"현장 {onsite_cnt}명 | "
+                    f"합계: **₩{ti['sum_amount']:,}** → 팀장 계좌 지급"
+                )
+
+    # ── 정산 페이지 안내 ──
+    st.divider()
+    st.markdown("""
+    <div style="background:linear-gradient(135deg,#EFF6FF,#F0FDF4);border:1px solid #93C5FD;
+                border-radius:10px;padding:16px 20px;text-align:center;">
+        <div style="font-size:15px;font-weight:700;color:#1E40AF;margin-bottom:6px;">
+            💰 실제 지급 처리는 「정산 및 급여관리」에서
+        </div>
+        <div style="font-size:12px;color:#6B7280;">
+            공제·수당 조정, 은행이체 엑셀, 지급 확정 등<br/>
+            모든 지급 업무는 정산 페이지에서 처리됩니다. (팀 합산·불참 팀장 자동 적용)
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
 
 def tab_evaluation(data):
@@ -2217,6 +2179,20 @@ def tab_evaluation(data):
         return
 
     name_col = '인력명' if '인력명' in assignments_df.columns else '이름'
+
+    # 현장불참 팀장 제외 (현장에 미참여한 인력은 근태/외모 평가 불가)
+    onsite_col = '현장참여' if '현장참여' in assignments_df.columns else None
+    offsite_names = []
+    if onsite_col:
+        offsite_mask = assignments_df[onsite_col].astype(str).str.strip().str.upper() == 'N'
+        offsite_names = assignments_df.loc[offsite_mask, name_col].tolist()
+        assignments_df = assignments_df[~offsite_mask].reset_index(drop=True)
+    if assignments_df.empty:
+        st.info("현장 참여 인력이 없습니다.")
+        return
+    if offsite_names:
+        st.caption(f"ℹ️ 비현장 인력 제외: {', '.join(offsite_names)} (팀장 불참 등)")
+
     eval_labels = [f"{row.get(name_col, 'N/A')} — {row.get('직무', row.get('역할', ''))}"
                    for _, row in assignments_df.iterrows()]
     sel_idx = st.selectbox("평가 대상", range(len(eval_labels)),
@@ -2292,12 +2268,12 @@ def show(data):
             <span style="color:#9CA3AF;">→</span>
             <span style="background:#EDE9FE;color:#5B21B6;padding:4px 10px;border-radius:8px;font-weight:600;">⭐평가</span>
             <span style="color:#9CA3AF;">→</span>
-            <span style="background:#FEE2E2;color:#991B1B;padding:4px 10px;border-radius:8px;font-weight:600;">💰지급</span>
+            <span style="background:#FEE2E2;color:#991B1B;padding:4px 10px;border-radius:8px;font-weight:600;">💰지급조회</span>
             <span style="color:#9CA3AF;">→</span>
-            <span style="background:#F3F4F6;color:#374151;padding:4px 10px;border-radius:8px;font-weight:600;">💰정산</span>
+            <span style="background:#F3F4F6;color:#374151;padding:4px 10px;border-radius:8px;font-weight:600;">💰정산·급여</span>
         </div>
         <div style="font-size:11px;color:#6B7280;margin-top:6px;">
-            💡 장기건: ③에서 '일정 추후입력'으로 확정 → 일괄입력 가능
+            💡 장기건: ③에서 '일정 추후입력'으로 확정 → 일괄입력 가능 · 실제 지급 처리는 「정산 및 급여관리」에서
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -2333,7 +2309,7 @@ def show(data):
     c3.metric("🏢 본사 투입", f"{hq_count}명")
     c4.metric("👥 외부 인력", f"{ext_count}명")
 
-    tab1, tab2, tab3, tab4 = st.tabs(["🎯 인력배정", "📋 출석/근무", "⭐ 평가", "💰 지급"])
+    tab1, tab2, tab3, tab4 = st.tabs(["🎯 인력배정", "📋 출석/근무", "⭐ 평가", "💰 지급현황"])
     with tab1:
         tab_assignment(data)
     with tab2:
