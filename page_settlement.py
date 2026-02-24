@@ -256,7 +256,8 @@ def show_settlement_overview():
                     _paid_n = pd.to_numeric(r.get('받은금액', 0), errors='coerce')
                     _paid_v = 0 if pd.isna(_paid_n) else int(_paid_n)
                     _bal_v = max(0, _supply_v + _tax_v - _paid_v)
-                    _progress = str(r.get('진행상황', '')).strip()
+                    _progress_raw = r.get('진행상황', '')
+                    _progress = str(_progress_raw).strip() if _progress_raw and str(_progress_raw).strip() not in ('', 'nan', 'None') else ''
                     st.markdown(f"""
                     <div class="ov-card {_cls}{_sel_cls}">
                         <div class="ov-client">{r.get('업체', '')}</div>
@@ -1688,7 +1689,8 @@ def show_settlement_detail(data):
                         if cr['별도']:
                             sep_count += 1
                             continue
-                        if cr['총액'] <= 0:
+                        # 팀장 불참(기본급0)도 지급기록 저장 필요 (팀 입금완료 버튼 활성화용)
+                        if cr['총액'] <= 0 and not cr.get('_팀코드'):
                             continue
                         a_assign_id = cr.get('_배정ID', '')
                         _tc_note = "[팀일괄] " if cr.get('_팀코드') else ""
@@ -2083,17 +2085,28 @@ def show_settlement_detail(data):
         if cur_status == '완료':
             st.divider()
             # 전원 처리 완료 확인
-            _all_done = (_total_persons > 0 and _completed_count == _total_persons) if '_total_persons' in dir() else False
+            # 외부 인원 전원 완료 OR 외부없이 본사만 전원 확인 → 정산 가능
+            _has_vars = '_total_persons' in dir()
+            _ext_all_done = (_total_persons > 0 and _completed_count == _total_persons) if _has_vars else False
+            _hq_only = (_total_persons == 0 and _hq_total > 0) if _has_vars and '_hq_total' in dir() else False
+            _hq_all_confirmed = (_hq_total > 0 and _hq_done == _hq_total) if '_hq_total' in dir() and '_hq_done' in dir() else False
+            _all_done = _ext_all_done or (_hq_only and _hq_all_confirmed)
             if _all_done:
                 if st.button("🏁 최종 정산 완료 (프로젝트 종료)", type="primary"):
                     db.update_status(inq_id_for_update, sc.STATUS_FLOW[6])  # '정산완료'
                     db.invalidate_data()
                     st.balloons(); st.success("모든 정산이 완료되었습니다!"); st.rerun()
             else:
-                _remain = _total_persons - _completed_count if '_total_persons' in dir() else 0
+                _remain = _total_persons - _completed_count if _has_vars else 0
                 _hq_note = f" (본사 {_hq_total}명 별도)" if '_hq_total' in dir() and _hq_total > 0 else ""
-                st.button(f"🏁 최종 정산 완료 (미처리 {_remain}명{_hq_note})", type="primary", disabled=True)
-                st.caption("⚠️ 외부 인원의 입금확인이 모두 완료되어야 정산을 마감할 수 있습니다. (본사 인원은 별도정산)")
+                if _hq_only:
+                    # 본사만 있는 케이스: 본사 확인 현황 표시
+                    _hq_remain = _hq_total - _hq_done if '_hq_done' in dir() else _hq_total
+                    st.button(f"🏁 최종 정산 완료 (본사 미확인 {_hq_remain}명)", type="primary", disabled=True)
+                    st.caption("⚠️ 본사 인원 전원 확인 완료 후 정산을 마감할 수 있습니다.")
+                else:
+                    st.button(f"🏁 최종 정산 완료 (미처리 {_remain}명{_hq_note})", type="primary", disabled=True)
+                    st.caption("⚠️ 외부 인원의 입금확인이 모두 완료되어야 정산을 마감할 수 있습니다. (본사 인원은 별도정산)")
 
 
 def show_tax_invoice_management():
