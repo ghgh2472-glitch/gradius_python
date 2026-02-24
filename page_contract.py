@@ -328,7 +328,7 @@ def show(data):
         with st.spinner("계약 정보 저장 중..."):
             try:
                 if db.update_cell("문의작성", sel_id, col_name="상태", value=sc.STATUS_FLOW[2]):
-                    st.success(f"✅ 계약 상태가 '{sc.STATUS_FLOW[2]}'로 변경되었습니다")
+                    st.toast(f"✅ 계약 상태가 '{sc.STATUS_FLOW[2]}'로 변경되었습니다")
 
                 def safe_int(val):
                     try:
@@ -370,7 +370,7 @@ def show(data):
 
                 result = db.save_settlement_record(settlement_data, site_info=site_info)
                 if result:
-                    st.success("✅ 계약건이 청구 시스템에 등록되었습니다")
+                    st.toast("✅ 계약체결 완료! 청구 시스템에 등록되었습니다")
                     st.info(f"📊 등록 금액: 공급가액 {settlement_data['공급가액']:,}원 + 부가세 {settlement_data['부가세']:,}원 = 청구금액 {settlement_data['합계금액']:,}원")
                 else:
                     st.error("❌ 청구 시스템 저장 실패")
@@ -410,7 +410,7 @@ def show(data):
                                         _cells.append(Cell(row=_target_row, col=_col_i, value=str(_val).strip()))
                                 if _cells:
                                     _cust_wks.update_cells(_cells, value_input_option='RAW')
-                                    st.success("✅ 고객정보 시트에도 사업자 정보가 업데이트되었습니다")
+                                    st.toast("✅ 고객정보 시트에도 사업자 정보 업데이트 완료")
                     except Exception as _ce:
                         st.warning(f"⚠️ 고객정보 업데이트 실패 (계약은 정상 저장됨): {_ce}")
 
@@ -419,7 +419,7 @@ def show(data):
                 for k in ['_prev_biz_num', '_prev_biz_ceo', '_prev_biz_company', '_prev_biz_email']:
                     st.session_state.pop(k, None)
                 db.invalidate_data()
-                time.sleep(1)
+                time.sleep(0.5)
                 st.rerun()
 
             except Exception as e:

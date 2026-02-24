@@ -645,12 +645,10 @@ def get_settlement_overview(df_settlement):
     col_invoice = find_col(df_settlement, ["공급가액"])
     col_tax = find_col(df_settlement, ["부가세"])
     col_paid = find_col(df_settlement, ["받은금액"])
-    col_balance = find_col(df_settlement, ["잔액"])
     
     try:
         total_invoice = 0
         total_paid = 0
-        total_balance = 0
         
         for _, row in df_settlement.iterrows():
             # 청구액 = 공급가액 + 부가세
@@ -667,14 +665,9 @@ def get_settlement_overview(df_settlement):
             if col_paid:
                 paid_amt = safe_int(row.get(col_paid, 0))
                 total_paid += paid_amt
-            
-            # 미수금 (잔액에서 직접)
-            if col_balance:
-                balance_amt = safe_int(row.get(col_balance, 0))
-                total_balance += balance_amt
-            else:
-                # 잔액이 없으면 청구액 - 받은금액으로 계산
-                total_balance = total_invoice - total_paid
+        
+        # 미수금 = 총청구액 - 받은금액 (잔액 컬럼 대신 직접 계산하여 정확성 보장)
+        total_balance = total_invoice - total_paid
         
         수금률 = int((total_paid / total_invoice * 100) if total_invoice > 0 else 0)
         
@@ -783,8 +776,8 @@ def get_payment_status_breakdown(df_settlement):
         return {}
 
 
-def get_operating_profit(df_settlement, df_dispatch):
-    """영업이익 계산: 공급가액 합계 - 총지급액 합계"""
+def get_operating_profit(df_settlement, df_dispatch, df_payment=None):
+    """영업이익 계산: 공급가액 합계 - 총지급액 합계 (지급내역 우선 사용)"""
     total_supply = 0
     total_payment = 0
     
@@ -797,7 +790,15 @@ def get_operating_profit(df_settlement, df_dispatch):
         if col_payment_s:
             total_payment = df_settlement[col_payment_s].apply(safe_int).sum()
     
-    # 2) 지급액이 정산 시트에 없으면 배정기록에서 총지급액 합산
+    # 2) 지급내역 시트에서 실제 최종지급액 합산 (가장 정확한 데이터)
+    if df_payment is not None and not df_payment.empty:
+        col_final_pay = find_col(df_payment, ["최종지급액", "실지급액"])
+        if col_final_pay:
+            actual_payment = df_payment[col_final_pay].apply(safe_int).sum()
+            if actual_payment > 0:
+                total_payment = actual_payment
+    
+    # 3) 지급액이 아직 0이면 배정기록에서 총지급액 합산 (예상치 fallback)
     if total_payment == 0 and not df_dispatch.empty:
         col_total_pay = find_col(df_dispatch, ["총지급액", "지급액"])
         if col_total_pay:

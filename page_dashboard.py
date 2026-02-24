@@ -91,13 +91,14 @@ def show(data):
     dispatch_data = db.get_dispatch()
     df_dispatch = dispatch_data.get('dispatch', pd.DataFrame())
     df_settlement = dispatch_data.get('settlement', pd.DataFrame())
+    df_payment = dispatch_data.get('payment', pd.DataFrame())
     
     # 1. KPI 계산
     kpi = ud.calculate_kpi(df_inq)
     settlement_overview = ud.get_settlement_overview(df_settlement)
     unpaid_df = ud.get_unpaid_list(df_inq)
     pending_df = ud.get_pending_list(df_inq)
-    operating_profit = ud.get_operating_profit(df_settlement, df_dispatch)
+    operating_profit = ud.get_operating_profit(df_settlement, df_dispatch, df_payment)
     conversion = ud.get_estimate_conversion_rate(df_inq)
     stale_estimates = ud.get_stale_estimates(df_inq)
     role_stats = ud.get_role_statistics(df_dispatch)

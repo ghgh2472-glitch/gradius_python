@@ -260,6 +260,17 @@ def show(data):
                     if not st.session_state['form_manager']: st.session_state['form_manager'] = str(c_info.get('담당자명', ''))
                     if not st.session_state['form_contact']: st.session_state['form_contact'] = str(c_info.get('담당자연락처', ''))
                 except: pass
+                # 서비스종류 자동채움: 해당 업체의 최근 문의에서 가져오기
+                if not st.session_state.get('form_service'):
+                    try:
+                        df_inq = data.get('inq', pd.DataFrame())
+                        if not df_inq.empty and '업체명' in df_inq.columns and '서비스종류' in df_inq.columns:
+                            past = df_inq[df_inq['업체명'].astype(str).str.strip() == str(client_name).strip()]
+                            past_svc = past['서비스종류'].astype(str).str.strip()
+                            past_svc = past_svc[~past_svc.isin(['', 'nan', 'None'])]
+                            if not past_svc.empty:
+                                st.session_state['form_service'] = past_svc.iloc[-1]
+                    except: pass
 
         with c2: st.text_input("담당자", key="form_manager")
         with c3: st.text_input("연락처", key="form_contact")

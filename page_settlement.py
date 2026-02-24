@@ -253,8 +253,8 @@ def show_settlement_overview():
                 )
                 st.success(f"✅ 입금이 저장되었습니다!\n- 합계: ₩{int(total_new_paid):,}")
                 st.balloons()
-                # 캐시만 무효화 (rerun 제거 — 데이터 증발 방지)
-                db.invalidate_data()
+                # 캐시만 무효화 (배정/정산 범위만 — 전체 리로드 방지)
+                db.invalidate_dispatch_only()
             else:
                 st.error("❌ 입금 금액을 입력해주세요.")
     
@@ -377,7 +377,7 @@ def show_settlement_overview():
                             _save_count += 1
                 if _save_count > 0:
                     st.success(f"✅ {_save_count}건 저장 완료! (잔액·입금여부·이익 자동 계산 적용)")
-                    db.invalidate_data()
+                    db.invalidate_dispatch_only()
                 else:
                     st.info("변경된 데이터가 없습니다.")
         
@@ -1289,7 +1289,7 @@ def show_settlement_detail(data):
                             f'{team_html}</div>', unsafe_allow_html=True)
 
             edited_df = st.data_editor(
-                initial_df.drop(columns=['_은행', '_계좌', '_팀코드', '_배정ID']),
+                initial_df.rename(columns={'_은행': '은행', '_계좌': '계좌'}).drop(columns=['_팀코드', '_배정ID']),
                 column_config={
                     '지급상태': st.column_config.TextColumn('지급', width=55, disabled=True, help="지급내역 시트 기준 상태"),
                     '이름': st.column_config.TextColumn('이름', width=75, disabled=True),
@@ -1308,6 +1308,8 @@ def show_settlement_detail(data):
                     '공제': st.column_config.NumberColumn('공제', width=70, format="%d", disabled=True),
                     '실수령': st.column_config.NumberColumn('실수령', width=90, format="%d", disabled=True),
                     '메모': st.column_config.TextColumn('메모', width=140, help="메모사항"),
+                    '은행': st.column_config.TextColumn('🏦은행', width=70, disabled=True, help="STAFF 시트 연동"),
+                    '계좌': st.column_config.TextColumn('💳계좌', width=120, disabled=True, help="STAFF 시트 연동"),
                 },
                 use_container_width=True,
                 hide_index=True,
@@ -1442,8 +1444,8 @@ def show_settlement_detail(data):
                                 if _save_bank_to_staff(cr['이름'], cr['은행'], cr['계좌'], df_staff):
                                     save_count += 1
                     if save_count > 0:
-                        st.success(f"✅ {save_count}명 계좌정보 저장!")
-                        db.invalidate_data()
+                        st.toast(f"✅ {save_count}명 계좌정보 저장!")
+                        db.invalidate_dispatch_only()
                     else:
                         st.info("변경된 계좌정보가 없습니다.")
 
@@ -1485,8 +1487,8 @@ def show_settlement_detail(data):
                     if save_count > 0: parts.append(f"{save_count}명 저장")
                     if sep_count > 0: parts.append(f"{sep_count}명 별도정산 제외")
                     if save_count > 0:
-                        st.success(f"✅ {' / '.join(parts)} 완료!")
-                        db.invalidate_data()
+                        st.toast(f"✅ {' / '.join(parts)} 완료!")
+                        db.invalidate_dispatch_only()
                     else:
                         st.warning("저장할 기록이 없습니다." + (f" (별도정산 {sep_count}명)" if sep_count else ""))
 
@@ -2063,9 +2065,9 @@ def show_tax_invoice_management():
                                         if str(_all_records[_r_idx][0]).strip() == _inq_id:
                                             _wks.update_cell(_r_idx + 1, _tax_col_idx, "발행완료")
                                             break
-                                db.invalidate_data()
-                                st.success(f"✅ {company} 세금계산서 발행 완료 처리됨")
-                                time.sleep(1)
+                                db.invalidate_dispatch_only()
+                                st.toast(f"✅ {company} 세금계산서 발행 완료 처리됨")
+                                time.sleep(0.5)
                                 st.rerun()
                         except Exception as _e:
                             st.error(f"저장 실패: {_e}")
@@ -2181,10 +2183,10 @@ def show_tax_invoice_management():
                                     
                                     if _cells:
                                         _wks.update_cells(_cells, value_input_option='RAW')
-                                        db.invalidate_data()
-                                        st.success(f"✅ {selected_company}의 세금계산서 정보가 저장되었습니다!")
+                                        db.invalidate_dispatch_only()
+                                        st.toast(f"✅ {selected_company}의 세금계산서 정보가 저장되었습니다!")
                                         st.balloons()
-                                        time.sleep(1)
+                                        time.sleep(0.5)
                                         st.rerun()
                                 else:
                                     st.error(f"❌ 문의ID '{_inq_id}'에 해당하는 행을 찾을 수 없습니다.")
@@ -2232,8 +2234,8 @@ def show_tax_invoice_management():
                                             if str(_all_vals[_ri][0]).strip() == _inq_id:
                                                 _wks.update_cell(_ri + 1, _url_ci, img_url)
                                                 break
-                                    db.invalidate_data()
-                                st.success("✅ 이미지 저장 완료!")
+                                    db.invalidate_dispatch_only()
+                                st.toast("✅ 이미지 저장 완료!")
                             else:
                                 st.error("❌ 이미지 저장에 실패했습니다.")
                         except Exception as img_err:
