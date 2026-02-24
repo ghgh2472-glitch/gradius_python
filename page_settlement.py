@@ -182,7 +182,14 @@ def show_settlement_overview():
     st.markdown("### ✍️ 입금 기록 입력")
 
     # ── 카드 그리드로 행사 선택 ──
-    settlement_df['label'] = settlement_df.get('문의ID', '') + ' - ' + settlement_df.get('업체', '') + ' (' + settlement_df.get('현장명', '') + ')'
+    settlement_df['label'] = (
+        settlement_df.get('문의ID', pd.Series(dtype=str)).fillna('').astype(str)
+        + ' - '
+        + settlement_df.get('업체', pd.Series(dtype=str)).fillna('').astype(str)
+        + ' ('
+        + settlement_df.get('현장명', pd.Series(dtype=str)).fillna('').astype(str)
+        + ')'
+    )
 
     # 카드 그리드 CSS
     st.markdown("""
