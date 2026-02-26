@@ -393,16 +393,41 @@ def get_calendar_events(df_inq, df_dispatch=None):
                 desc_parts.append(f"⏰ {time_str}")
             description = " / ".join(desc_parts) if desc_parts else ""
             
+            # 관리번호/ID
+            col_id = find_col(df_inq, ["문의ID", "ID", "관리번호"])
+            inq_id = ''
+            if col_id and col_id in df_inq.columns:
+                inq_id = str(row.get(col_id, '')).strip()
+                if inq_id in ('nan', 'None'):
+                    inq_id = ''
+            
+            col_location = find_col(df_inq, ["장소", "현장"])
+            location = ''
+            if col_location and col_location in df_inq.columns:
+                location = str(row.get(col_location, '')).strip()
+                if location in ('nan', 'None'):
+                    location = ''
+            
             evt_obj = {
                 "title": title,
                 "start": start_dt, 
                 "end": end_dt_exclusive,
                 "backgroundColor": color, 
                 "borderColor": color, 
-                "allDay": True
+                "allDay": True,
+                "extendedProps": {
+                    "description": description,
+                    "inq_id": inq_id,
+                    "status": status,
+                    "client": str(client_name),
+                    "event_name": str(event_name),
+                    "headcount": need,
+                    "assigned_count": assigned,
+                    "assigned_names": names_str,
+                    "time": time_str if time_str not in ('nan', 'None', '') else '',
+                    "location": location,
+                },
             }
-            if description:
-                evt_obj["extendedProps"] = {"description": description}
             
             events.append(evt_obj)
     except Exception as e:
@@ -1156,3 +1181,234 @@ def format_report_text(report):
     
     text += f"{'='*60}\n"
     return text
+
+
+# ---------------------------------------------------------
+# 미수금 상세 분석 함수
+# ---------------------------------------------------------
+def get_unpaid_detail(df_settlement):
+    """미수금 업체별 상세 내역 (전체)"""
+    if df_settlement.empty:
+        return pd.DataFrame()
+    
+    col_client = find_col(df_settlement, ["업체", "업체명"])
+    col_balance = find_col(df_settlement, ["잔액", "미수금액"])
+    col_event = find_col(df_settlement, ["현장명", "행사명"])
+    col_date = find_col(df_settlement, ["파견일자", "계약일", "날짜"])
+    col_amount = find_col(df_settlement, ["청구금액", "공급가액"])
+    col_paid = find_col(df_settlement, ["받은금액"])
+    col_progress = find_col(df_settlement, ["입금여부", "진행상황"])
+    
+    if not col_client or not col_balance:
+        return pd.DataFrame()
+    
+    try:
+        df = df_settlement.copy()
+        df['_잔액'] = df[col_balance].apply(safe_int)
+        df = df[df['_잔액'] > 0].copy()
+        
+        if df.empty:
+            return pd.DataFrame()
+        
+        result_cols = {'업체': col_client}
+        if col_event: result_cols['현장명'] = col_event
+        if col_date: result_cols['파견일자'] = col_date
+        if col_amount: result_cols['청구금액'] = col_amount
+        if col_paid: result_cols['받은금액'] = col_paid
+        result_cols['미수금액'] = '_잔액'
+        if col_progress: result_cols['입금상태'] = col_progress
+        
+        valid_cols = {k: v for k, v in result_cols.items() if v in df.columns}
+        res = df[list(valid_cols.values())].copy()
+        res.columns = list(valid_cols.keys())
+        
+        # 숫자 변환
+        for nc in ['청구금액', '받은금액', '미수금액']:
+            if nc in res.columns:
+                res[nc] = res[nc].apply(safe_int)
+        
+        return res.sort_values('미수금액', ascending=False).reset_index(drop=True)
+    except Exception as e:
+        print(f"get_unpaid_detail error: {e}")
+        return pd.DataFrame()
+
+
+def get_unpaid_by_company(df_settlement):
+    """업체별 미수금 집계 (그룹핑)"""
+    if df_settlement.empty:
+        return pd.DataFrame()
+    
+    col_client = find_col(df_settlement, ["업체", "업체명"])
+    col_balance = find_col(df_settlement, ["잔액", "미수금액"])
+    col_amount = find_col(df_settlement, ["청구금액", "공급가액"])
+    col_paid = find_col(df_settlement, ["받은금액"])
+    
+    if not col_client or not col_balance:
+        return pd.DataFrame()
+    
+    try:
+        df = df_settlement.copy()
+        df['_잔액'] = df[col_balance].apply(safe_int)
+        df['_청구'] = df[col_amount].apply(safe_int) if col_amount else 0
+        df['_입금'] = df[col_paid].apply(safe_int) if col_paid else 0
+        
+        df = df[df['_잔액'] > 0]
+        if df.empty:
+            return pd.DataFrame()
+        
+        grouped = df.groupby(df[col_client].astype(str).str.strip()).agg(
+            건수=('_잔액', 'count'),
+            총청구액=('_청구', 'sum'),
+            총입금액=('_입금', 'sum'),
+            미수금액=('_잔액', 'sum'),
+        ).reset_index()
+        grouped.columns = ['업체', '건수', '총청구액', '총입금액', '미수금액']
+        grouped = grouped.sort_values('미수금액', ascending=False).reset_index(drop=True)
+        grouped['순위'] = grouped.index + 1
+        grouped['수금률'] = grouped.apply(
+            lambda r: round(r['총입금액'] / r['총청구액'] * 100, 1) if r['총청구액'] > 0 else 0, axis=1
+        )
+        return grouped[['순위', '업체', '건수', '총청구액', '총입금액', '미수금액', '수금률']]
+    except Exception as e:
+        print(f"get_unpaid_by_company error: {e}")
+        return pd.DataFrame()
+
+
+def get_unpaid_aging(df_settlement):
+    """미수금 경과일 분석 (30일/60일/90일+)"""
+    if df_settlement.empty:
+        return {'30일이내': 0, '30~60일': 0, '60~90일': 0, '90일이상': 0,
+                '30일이내_금액': 0, '30~60일_금액': 0, '60~90일_금액': 0, '90일이상_금액': 0}
+    
+    col_date = find_col(df_settlement, ["파견일자", "계약일", "날짜"])
+    col_balance = find_col(df_settlement, ["잔액", "미수금액"])
+    
+    if not col_date or not col_balance:
+        return {'30일이내': 0, '30~60일': 0, '60~90일': 0, '90일이상': 0,
+                '30일이내_금액': 0, '30~60일_금액': 0, '60~90일_금액': 0, '90일이상_금액': 0}
+    
+    try:
+        df = df_settlement.copy()
+        df['_잔액'] = df[col_balance].apply(safe_int)
+        df = df[df['_잔액'] > 0].copy()
+        
+        if df.empty:
+            return {'30일이내': 0, '30~60일': 0, '60~90일': 0, '90일이상': 0,
+                    '30일이내_금액': 0, '30~60일_금액': 0, '60~90일_금액': 0, '90일이상_금액': 0}
+        
+        today = datetime.now()
+        
+        def _calc_days(d):
+            try:
+                dt = pd.to_datetime(str(d).strip()[:10])
+                return (today - dt).days
+            except:
+                return 999
+        
+        df['_경과일'] = df[col_date].apply(_calc_days)
+        
+        result = {
+            '30일이내': len(df[df['_경과일'] <= 30]),
+            '30~60일': len(df[(df['_경과일'] > 30) & (df['_경과일'] <= 60)]),
+            '60~90일': len(df[(df['_경과일'] > 60) & (df['_경과일'] <= 90)]),
+            '90일이상': len(df[df['_경과일'] > 90]),
+            '30일이내_금액': int(df[df['_경과일'] <= 30]['_잔액'].sum()),
+            '30~60일_금액': int(df[(df['_경과일'] > 30) & (df['_경과일'] <= 60)]['_잔액'].sum()),
+            '60~90일_금액': int(df[(df['_경과일'] > 60) & (df['_경과일'] <= 90)]['_잔액'].sum()),
+            '90일이상_금액': int(df[df['_경과일'] > 90]['_잔액'].sum()),
+        }
+        return result
+    except Exception as e:
+        print(f"get_unpaid_aging error: {e}")
+        return {'30일이내': 0, '30~60일': 0, '60~90일': 0, '90일이상': 0,
+                '30일이내_금액': 0, '30~60일_금액': 0, '60~90일_금액': 0, '90일이상_금액': 0}
+
+
+def get_event_detail_for_calendar(df_inq, df_dispatch, event_title=None, event_start=None, inq_id=None):
+    """캘린더 이벤트 클릭 시 상세 정보 반환"""
+    if df_inq.empty:
+        return {}
+    
+    col_id = find_col(df_inq, ["문의ID", "ID", "관리번호"])
+    col_client = find_col(df_inq, ["업체명"])
+    col_event = find_col(df_inq, ["행사명"])
+    col_date = find_col(df_inq, ["행사시작일", "시작일", "행사일시", "일시"])
+    col_date_end = find_col(df_inq, ["행사종료일", "종료일"])
+    col_location = find_col(df_inq, ["장소", "현장"])
+    col_status = find_col(df_inq, ["상태", "체결"])
+    col_time = find_col(df_inq, ["행사시간", "시간"])
+    col_headcount = find_col(df_inq, ["필요인력", "요청인원", "인원"])
+    col_manager = find_col(df_inq, ["담당자"])
+    col_contact = find_col(df_inq, ["연락처", "담당자연락처"])
+    col_service = find_col(df_inq, ["서비스종류", "서비스"])
+    col_note = find_col(df_inq, ["특이사항"])
+    
+    try:
+        matched = pd.DataFrame()
+        
+        # 1. inq_id로 매칭
+        if inq_id and col_id and col_id in df_inq.columns:
+            matched = df_inq[df_inq[col_id].astype(str).str.strip() == str(inq_id).strip()]
+        
+        # 2. 제목+날짜로 매칭
+        if matched.empty and event_title:
+            # 제목에서 업체명/행사명 추출 (format: "업체명 (행사명) [...]")
+            for idx, row in df_inq.iterrows():
+                client = str(row.get(col_client, '')) if col_client else ''
+                event = str(row.get(col_event, '')) if col_event else ''
+                if client and client in str(event_title) and event and event in str(event_title):
+                    matched = df_inq.loc[[idx]]
+                    break
+        
+        # 3. 날짜로 매칭 (여러 건이면 첫 건)
+        if matched.empty and event_start and col_date:
+            start_str = str(event_start)[:10]
+            for idx, row in df_inq.iterrows():
+                raw = str(row.get(col_date, ''))[:10]
+                if raw == start_str:
+                    matched = df_inq.loc[[idx]]
+                    break
+        
+        if matched.empty:
+            return {}
+        
+        row = matched.iloc[0]
+        
+        def _safe(val):
+            if pd.isna(val) or str(val).strip() in ('nan', 'None', ''):
+                return ''
+            return str(val).strip()
+        
+        # 배정 인력 상세
+        evt_name = _safe(row.get(col_event)) if col_event else ''
+        staff_detail = get_dispatch_detail_for_event(df_dispatch, evt_name) if evt_name else pd.DataFrame()
+        
+        need = safe_int(row.get(col_headcount, 0)) if col_headcount else 0
+        assigned = len(staff_detail) if not staff_detail.empty else 0
+        
+        staff_names = []
+        if not staff_detail.empty and '인력명' in staff_detail.columns:
+            staff_names = staff_detail['인력명'].tolist()
+        
+        detail = {
+            'inq_id': _safe(row.get(col_id)) if col_id else '',
+            '업체명': _safe(row.get(col_client)) if col_client else '',
+            '행사명': evt_name,
+            '상태': _safe(row.get(col_status)) if col_status else '',
+            '시작일': _safe(row.get(col_date)) if col_date else '',
+            '종료일': _safe(row.get(col_date_end)) if col_date_end else '',
+            '장소': _safe(row.get(col_location)) if col_location else '',
+            '시간': _safe(row.get(col_time)) if col_time else '',
+            '필요인원': need,
+            '배정인원': assigned,
+            '담당자': _safe(row.get(col_manager)) if col_manager else '',
+            '연락처': _safe(row.get(col_contact)) if col_contact else '',
+            '서비스': _safe(row.get(col_service)) if col_service else '',
+            '특이사항': _safe(row.get(col_note)) if col_note else '',
+            '배정인력': staff_names,
+            '배정상세': staff_detail,
+        }
+        return detail
+    except Exception as e:
+        print(f"get_event_detail_for_calendar error: {e}")
+        return {}
