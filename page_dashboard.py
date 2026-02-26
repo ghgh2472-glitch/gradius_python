@@ -1786,7 +1786,6 @@ def show(data):
             
             # 경과일 파이 차트
             if unpaid_total > 0:
-                import plotly.express as px
                 aging_data = pd.DataFrame({
                     '구간': ['30일이내', '30~60일', '60~90일', '90일이상'],
                     '금액': [aging.get('30일이내_금액', 0), aging.get('30~60일_금액', 0),
