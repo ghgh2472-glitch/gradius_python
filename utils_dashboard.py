@@ -1186,25 +1186,45 @@ def format_report_text(report):
 # ---------------------------------------------------------
 # 미수금 상세 분석 함수
 # ---------------------------------------------------------
+def _calc_balance(df_settlement):
+    """잔액 컬럼을 계산하여 '_잔액' 컬럼 추가. 잔액 컬럼이 있으면 사용, 없으면 공급가액+부가세-받은금액으로 계산."""
+    df = df_settlement.copy()
+    col_balance = find_col(df, ["잔액", "미수금액"])
+    col_amount = find_col(df, ["공급가액", "청구금액"])
+    col_tax = find_col(df, ["부가세"])
+    col_paid = find_col(df, ["받은금액"])
+    
+    if col_balance and col_balance in df.columns:
+        df['_잔액'] = df[col_balance].apply(safe_int)
+    elif col_amount and col_paid:
+        # 공급가액 + 부가세 - 받은금액으로 계산
+        df['_잔액'] = df[col_amount].apply(safe_int)
+        if col_tax and col_tax in df.columns:
+            df['_잔액'] = df['_잔액'] + df[col_tax].apply(safe_int)
+        df['_잔액'] = df['_잔액'] - df[col_paid].apply(safe_int)
+    else:
+        df['_잔액'] = 0
+    
+    return df
+
+
 def get_unpaid_detail(df_settlement):
     """미수금 업체별 상세 내역 (전체)"""
     if df_settlement.empty:
         return pd.DataFrame()
     
     col_client = find_col(df_settlement, ["업체", "업체명"])
-    col_balance = find_col(df_settlement, ["잔액", "미수금액"])
     col_event = find_col(df_settlement, ["현장명", "행사명"])
     col_date = find_col(df_settlement, ["파견일자", "계약일", "날짜"])
     col_amount = find_col(df_settlement, ["청구금액", "공급가액"])
     col_paid = find_col(df_settlement, ["받은금액"])
     col_progress = find_col(df_settlement, ["입금여부", "진행상황"])
     
-    if not col_client or not col_balance:
+    if not col_client:
         return pd.DataFrame()
     
     try:
-        df = df_settlement.copy()
-        df['_잔액'] = df[col_balance].apply(safe_int)
+        df = _calc_balance(df_settlement)
         df = df[df['_잔액'] > 0].copy()
         
         if df.empty:
@@ -1239,16 +1259,14 @@ def get_unpaid_by_company(df_settlement):
         return pd.DataFrame()
     
     col_client = find_col(df_settlement, ["업체", "업체명"])
-    col_balance = find_col(df_settlement, ["잔액", "미수금액"])
     col_amount = find_col(df_settlement, ["청구금액", "공급가액"])
     col_paid = find_col(df_settlement, ["받은금액"])
     
-    if not col_client or not col_balance:
+    if not col_client:
         return pd.DataFrame()
     
     try:
-        df = df_settlement.copy()
-        df['_잔액'] = df[col_balance].apply(safe_int)
+        df = _calc_balance(df_settlement)
         df['_청구'] = df[col_amount].apply(safe_int) if col_amount else 0
         df['_입금'] = df[col_paid].apply(safe_int) if col_paid else 0
         
@@ -1281,15 +1299,13 @@ def get_unpaid_aging(df_settlement):
                 '30일이내_금액': 0, '30~60일_금액': 0, '60~90일_금액': 0, '90일이상_금액': 0}
     
     col_date = find_col(df_settlement, ["파견일자", "계약일", "날짜"])
-    col_balance = find_col(df_settlement, ["잔액", "미수금액"])
     
-    if not col_date or not col_balance:
+    if not col_date:
         return {'30일이내': 0, '30~60일': 0, '60~90일': 0, '90일이상': 0,
                 '30일이내_금액': 0, '30~60일_금액': 0, '60~90일_금액': 0, '90일이상_금액': 0}
     
     try:
-        df = df_settlement.copy()
-        df['_잔액'] = df[col_balance].apply(safe_int)
+        df = _calc_balance(df_settlement)
         df = df[df['_잔액'] > 0].copy()
         
         if df.empty:

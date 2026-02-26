@@ -1190,50 +1190,34 @@ def show(data):
                 if service_str:
                     extra_info += f" | 🏷️ {service_str}"
                 
-                manager_line = ""
+                manager_html = ""
                 if manager_str or contact_str:
-                    manager_line = f"""
-                    <div style="color: #6B7280; font-size: 12px; margin-top: 4px;">
-                        👤 <b>담당</b>: {manager_str}{(' | 📞 ' + contact_str) if contact_str else ''}
-                    </div>"""
+                    contact_part = f" | 📞 {contact_str}" if contact_str else ""
+                    manager_html = f'<div style="color:#6B7280;font-size:12px;margin-top:4px;">👤 <b>담당</b>: {manager_str}{contact_part}</div>'
                 
-                note_line = ""
+                note_html = ""
                 if note_str:
-                    note_line = f"""
-                    <div style="background: #FFFBEB; border-left: 3px solid #F59E0B; padding: 6px 10px;
-                                margin-top: 6px; border-radius: 4px; font-size: 12px; color: #92400E;">
-                        📝 {note_str}
-                    </div>"""
+                    note_html = f'<div style="background:#FFFBEB;border-left:3px solid #F59E0B;padding:6px 10px;margin-top:6px;border-radius:4px;font-size:12px;color:#92400E;">📝 {note_str}</div>'
                 
-                st.markdown(f"""
-                <div style="background: linear-gradient(135deg, #EFF6FF, #F0FDF4); border: 2px solid #3B82F6;
-                            border-radius: 12px; padding: 18px; margin: 12px 0; box-shadow: 0 4px 12px rgba(59,130,246,0.15);">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                        <div>
-                            <span style="background: #3B82F6; color: white; padding: 4px 10px; border-radius: 6px;
-                                        font-weight: bold; font-size: 12px; margin-right: 6px;">📌 선택된 일정</span>
-                            <b style="font-size: 16px; color: #111827;">{detail.get('업체명', '')} — {detail.get('행사명', '')}</b>
-                        </div>
-                        <span style="background: {st_bg}; color: {st_clr}; padding: 4px 10px; border-radius: 6px;
-                                    font-size: 12px; font-weight: bold;">{st_icon} {d_status}</span>
-                    </div>
-                    <div style="color: #374151; font-size: 13px; margin-bottom: 6px;">
-                        📅 {date_str}  |  📍 {loc_str}{extra_info}
-                    </div>
-                    <div style="margin: 8px 0;">
-                        <span style="font-size: 12px; color: #6B7280; margin-right: 8px;">배정현황: {assigned}/{need}명</span>
-                        <div style="background: #E5E7EB; border-radius: 10px; height: 8px; width: 100%; max-width: 300px; display: inline-block; vertical-align: middle;">
-                            <div style="background: {assign_bar_color}; height: 100%; border-radius: 10px; width: {fill_pct}%;"></div>
-                        </div>
-                        <span style="font-size: 11px; color: {assign_bar_color}; font-weight: bold; margin-left: 4px;">{fill_pct}%</span>
-                    </div>
-                    <div style="color: #374151; font-size: 12px;">
-                        👥 <b>배정인력</b>: {staff_names}
-                    </div>
-                    {manager_line}
-                    {note_line}
-                </div>
-                """, unsafe_allow_html=True)
+                card_html = f"""<div style="background:linear-gradient(135deg,#EFF6FF,#F0FDF4);border:2px solid #3B82F6;border-radius:12px;padding:18px;margin:12px 0;box-shadow:0 4px 12px rgba(59,130,246,0.15);">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+<div>
+<span style="background:#3B82F6;color:white;padding:4px 10px;border-radius:6px;font-weight:bold;font-size:12px;margin-right:6px;">📌 선택된 일정</span>
+<b style="font-size:16px;color:#111827;">{detail.get('업체명','')} — {detail.get('행사명','')}</b>
+</div>
+<span style="background:{st_bg};color:{st_clr};padding:4px 10px;border-radius:6px;font-size:12px;font-weight:bold;">{st_icon} {d_status}</span>
+</div>
+<div style="color:#374151;font-size:13px;margin-bottom:6px;">📅 {date_str} | 📍 {loc_str}{extra_info}</div>
+<div style="margin:8px 0;">
+<span style="font-size:12px;color:#6B7280;margin-right:8px;">배정현황: {assigned}/{need}명</span>
+<div style="background:#E5E7EB;border-radius:10px;height:8px;width:100%;max-width:300px;display:inline-block;vertical-align:middle;"><div style="background:{assign_bar_color};height:100%;border-radius:10px;width:{fill_pct}%;"></div></div>
+<span style="font-size:11px;color:{assign_bar_color};font-weight:bold;margin-left:4px;">{fill_pct}%</span>
+</div>
+<div style="color:#374151;font-size:12px;">👥 <b>배정인력</b>: {staff_names}</div>
+{manager_html}
+{note_html}
+</div>"""
+                st.markdown(card_html, unsafe_allow_html=True)
         
         if not events:
             st.info("📅 표시할 행사 일정이 없습니다. 문의접수에서 행사시작일을 입력해주세요.")
