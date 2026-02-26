@@ -317,7 +317,7 @@ def get_customer_quote_html(df, client_info, supplier_info, supply_amt, vat_yn, 
             <td style="text-align:center;">{_days_disp}</td>
             <td style="text-align:right; padding-right:10px;">{_unit_disp}</td>
             <td style="text-align:right; padding-right:10px; font-weight:bold;">{_cost_disp}</td>
-            <td style="text-align:center; padding:4px 5px; font-size:11px;">{_note_disp}</td>
+            <td style="text-align:center; padding:4px 5px; font-size:11px;">{note}</td>
         </tr>
         """
     
@@ -486,14 +486,14 @@ def get_detailed_report_html(df, client, notes):
     rows = ""
     total_rev, total_cost, total_prof = 0, 0, 0
     for _, r in df.iterrows():
-        item = r['품목']
+        item = str(r['품목']).replace('\n', ' ')  # 날짜 태그 줄바꿈 정리
         qty = safe_int(r.get('수량', 0))
         days = safe_int(r.get('일수', 1))
         u_rev = safe_int(r['매출단가'])
         u_cost = safe_int(r['매입단가'])
         u_prof = u_rev - u_cost
-        sum_rev = r['매출합계']
-        sum_cost = r['매입합계']
+        sum_rev = safe_int(r['매출합계'])
+        sum_cost = safe_int(r['매입합계'])
         prof = sum_rev - sum_cost
         margin = (prof / sum_rev * 100) if sum_rev > 0 else 0
         total_rev += sum_rev; total_cost += sum_cost; total_prof += prof

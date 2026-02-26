@@ -91,14 +91,13 @@ def show(data):
     dispatch_data = db.get_dispatch()
     df_dispatch = dispatch_data.get('dispatch', pd.DataFrame())
     df_settlement = dispatch_data.get('settlement', pd.DataFrame())
-    df_payment = dispatch_data.get('payment', pd.DataFrame())
     
     # 1. KPI 계산
     kpi = ud.calculate_kpi(df_inq)
     settlement_overview = ud.get_settlement_overview(df_settlement)
     unpaid_df = ud.get_unpaid_list(df_inq)
     pending_df = ud.get_pending_list(df_inq)
-    operating_profit = ud.get_operating_profit(df_settlement, df_dispatch, df_payment)
+    operating_profit = ud.get_operating_profit(df_settlement, df_dispatch)
     conversion = ud.get_estimate_conversion_rate(df_inq)
     stale_estimates = ud.get_stale_estimates(df_inq)
     role_stats = ud.get_role_statistics(df_dispatch)
@@ -431,18 +430,12 @@ def show(data):
                                     st.markdown(f"""<div style="background:#DCFCE7;color:#166534;padding:8px;border-radius:8px;text-align:center;font-weight:bold;">
                                         ✅ 배정완료<br/>{_p_staff_count}/{_p_need}명
                                     </div>""", unsafe_allow_html=True)
-                                elif _p_staff_count == 0:
-                                    st.markdown(f"""<div style="background:#FEE2E2;color:#991B1B;padding:8px;border-radius:8px;text-align:center;font-weight:bold;">
-                                        🔴 배정필요<br/>0/{_p_need}명
-                                    </div>""", unsafe_allow_html=True)
                                 else:
                                     st.markdown(f"""<div style="background:#FEF3C7;color:#92400E;padding:8px;border-radius:8px;text-align:center;font-weight:bold;">
-                                        ⚠️ 배정중<br/>{_p_staff_count}/{_p_need}명
+                                        ⚠️ 부족<br/>{_p_staff_count}/{_p_need}명
                                     </div>""", unsafe_allow_html=True)
                             else:
-                                st.markdown(f"""<div style="background:#F3F4F6;color:#374151;padding:8px;border-radius:8px;text-align:center;font-weight:bold;">
-                                    👥 {_p_staff_count}명 배정
-                                </div>""", unsafe_allow_html=True)
+                                st.metric("배정인원", f"{_p_staff_count}명")
                             if _est_amount > 0:
                                 st.metric("견적액", f"{_est_amount:,}원")
                 
@@ -721,17 +714,10 @@ def show(data):
                 
                 if need_count > 0:
                     assign_pct = min(100, int(staff_count / need_count * 100))
-                    if assign_pct >= 100:
-                        assign_text = f"✅ {staff_count}/{need_count}명 배정완료"
-                        assign_badge_color = "#10B981"
-                    elif staff_count == 0:
-                        assign_text = f"🔴 0/{need_count}명 배정필요"
-                        assign_badge_color = "#EF4444"
-                    else:
-                        assign_text = f"⚠️ {staff_count}/{need_count}명 배정중"
-                        assign_badge_color = "#F59E0B"
+                    assign_text = f"{staff_count}/{need_count}명 ({assign_pct}%)"
+                    assign_badge_color = "#10B981" if assign_pct >= 100 else "#F59E0B" if assign_pct >= 50 else "#EF4444"
                 else:
-                    assign_text = f"{staff_count}명 배정"
+                    assign_text = f"{staff_count}명"
                     assign_badge_color = "#6B7280"
                 
                 st.markdown(f"""
