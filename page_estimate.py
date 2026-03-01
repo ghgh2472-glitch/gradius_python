@@ -410,12 +410,23 @@ def show(data):
             s_t, e_t, _ = ue.smart_parse_time(target.get('행사시간', str(target.get('시간', ''))))
             qty = ue.safe_int(str(target.get('필요인력', target.get('요청인원', target.get('인원', '1')))).replace('명', ''))
 
-            # ▶ 기존 견적 메타데이터 로드 (복장/식사/주차/특이사항)
+            # ▶ 기존 견적 메타데이터 로드 (복장/식사/주차/특이사항 + 부대비용/할인/VAT)
             _est_meta = {}
+            _est_meta_detail = {}  # 비고/Meta JSON에서 파싱한 상세 정보
             if not df_est.empty and '문의ID' in df_est.columns:
                 _matched_est = df_est[df_est['문의ID'].astype(str).str.strip() == target_id]
                 if not _matched_est.empty:
                     _est_meta = _matched_est.iloc[0].to_dict()
+                    # 비고/Meta 컬럼에서 상세 메타데이터 파싱 (부대비용 항목, 할인액, VAT 등)
+                    import json as _json_meta
+                    for _mk in ['비고', 'Meta', '메모', 'Notes']:
+                        _mv = str(_est_meta.get(_mk, '')).strip()
+                        if _mv and _mv not in ('nan', 'None', '') and _mv.startswith('{'):
+                            try:
+                                _est_meta_detail = _json_meta.loads(_mv)
+                                break
+                            except:
+                                pass
 
             # ▶ 문의에서 복장/식사/주차 읽기 (개별 컬럼 우선, 특이사항 regex fallback)
             _inq_note = str(target.get('특이사항', '')).strip()
@@ -493,6 +504,8 @@ def show(data):
                 'w_meal': _safe_str(_pick('식사', _inq_meal)),
                 'w_parking': _safe_str(_pick('주차', _inq_parking)),
                 'w_note': _safe_str(_pick('특이사항', _inq_note_clean)),
+                'discount_amt': _safe_int(_est_meta_detail.get('discount_amt', 0)),
+                'vat_yn': _est_meta_detail.get('vat_yn', True) if 'vat_yn' in _est_meta_detail else True,
             })
 
             # ▶ 견적수정/체결수정 시 기존 품목 로드
@@ -503,7 +516,7 @@ def show(data):
 
             # ▶ 세대 카운터 증가 → TAB2 위젯을 완전히 새로 생성 (Streamlit 위젯 상태 복원 문제 회피)
             st.session_state['_tab2_gen'] = st.session_state.get('_tab2_gen', 0) + 1
-            _keys_to_del = ['w_date_range', 'discount_amt']
+            _keys_to_del = ['w_date_range']
             # 이전 세대 위젯 키 정리
             for _sk in list(st.session_state.keys()):
                 if any(_sk.startswith(p) for p in ['final_client_', 'final_manager_', 'final_contact_', 'final_loc_',
@@ -524,7 +537,16 @@ def show(data):
                 if k in st.session_state:
                     del st.session_state[k]
 
-            st.session_state['additional_costs'] = pd.DataFrame(columns=['항목', '수량', '일수', '단가', '금액', '비고'])
+            # ▶ 부대비용 항목 복원 (메타데이터에서)
+            _saved_add_costs = _est_meta_detail.get('additional_costs', [])
+            if _saved_add_costs:
+                _add_df = pd.DataFrame(_saved_add_costs)
+                for _nc in ['수량', '일수', '단가', '금액']:
+                    if _nc in _add_df.columns:
+                        _add_df[_nc] = pd.to_numeric(_add_df[_nc], errors='coerce').fillna(0).astype(int)
+                st.session_state['additional_costs'] = _add_df
+            else:
+                st.session_state['additional_costs'] = pd.DataFrame(columns=['항목', '수량', '일수', '단가', '금액', '비고'])
             if '_est_saved' in st.session_state:
                 del st.session_state['_est_saved']
 
@@ -1824,6 +1846,19 @@ def show(data):
 
                             final_save_name = f_client if f_client else st.session_state.get('w_client', target_row.get('업체명', ''))
 
+                            # 부대비용 DataFrame → 리스트 (JSON 직렬화용)
+                            _save_add_costs = []
+                            if not _add_costs_df.empty:
+                                for _, _ar in _add_costs_df.iterrows():
+                                    _save_add_costs.append({
+                                        '항목': str(_ar.get('항목', '') or ''),
+                                        '수량': _safe_int(_ar.get('수량', 1)),
+                                        '일수': _safe_int(_ar.get('일수', 1)),
+                                        '단가': _safe_int(_ar.get('단가', 0)),
+                                        '금액': _safe_int(_ar.get('금액', 0)),
+                                        '비고': str(_ar.get('비고', '') or ''),
+                                    })
+
                             metadata = {
                                 "현장명": st.session_state.get('w_event', ''),
                                 "책임자": f_ref or target_row.get('담당자', ''),
@@ -1835,6 +1870,9 @@ def show(data):
                                 "식사": st.session_state.get('w_meal', ''),
                                 "주차": st.session_state.get('w_parking', ''),
                                 "특이사항": st.session_state.get('w_note', ''),
+                                "additional_costs": _save_add_costs,
+                                "discount_amt": _safe_int(st.session_state.get('discount_amt', 0)),
+                                "vat_yn": bool(vat_yn),
                             }
 
                             est_package = {
