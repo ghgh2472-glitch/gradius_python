@@ -326,19 +326,20 @@ def get_calendar_events(df_inq, df_dispatch=None):
                     return f"{m2.group(3)}-{m2.group(1).zfill(2)}-{m2.group(2).zfill(2)}"
                 return None
 
-            start_dt = _normalize_date(start_str)
-            end_dt = _normalize_date(end_str)
+            # 비연속 날짜 지원: "/" 구분자로 여러 기간이 있는 경우
+            start_segments = [s.strip() for s in start_str.split('/') if s.strip()] if '/' in start_str else [start_str]
+            end_segments = [s.strip() for s in end_str.split('/') if s.strip()] if '/' in end_str else [end_str]
+            # 시작/종료 세그먼트 수 맞추기
+            while len(end_segments) < len(start_segments):
+                end_segments.append(start_segments[len(end_segments)])
+            while len(start_segments) < len(end_segments):
+                start_segments.append(end_segments[len(start_segments)])
+            total_segments = len(start_segments)
 
-            if not start_dt: continue
-            if not end_dt: end_dt = start_dt
-            
-            # FullCalendar의 end는 exclusive → 1일 추가
-            try:
-                end_date_obj = datetime.strptime(end_dt, "%Y-%m-%d")
-                end_dt_exclusive = (end_date_obj + timedelta(days=1)).strftime("%Y-%m-%d")
-            except:
-                end_dt_exclusive = end_dt
-            
+            # 첫 번째 세그먼트가 유효한지 확인
+            first_start = _normalize_date(start_segments[0])
+            if not first_start: continue
+
             status = str(row.get(col_status, '')) if col_status else ''
             color = "#3B82F6"  # 기본: 파랑
             if "완료" in status or "정산" in status: color = "#059669"  # 녹색
@@ -378,12 +379,9 @@ def get_calendar_events(df_inq, df_dispatch=None):
                 if len(name_list) > 3:
                     names_str = ", ".join(name_list[:3]) + f" 외 {len(name_list)-3}명"
             
-            # 타이틀 구성
+            # 타이틀 기본 구성
             base_title = f"{client_name} ({event_name})" if client_name else str(event_name)
-            if not base_title.strip() or base_title.strip() == '()': base_title = f"행사 {start_dt}"
-            
             info_suffix = " | ".join(info_parts)
-            title = f"{base_title} [{info_suffix}]" if info_suffix else base_title
             
             # description (이벤트 클릭 시 표시)
             desc_parts = []
@@ -393,18 +391,45 @@ def get_calendar_events(df_inq, df_dispatch=None):
                 desc_parts.append(f"⏰ {time_str}")
             description = " / ".join(desc_parts) if desc_parts else ""
             
-            evt_obj = {
-                "title": title,
-                "start": start_dt, 
-                "end": end_dt_exclusive,
-                "backgroundColor": color, 
-                "borderColor": color, 
-                "allDay": True
-            }
-            if description:
-                evt_obj["extendedProps"] = {"description": description}
-            
-            events.append(evt_obj)
+            # 각 세그먼트(기간)별 이벤트 생성
+            for seg_idx in range(total_segments):
+                seg_start = _normalize_date(start_segments[seg_idx])
+                seg_end = _normalize_date(end_segments[seg_idx])
+                if not seg_start: continue
+                if not seg_end: seg_end = seg_start
+                
+                # FullCalendar의 end는 exclusive → 1일 추가
+                try:
+                    end_date_obj = datetime.strptime(seg_end, "%Y-%m-%d")
+                    end_dt_exclusive = (end_date_obj + timedelta(days=1)).strftime("%Y-%m-%d")
+                except:
+                    end_dt_exclusive = seg_end
+                
+                # 타이틀: 비연속 기간이면 순번 표기
+                if not base_title.strip() or base_title.strip() == '()':
+                    seg_base = f"행사 {seg_start}"
+                else:
+                    seg_base = base_title
+                
+                if total_segments > 1:
+                    seg_title = f"{seg_base} ({seg_idx+1}/{total_segments})"
+                else:
+                    seg_title = seg_base
+                
+                title = f"{seg_title} [{info_suffix}]" if info_suffix else seg_title
+                
+                evt_obj = {
+                    "title": title,
+                    "start": seg_start, 
+                    "end": end_dt_exclusive,
+                    "backgroundColor": color, 
+                    "borderColor": color, 
+                    "allDay": True
+                }
+                if description:
+                    evt_obj["extendedProps"] = {"description": description}
+                
+                events.append(evt_obj)
     except Exception as e:
         print(f"[Calendar] Error: {e}")
         pass
