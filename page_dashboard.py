@@ -91,13 +91,14 @@ def show(data):
     dispatch_data = db.get_dispatch()
     df_dispatch = dispatch_data.get('dispatch', pd.DataFrame())
     df_settlement = dispatch_data.get('settlement', pd.DataFrame())
+    df_payment = dispatch_data.get('payment', pd.DataFrame())
     
     # 1. KPI 계산
     kpi = ud.calculate_kpi(df_inq)
     settlement_overview = ud.get_settlement_overview(df_settlement)
     unpaid_df = ud.get_unpaid_list(df_inq)
     pending_df = ud.get_pending_list(df_inq)
-    operating_profit = ud.get_operating_profit(df_settlement, df_dispatch)
+    operating_profit = ud.get_operating_profit(df_settlement, df_dispatch, df_payment)
     conversion = ud.get_estimate_conversion_rate(df_inq)
     stale_estimates = ud.get_stale_estimates(df_inq)
     role_stats = ud.get_role_statistics(df_dispatch)
@@ -183,12 +184,21 @@ def show(data):
     
     # 3. KPI 카드 (고도화된 디자인) — 2행 구성
     st.subheader("📊 핵심 KPI")
-    col_s, col_p, col_u, col_r = st.columns(4)
+    col_supply, col_s, col_p, col_u, col_r = st.columns(5)
+    
+    with col_supply:
+        st.markdown(f"""
+        <div class="metric-card sales">
+            <div class="metric-label">📦 공급가액</div>
+            <div class="metric-value">{settlement_overview['공급가액']:,}</div>
+            <div class="metric-unit">원</div>
+        </div>
+        """, unsafe_allow_html=True)
     
     with col_s:
         st.markdown(f"""
         <div class="metric-card sales">
-            <div class="metric-label">💰 총 청구액 (공급가액)</div>
+            <div class="metric-label">💰 총청구액 (공급가+VAT)</div>
             <div class="metric-value">{settlement_overview['총청구액']:,}</div>
             <div class="metric-unit">원</div>
         </div>
@@ -430,12 +440,18 @@ def show(data):
                                     st.markdown(f"""<div style="background:#DCFCE7;color:#166534;padding:8px;border-radius:8px;text-align:center;font-weight:bold;">
                                         ✅ 배정완료<br/>{_p_staff_count}/{_p_need}명
                                     </div>""", unsafe_allow_html=True)
+                                elif _p_staff_count == 0:
+                                    st.markdown(f"""<div style="background:#FEE2E2;color:#991B1B;padding:8px;border-radius:8px;text-align:center;font-weight:bold;">
+                                        🔴 배정필요<br/>0/{_p_need}명
+                                    </div>""", unsafe_allow_html=True)
                                 else:
                                     st.markdown(f"""<div style="background:#FEF3C7;color:#92400E;padding:8px;border-radius:8px;text-align:center;font-weight:bold;">
-                                        ⚠️ 부족<br/>{_p_staff_count}/{_p_need}명
+                                        ⚠️ 배정중<br/>{_p_staff_count}/{_p_need}명
                                     </div>""", unsafe_allow_html=True)
                             else:
-                                st.metric("배정인원", f"{_p_staff_count}명")
+                                st.markdown(f"""<div style="background:#F3F4F6;color:#374151;padding:8px;border-radius:8px;text-align:center;font-weight:bold;">
+                                    👥 {_p_staff_count}명 배정
+                                </div>""", unsafe_allow_html=True)
                             if _est_amount > 0:
                                 st.metric("견적액", f"{_est_amount:,}원")
                 
@@ -575,7 +591,7 @@ def show(data):
     
     # 6. 탭 구성
     tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
-        "📊 분석", "🔥 긴급", "👥 인력", "💼 고객", "💰 정산", "📅 캘린더", "📋 리포트", "🤖 AI 분석", "💎 수익분석", "💸 미수금"
+        "📊 분석", "🔥 긴급", "👥 인력", "💼 고객", "💰 정산", "📅 캘린더", "📋 리포트", "🤖 AI 분석", "💎 수익분석", "💸 미지급 인건비"
     ])
     
     # [Tab 1] 분석 차트
@@ -714,10 +730,17 @@ def show(data):
                 
                 if need_count > 0:
                     assign_pct = min(100, int(staff_count / need_count * 100))
-                    assign_text = f"{staff_count}/{need_count}명 ({assign_pct}%)"
-                    assign_badge_color = "#10B981" if assign_pct >= 100 else "#F59E0B" if assign_pct >= 50 else "#EF4444"
+                    if assign_pct >= 100:
+                        assign_text = f"✅ {staff_count}/{need_count}명 배정완료"
+                        assign_badge_color = "#10B981"
+                    elif staff_count == 0:
+                        assign_text = f"🔴 0/{need_count}명 배정필요"
+                        assign_badge_color = "#EF4444"
+                    else:
+                        assign_text = f"⚠️ {staff_count}/{need_count}명 배정중"
+                        assign_badge_color = "#F59E0B"
                 else:
-                    assign_text = f"{staff_count}명"
+                    assign_text = f"{staff_count}명 배정"
                     assign_badge_color = "#6B7280"
                 
                 st.markdown(f"""
@@ -794,6 +817,7 @@ def show(data):
                         "미수금", format="%d원",
                         min_value=0, max_value=int(unpaid_cos['미수금액'].max())
                     ),
+                    "건수": st.column_config.NumberColumn("건수", format="%d건"),
                 },
                 use_container_width=True,
                 hide_index=True
@@ -1138,86 +1162,9 @@ def show(data):
         except Exception as e:
             st.warning(f"캘린더 렌더링 오류: {e}")
             st.info("대안으로 리스트 뷰를 표시합니다.")
-            cal_result = None
             if events:
                 for ev in events[:20]:
                     st.markdown(f"📅 **{ev.get('start', '')}** — {ev.get('title', '')}")
-        
-        # ── 이벤트 클릭 시 상세 카드 표시 ──
-        if cal_result and cal_result.get("eventClick"):
-            ev_click = cal_result["eventClick"]
-            ev_info = ev_click.get("event", {})
-            ext_props = ev_info.get("extendedProps", {})
-            ev_title = ev_info.get("title", "")
-            ev_start = ev_info.get("start", "")
-            
-            # 상세 정보 조회
-            detail = ud.get_event_detail_for_calendar(
-                df_inq, df_dispatch,
-                event_title=ev_title,
-                event_start=ev_start,
-                inq_id=ext_props.get("inq_id"),
-            )
-            
-            if detail:
-                d_status = detail.get('상태', '')
-                st_cfg = sc.STATUS_CONFIG.get(d_status, {})
-                st_icon = st_cfg.get('icon', '❓')
-                st_bg = st_cfg.get('bg', '#f3f4f6')
-                st_clr = st_cfg.get('color', '#6B7280')
-                
-                need = detail.get('필요인원', 0)
-                assigned = detail.get('배정인원', 0)
-                fill_pct = min(100, int(assigned / need * 100)) if need > 0 else (100 if assigned > 0 else 0)
-                assign_bar_color = "#10B981" if fill_pct >= 100 else "#F59E0B" if fill_pct >= 50 else "#EF4444"
-                
-                staff_names = ", ".join(detail.get('배정인력', [])) if detail.get('배정인력') else "배정 전"
-                
-                date_str = detail.get('시작일', '')
-                if detail.get('종료일') and detail.get('종료일') != detail.get('시작일'):
-                    date_str += f" ~ {detail.get('종료일')}"
-                
-                loc_str = detail.get('장소') or '장소미입력'
-                time_str = detail.get('시간', '')
-                service_str = detail.get('서비스', '')
-                note_str = detail.get('특이사항', '')
-                manager_str = detail.get('담당자', '')
-                contact_str = detail.get('연락처', '')
-                
-                extra_info = ""
-                if time_str:
-                    extra_info += f" | ⏰ {time_str}"
-                if service_str:
-                    extra_info += f" | 🏷️ {service_str}"
-                
-                manager_html = ""
-                if manager_str or contact_str:
-                    contact_part = f" | 📞 {contact_str}" if contact_str else ""
-                    manager_html = f'<div style="color:#6B7280;font-size:12px;margin-top:4px;">👤 <b>담당</b>: {manager_str}{contact_part}</div>'
-                
-                note_html = ""
-                if note_str:
-                    note_html = f'<div style="background:#FFFBEB;border-left:3px solid #F59E0B;padding:6px 10px;margin-top:6px;border-radius:4px;font-size:12px;color:#92400E;">📝 {note_str}</div>'
-                
-                card_html = f"""<div style="background:linear-gradient(135deg,#EFF6FF,#F0FDF4);border:2px solid #3B82F6;border-radius:12px;padding:18px;margin:12px 0;box-shadow:0 4px 12px rgba(59,130,246,0.15);">
-<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-<div>
-<span style="background:#3B82F6;color:white;padding:4px 10px;border-radius:6px;font-weight:bold;font-size:12px;margin-right:6px;">📌 선택된 일정</span>
-<b style="font-size:16px;color:#111827;">{detail.get('업체명','')} — {detail.get('행사명','')}</b>
-</div>
-<span style="background:{st_bg};color:{st_clr};padding:4px 10px;border-radius:6px;font-size:12px;font-weight:bold;">{st_icon} {d_status}</span>
-</div>
-<div style="color:#374151;font-size:13px;margin-bottom:6px;">📅 {date_str} | 📍 {loc_str}{extra_info}</div>
-<div style="margin:8px 0;">
-<span style="font-size:12px;color:#6B7280;margin-right:8px;">배정현황: {assigned}/{need}명</span>
-<div style="background:#E5E7EB;border-radius:10px;height:8px;width:100%;max-width:300px;display:inline-block;vertical-align:middle;"><div style="background:{assign_bar_color};height:100%;border-radius:10px;width:{fill_pct}%;"></div></div>
-<span style="font-size:11px;color:{assign_bar_color};font-weight:bold;margin-left:4px;">{fill_pct}%</span>
-</div>
-<div style="color:#374151;font-size:12px;">👥 <b>배정인력</b>: {staff_names}</div>
-{manager_html}
-{note_html}
-</div>"""
-                st.markdown(card_html, unsafe_allow_html=True)
         
         if not events:
             st.info("📅 표시할 행사 일정이 없습니다. 문의접수에서 행사시작일을 입력해주세요.")
@@ -1699,177 +1646,137 @@ def show(data):
             else:
                 st.info("정산 시트에 공급가액/지급액 컬럼이 필요합니다.")
 
-    # [Tab 10] 미수금 전용 탭
+    # [Tab 10] 미지급 인건비
     with tab10:
-        st.markdown('<div class="section-title">💸 미수금 관리</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-title">💸 미지급 인건비 현황</div>', unsafe_allow_html=True)
         
-        if not df_settlement.empty:
-            # ── KPI 카드 ──
-            settlement_ov = ud.get_settlement_overview(df_settlement)
-            unpaid_total = settlement_ov.get('미수금액', 0)
-            collection_rate = settlement_ov.get('수금률', 0)
-            unpaid_by_co = ud.get_unpaid_by_company(df_settlement)
-            unpaid_count = len(unpaid_by_co)
-            aging = ud.get_unpaid_aging(df_settlement)
+        # 배정기록에서 미지급 건 추출
+        if not df_dispatch.empty:
+            col_name = ud.find_col(df_dispatch, ["인력명", "이름", "성명"])
+            col_venue = ud.find_col(df_dispatch, ["현장명", "행사명"])
+            col_pay_amt = ud.find_col(df_dispatch, ["총지급액", "지급액"])
+            col_pay_status = ud.find_col(df_dispatch, ["지급상태", "급여상태"])
+            col_date = ud.find_col(df_dispatch, ["파견일자", "파견기간", "날짜"])
+            col_assign_id = ud.find_col(df_dispatch, ["배정ID"])
             
-            kp1, kp2, kp3, kp4 = st.columns(4)
-            with kp1:
-                st.markdown(f"""
-                <div style="background: linear-gradient(135deg, #FEF2F2, #FEE2E2); border-radius: 12px; padding: 16px; text-align: center; border: 1px solid #FECACA;">
-                    <div style="font-size: 11px; color: #DC2626;">💰 미수금 총액</div>
-                    <div style="font-size: 22px; font-weight: 800; color: #B91C1C;">{unpaid_total:,.0f}원</div>
-                </div>
-                """, unsafe_allow_html=True)
-            with kp2:
-                st.markdown(f"""
-                <div style="background: linear-gradient(135deg, #FFF7ED, #FFEDD5); border-radius: 12px; padding: 16px; text-align: center; border: 1px solid #FED7AA;">
-                    <div style="font-size: 11px; color: #EA580C;">🏢 미수 업체</div>
-                    <div style="font-size: 22px; font-weight: 800; color: #C2410C;">{unpaid_count}개사</div>
-                </div>
-                """, unsafe_allow_html=True)
-            with kp3:
-                rate_color = "#059669" if collection_rate >= 80 else "#D97706" if collection_rate >= 50 else "#DC2626"
-                st.markdown(f"""
-                <div style="background: linear-gradient(135deg, #F0FDF4, #DCFCE7); border-radius: 12px; padding: 16px; text-align: center; border: 1px solid #BBF7D0;">
-                    <div style="font-size: 11px; color: #059669;">📊 수금률</div>
-                    <div style="font-size: 22px; font-weight: 800; color: {rate_color};">{collection_rate:.1f}%</div>
-                </div>
-                """, unsafe_allow_html=True)
-            with kp4:
-                overdue_90 = aging.get('90일이상', 0)
-                overdue_90_amt = aging.get('90일이상_금액', 0)
-                ov_color = "#DC2626" if overdue_90 > 0 else "#059669"
-                st.markdown(f"""
-                <div style="background: linear-gradient(135deg, #FDF2F8, #FCE7F3); border-radius: 12px; padding: 16px; text-align: center; border: 1px solid #FBCFE8;">
-                    <div style="font-size: 11px; color: #DB2777;">⚠️ 장기미수 (90일+)</div>
-                    <div style="font-size: 22px; font-weight: 800; color: {ov_color};">{overdue_90}건</div>
-                    <div style="font-size: 10px; color: #9CA3AF;">{overdue_90_amt:,.0f}원</div>
-                </div>
-                """, unsafe_allow_html=True)
-            
-            st.markdown("<br>", unsafe_allow_html=True)
-            
-            # ── 경과일 분석 (Aging) ──
-            st.markdown("##### ⏳ 경과일 구간 분석")
-            ag1, ag2, ag3, ag4 = st.columns(4)
-            aging_items = [
-                ("30일 이내", aging.get('30일이내', 0), aging.get('30일이내_금액', 0), "#10B981", "#ECFDF5"),
-                ("30~60일", aging.get('30~60일', 0), aging.get('30~60일_금액', 0), "#F59E0B", "#FFFBEB"),
-                ("60~90일", aging.get('60~90일', 0), aging.get('60~90일_금액', 0), "#F97316", "#FFF7ED"),
-                ("90일 이상", aging.get('90일이상', 0), aging.get('90일이상_금액', 0), "#EF4444", "#FEF2F2"),
-            ]
-            for col, (label, cnt, amt, color, bg) in zip([ag1, ag2, ag3, ag4], aging_items):
-                with col:
-                    st.markdown(f"""
-                    <div style="background: {bg}; border: 2px solid {color}; border-radius: 10px; padding: 14px; text-align: center;">
-                        <div style="font-size: 12px; font-weight: 700; color: {color};">{label}</div>
-                        <div style="font-size: 20px; font-weight: 800; color: {color};">{cnt}건</div>
-                        <div style="font-size: 11px; color: #6B7280;">{amt:,.0f}원</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-            
-            # 경과일 파이 차트
-            if unpaid_total > 0:
-                aging_data = pd.DataFrame({
-                    '구간': ['30일이내', '30~60일', '60~90일', '90일이상'],
-                    '금액': [aging.get('30일이내_금액', 0), aging.get('30~60일_금액', 0),
-                             aging.get('60~90일_금액', 0), aging.get('90일이상_금액', 0)],
-                    '건수': [aging.get('30일이내', 0), aging.get('30~60일', 0),
-                             aging.get('60~90일', 0), aging.get('90일이상', 0)],
-                })
-                aging_data = aging_data[aging_data['금액'] > 0]
-                if not aging_data.empty:
-                    fig_aging = px.pie(
-                        aging_data, values='금액', names='구간',
-                        color='구간',
-                        color_discrete_map={'30일이내': '#10B981', '30~60일': '#F59E0B',
-                                            '60~90일': '#F97316', '90일이상': '#EF4444'},
-                        hole=0.4
-                    )
-                    fig_aging.update_layout(margin=dict(l=10, r=10, t=30, b=10), height=280,
-                                            title="경과일별 미수금 비중")
-                    st.plotly_chart(fig_aging, use_container_width=True)
-            
-            st.markdown("---")
-            
-            # ── 업체별 미수금 랭킹 ──
-            st.markdown("##### 🏆 업체별 미수금 현황")
-            if not unpaid_by_co.empty:
-                max_amt = unpaid_by_co['미수금액'].max() if not unpaid_by_co.empty else 1
+            if col_name and col_pay_amt:
+                _pay_df = df_dispatch.copy()
+                _pay_df['_지급액'] = _pay_df[col_pay_amt].apply(ud.safe_int)
                 
-                for _, co_row in unpaid_by_co.iterrows():
-                    co_name = co_row['업체']
-                    co_amt = co_row['미수금액']
-                    co_cnt = int(co_row['건수'])
-                    co_rate = co_row['수금률']
-                    bar_pct = min(100, int(co_amt / max_amt * 100)) if max_amt > 0 else 0
-                    
-                    rank = int(co_row['순위'])
-                    if rank == 1:
-                        rank_badge = "🥇"
-                    elif rank == 2:
-                        rank_badge = "🥈"
-                    elif rank == 3:
-                        rank_badge = "🥉"
+                # 지급액 > 0인 건만 대상
+                _pay_df = _pay_df[_pay_df['_지급액'] > 0].copy()
+                
+                if not _pay_df.empty:
+                    # 지급상태가 없거나 "미지급"/"대기"/"" 인 건 = 미지급
+                    if col_pay_status and col_pay_status in _pay_df.columns:
+                        _unpaid_mask = _pay_df[col_pay_status].astype(str).str.strip().isin(['', '미지급', '대기', 'nan', 'None'])
                     else:
-                        rank_badge = f"#{rank}"
+                        # 지급상태 컬럼 자체가 없으면 → 지급내역 시트와 대조
+                        _unpaid_mask = pd.Series([True] * len(_pay_df), index=_pay_df.index)
+                        if not df_payment.empty:
+                            col_paid_bid = ud.find_col(df_payment, ["배정ID"])
+                            col_paid_status = ud.find_col(df_payment, ["지급상태"])
+                            if col_paid_bid and col_paid_status:
+                                paid_ids = set(
+                                    df_payment[
+                                        df_payment[col_paid_status].astype(str).str.contains('완료|지급', na=False)
+                                    ][col_paid_bid].astype(str).str.strip().values
+                                )
+                                if col_assign_id and col_assign_id in _pay_df.columns:
+                                    _unpaid_mask = ~_pay_df[col_assign_id].astype(str).str.strip().isin(paid_ids)
                     
-                    rate_color = "#059669" if co_rate >= 80 else "#D97706" if co_rate >= 50 else "#DC2626"
+                    _unpaid_df = _pay_df[_unpaid_mask].copy()
                     
-                    st.markdown(f"""
-                    <div style="background: white; border: 1px solid #E5E7EB; border-radius: 8px; padding: 12px 16px;
-                                margin-bottom: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                            <div>
-                                <span style="font-size: 16px; margin-right: 6px;">{rank_badge}</span>
-                                <b style="font-size: 14px; color: #111827;">{co_name}</b>
-                                <span style="font-size: 11px; color: #9CA3AF; margin-left: 6px;">{co_cnt}건</span>
-                            </div>
-                            <div style="text-align: right;">
-                                <span style="font-size: 15px; font-weight: 800; color: #DC2626;">{co_amt:,.0f}원</span>
-                                <span style="font-size: 11px; color: {rate_color}; margin-left: 8px;">수금률 {co_rate}%</span>
-                            </div>
+                    # KPI 카드
+                    total_unpaid_pay = int(_unpaid_df['_지급액'].sum())
+                    total_unpaid_cnt = len(_unpaid_df)
+                    total_all_pay = int(_pay_df['_지급액'].sum())
+                    paid_cnt = len(_pay_df) - total_unpaid_cnt
+                    
+                    kp1, kp2, kp3, kp4 = st.columns(4)
+                    with kp1:
+                        st.markdown(f"""
+                        <div style="background: linear-gradient(135deg, #FEF2F2, #FEE2E2); border-radius: 12px; padding: 16px; text-align: center; border: 1px solid #FECACA;">
+                            <div style="font-size: 11px; color: #DC2626;">💸 미지급 총액</div>
+                            <div style="font-size: 22px; font-weight: 800; color: #B91C1C;">{total_unpaid_pay:,}원</div>
                         </div>
-                        <div style="background: #F3F4F6; border-radius: 6px; height: 6px; width: 100%;">
-                            <div style="background: linear-gradient(90deg, #EF4444, #F97316); height: 100%;
-                                        border-radius: 6px; width: {bar_pct}%;"></div>
+                        """, unsafe_allow_html=True)
+                    with kp2:
+                        st.markdown(f"""
+                        <div style="background: linear-gradient(135deg, #FFF7ED, #FFEDD5); border-radius: 12px; padding: 16px; text-align: center; border: 1px solid #FED7AA;">
+                            <div style="font-size: 11px; color: #EA580C;">👤 미지급 인원</div>
+                            <div style="font-size: 22px; font-weight: 800; color: #C2410C;">{total_unpaid_cnt}명</div>
                         </div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                        """, unsafe_allow_html=True)
+                    with kp3:
+                        st.markdown(f"""
+                        <div style="background: linear-gradient(135deg, #F0FDF4, #DCFCE7); border-radius: 12px; padding: 16px; text-align: center; border: 1px solid #BBF7D0;">
+                            <div style="font-size: 11px; color: #059669;">✅ 지급완료</div>
+                            <div style="font-size: 22px; font-weight: 800; color: #047857;">{paid_cnt}명</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    with kp4:
+                        pay_rate = int(paid_cnt / len(_pay_df) * 100) if len(_pay_df) > 0 else 0
+                        rate_color = "#059669" if pay_rate >= 80 else "#D97706" if pay_rate >= 50 else "#DC2626"
+                        st.markdown(f"""
+                        <div style="background: linear-gradient(135deg, #EFF6FF, #DBEAFE); border-radius: 12px; padding: 16px; text-align: center; border: 1px solid #BFDBFE;">
+                            <div style="font-size: 11px; color: #2563EB;">📊 지급률</div>
+                            <div style="font-size: 22px; font-weight: 800; color: {rate_color};">{pay_rate}%</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
+                    st.markdown("---")
+                    
+                    # 미지급 목록
+                    if not _unpaid_df.empty:
+                        st.markdown("##### 🚨 미지급 인력 목록")
+                        
+                        # 표시용 DataFrame 구성
+                        display_cols_map = {}
+                        if col_name: display_cols_map['인력명'] = col_name
+                        if col_venue: display_cols_map['현장명'] = col_venue
+                        if col_date: display_cols_map['파견일자'] = col_date
+                        display_cols_map['지급액'] = '_지급액'
+                        if col_pay_status and col_pay_status in _unpaid_df.columns:
+                            display_cols_map['지급상태'] = col_pay_status
+                        
+                        valid_cols = {k: v for k, v in display_cols_map.items() if v in _unpaid_df.columns}
+                        _disp_df = _unpaid_df[list(valid_cols.values())].copy()
+                        _disp_df.columns = list(valid_cols.keys())
+                        _disp_df = _disp_df.sort_values('지급액', ascending=False).reset_index(drop=True)
+                        
+                        col_config = {
+                            "지급액": st.column_config.NumberColumn("💰 지급액", format="%d원"),
+                        }
+                        
+                        st.dataframe(_disp_df, use_container_width=True, hide_index=True, column_config=col_config)
+                        
+                        st.markdown(f"""
+                        <div style="background: #FEF2F2; border-left: 4px solid #EF4444; padding: 12px; border-radius: 6px; margin-top: 10px;">
+                            <b>🚨 미지급 합계: ₩{total_unpaid_pay:,}</b> ({total_unpaid_cnt}명)
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        # 현장별 미지급 요약
+                        if col_venue and col_venue in _unpaid_df.columns:
+                            st.markdown("##### 📍 현장별 미지급 요약")
+                            _venue_summary = _unpaid_df.groupby(_unpaid_df[col_venue].astype(str).str.strip()).agg(
+                                인원=('_지급액', 'count'),
+                                미지급합계=('_지급액', 'sum'),
+                            ).reset_index()
+                            _venue_summary.columns = ['현장명', '인원', '미지급합계']
+                            _venue_summary = _venue_summary.sort_values('미지급합계', ascending=False).reset_index(drop=True)
+                            st.dataframe(
+                                _venue_summary, use_container_width=True, hide_index=True,
+                                column_config={
+                                    "미지급합계": st.column_config.NumberColumn("💰 미지급합계", format="%d원"),
+                                }
+                            )
+                    else:
+                        st.success("🎉 미지급 인건비 없음! 모든 급여가 지급 완료되었습니다.")
+                else:
+                    st.info("💡 지급 대상 배정 기록이 없습니다.")
             else:
-                st.info("미수금이 있는 업체가 없습니다. 🎉")
-            
-            st.markdown("---")
-            
-            # ── 미수금 상세 목록 ──
-            st.markdown("##### 📋 미수금 상세 내역")
-            unpaid_detail = ud.get_unpaid_detail(df_settlement)
-            if not unpaid_detail.empty:
-                # 검색 필터
-                up_c1, up_c2 = st.columns([1, 3])
-                with up_c1:
-                    unpaid_search = st.text_input("🔎 업체 검색", key="unpaid_search", placeholder="업체명 입력")
-                
-                if unpaid_search:
-                    q = unpaid_search.lower()
-                    unpaid_detail = unpaid_detail[unpaid_detail['업체'].astype(str).str.lower().str.contains(q, na=False)]
-                
-                st.caption(f"총 {len(unpaid_detail)}건 | 합계: {unpaid_detail['미수금액'].sum():,.0f}원")
-                
-                # 숫자 컬럼 포맷팅
-                display_df = unpaid_detail.copy()
-                for nc in ['청구금액', '받은금액', '미수금액']:
-                    if nc in display_df.columns:
-                        display_df[nc] = display_df[nc].apply(lambda x: f"{x:,.0f}" if pd.notna(x) and x != 0 else "")
-                
-                st.dataframe(display_df, use_container_width=True, hide_index=True, height=400)
-            else:
-                st.info("미수금 상세 내역이 없습니다.")
-            
-            # ── 장기미수 경고 ──
-            if aging.get('90일이상', 0) > 0:
-                st.markdown("---")
-                st.markdown("##### 🚨 장기미수 경고 (90일 이상)")
-                st.warning(f"90일 이상 미수금이 **{aging['90일이상']}건 / {aging['90일이상_금액']:,.0f}원** 있습니다. 조속한 수금 조치가 필요합니다.")
+                st.warning("⚠️ 배정기록에 인력명/지급액 컬럼이 필요합니다.")
         else:
-            st.info("💸 정산 데이터가 없습니다. 정산 시트에 데이터를 등록해주세요.")
+            st.info("📋 배정 기록이 없습니다.")

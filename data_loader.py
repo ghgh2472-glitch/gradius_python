@@ -379,6 +379,7 @@ def get_dispatch():
             st.session_state['_dispatch_data'] = {
                 "dispatch": app_data['dispatch'],
                 "settlement": app_data.get('settlement', pd.DataFrame()),
+                "payment": app_data.get('payment', pd.DataFrame()),
             }
             # 배정기록 시트 컨텍스트 프리-워밍
             try:
