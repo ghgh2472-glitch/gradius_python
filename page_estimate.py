@@ -338,20 +338,17 @@ def show(data):
     if 'est_items' not in st.session_state:
         st.session_state['est_items'] = pd.DataFrame(columns=['품목','규격','수량','일수','매출단가','매입단가','할인액','매출합계','매입합계','비고'])
     if 'w_client' not in st.session_state:
-        # 탭 전환으로 인한 위젯 키 소실인지 확인 (백업 존재 시 초기화 건너뜀 → 복원 코드에서 처리)
-        if '_bak_w_client' not in st.session_state:
-            st.session_state.update({
-                'w_client': '', 'w_event': '', 'w_loc': '', 'w_manager': '', 'w_contact': '',
-                'w_qty': 1, 'w_sdate': None, 'w_edate': None,
-                'w_date_periods': [],
-                'w_date_text': '',  # 날짜 직접입력 텍스트 (예: '날짜미정', '3월중')
-                'w_time_in': datetime.strptime("09:00", "%H:%M").time(),
-                'w_time_out': datetime.strptime("18:00", "%H:%M").time(),
-                'w_time_mode': '출퇴근 지정',  # '출퇴근 지정' | '시간 기준'
-                'w_hour_base': 8,
-                'w_terms_top': get_default_terms_top(),
-                'w_terms_side': get_default_terms_side()
-            })
+        st.session_state.update({
+            'w_client': '', 'w_event': '', 'w_loc': '', 'w_manager': '', 'w_contact': '',
+            'w_qty': 1, 'w_sdate': None, 'w_edate': None,
+            'w_date_periods': [],
+            'w_time_in': datetime.strptime("09:00", "%H:%M").time(),
+            'w_time_out': datetime.strptime("18:00", "%H:%M").time(),
+            'w_time_mode': '출퇴근 지정',  # '출퇴근 지정' | '시간 기준'
+            'w_hour_base': 8,
+            'w_terms_top': get_default_terms_top(),
+            'w_terms_side': get_default_terms_side()
+        })
 
     # ================================================================
     # 프로젝트 선택 시 데이터 로드
@@ -510,7 +507,7 @@ def show(data):
             # 이전 세대 위젯 키 정리
             for _sk in list(st.session_state.keys()):
                 if any(_sk.startswith(p) for p in ['final_client_', 'final_manager_', 'final_contact_', 'final_loc_',
-                                                     'final_date_', 'final_edit_table_', 'est_items_editor_', 'additional_costs_editor_']):
+                                                     'final_edit_table_', 'est_items_editor_', 'additional_costs_editor_']):
                     _keys_to_del.append(_sk)
             # 견적안 캐시 무효화 (프로젝트 전환 시)
             for _ck in list(st.session_state.keys()):
@@ -573,13 +570,14 @@ def show(data):
             'w_sdate': str(st.session_state.get('w_sdate', '')),
             'w_edate': str(st.session_state.get('w_edate', '')),
             'w_date_periods': _period_strs,
-            'w_date_text': _safe_str(st.session_state.get('w_date_text')),
             'w_qty': int(st.session_state.get('w_qty', 1)),
             'w_dress': _safe_str(st.session_state.get('w_dress')),
             'w_meal': _safe_str(st.session_state.get('w_meal')),
             'w_parking': _safe_str(st.session_state.get('w_parking')),
             'w_note': _safe_str(st.session_state.get('w_note')),
             'additional_costs': _add_costs,
+            'discount_amt': _safe_int(st.session_state.get('discount_amt', 0)),
+            'vat_yn': bool(st.session_state.get('vat_yn', True)),
         }
 
     def _restore_metadata(meta):
@@ -592,9 +590,6 @@ def show(data):
                 st.session_state[_k] = _safe_str(meta[_k])
         if 'w_qty' in meta:
             st.session_state['w_qty'] = int(meta.get('w_qty', 1))
-        # 날짜 직접입력 텍스트 복원
-        if 'w_date_text' in meta:
-            st.session_state['w_date_text'] = _safe_str(meta.get('w_date_text'))
         # 날짜 복원
         _periods = meta.get('w_date_periods', [])
         _restored = []
@@ -613,10 +608,20 @@ def show(data):
         # 부대비용 복원
         _add_costs = meta.get('additional_costs', [])
         if _add_costs:
-            st.session_state['additional_costs'] = pd.DataFrame(_add_costs)
+            _add_df = pd.DataFrame(_add_costs)
+            for _nc in ['수량', '일수', '단가', '금액']:
+                if _nc in _add_df.columns:
+                    _add_df[_nc] = pd.to_numeric(_add_df[_nc], errors='coerce').fillna(0).astype(int)
+            st.session_state['additional_costs'] = _add_df
         elif 'additional_costs' in meta:
             # 메타에 키가 있지만 비어있으면 초기화
             st.session_state['additional_costs'] = pd.DataFrame(columns=['항목', '수량', '일수', '단가', '금액', '비고'])
+        # 할인액 복원
+        if 'discount_amt' in meta:
+            st.session_state['discount_amt'] = _safe_int(meta['discount_amt'])
+        # VAT 포함여부 복원
+        if 'vat_yn' in meta:
+            st.session_state['vat_yn'] = bool(meta['vat_yn'])
         # 날짜 위젯 키 설정
         if _restored:
             st.session_state['w_sdate'] = _restored[0][0]
@@ -719,8 +724,7 @@ def show(data):
     # TAB1 떠날 때 백업, 돌아올 때 복원
     # (1) 위젯 키 (TAB1에서만 렌더되므로 탭 이동 시 Streamlit이 삭제)
     _widget_keys = ['w_client', 'w_event', 'w_loc', 'w_manager', 'w_contact',
-                    'w_qty', 'w_time_in', 'w_time_out', 'w_dress', 'w_meal', 'w_parking', 'w_note',
-                    '_date_input_mode', 'w_date_text']
+                    'w_qty', 'w_time_in', 'w_time_out', 'w_dress', 'w_meal', 'w_parking', 'w_note']
     # (2) 상속 데이터 키 (위젯이 아닌 순수 세션값이지만, 안전하게 백업)
     _data_keys = ['w_sdate', 'w_edate', 'w_date_periods', 'w_time_mode', 'w_hour_base',
                   '_current_inq_id', 'last_project']
@@ -742,10 +746,8 @@ def show(data):
         # TAB1 진입 → 백업값 복원 (위젯이 아직 렌더 전이라 키를 미리 설정)
         for _bk in _all_backup_keys:
             _bak_key = f'_bak_{_bk}'
-            if _bak_key in st.session_state:
-                # 백업이 있으면 항상 복원 (초기화 블록이 건너뛰어졌으므로 키가 없을 수 있음)
-                if _bk not in st.session_state:
-                    st.session_state[_bk] = st.session_state[_bak_key]
+            if _bak_key in st.session_state and _bk not in st.session_state:
+                st.session_state[_bk] = st.session_state[_bak_key]
         # DataFrame 복원
         if '_bak_est_items' in st.session_state and 'est_items' not in st.session_state:
             st.session_state['est_items'] = st.session_state['_bak_est_items'].copy()
@@ -766,7 +768,7 @@ def show(data):
             pi2.text_input("행사명", key="w_event")
             pi3.text_input("장소 (현장주소)", key="w_loc")
 
-            # ── 날짜 입력 (달력 / 직접입력 모드) ──
+            # ── 다중 기간 입력 ──
             if 'w_date_periods' not in st.session_state:
                 _init_s = st.session_state.get('w_sdate')
                 _init_e = st.session_state.get('w_edate')
@@ -774,106 +776,66 @@ def show(data):
                     st.session_state['w_date_periods'] = [(_init_s, _init_e)]
                 else:
                     st.session_state['w_date_periods'] = []
-            if 'w_date_text' not in st.session_state:
-                st.session_state['w_date_text'] = ''
-
-            # 날짜 입력 모드 선택
-            _date_mode_col1, _date_mode_col2 = st.columns([1, 3])
-            with _date_mode_col1:
-                _date_input_mode = st.radio(
-                    "📅 날짜 입력 방식",
-                    ["📅 달력 선택", "✏️ 직접 입력"],
-                    key="_date_input_mode",
-                    horizontal=True,
-                    label_visibility="collapsed",
-                    index=1 if st.session_state.get('w_date_text', '') else 0
-                )
-            with _date_mode_col2:
-                if _date_input_mode == "✏️ 직접 입력":
-                    st.caption("💡 '날짜미정', '3월중', '2026년 상반기' 등 자유롭게 입력 가능")
-                else:
-                    st.caption("💡 달력에서 시작일/종료일을 선택하세요")
-
+            
+            # 날짜 미설정 시 안내
+            if not st.session_state['w_date_periods']:
+                st.info("📅 프로젝트를 선택하면 날짜가 자동으로 설정됩니다. 직접 추가하려면 아래 버튼을 클릭하세요.")
+            
             calc_days = 0
-
-            if _date_input_mode == "✏️ 직접 입력":
-                # 직접 입력 모드: 자유 텍스트
-                _date_text = st.text_input(
-                    "📅 날짜/기간 (직접 입력)",
-                    key="w_date_text",
-                    placeholder="예: 날짜미정, 3월중, 2026년 3월 15일~20일, 추후협의"
-                )
-                if _date_text:
-                    st.info(f"📅 입력된 날짜: **{_date_text}**")
-                else:
-                    st.info("📅 날짜/기간을 텍스트로 입력해주세요.")
-                # 직접 입력 모드에서는 일수를 수동 지정
-                _manual_days = st.number_input("📅 일수 (견적 계산용)", min_value=0, value=max(1, calc_days), step=1, key="_manual_calc_days",
-                                              help="직접 입력 모드에서는 견적 계산에 사용할 일수를 직접 지정하세요. 0이면 일수 미정.")
-                calc_days = _manual_days
-            else:
-                # 달력 선택 모드 (기존 로직)
-                # 날짜 미설정 시 안내
-                if not st.session_state['w_date_periods']:
-                    st.info("📅 프로젝트를 선택하면 날짜가 자동으로 설정됩니다. 직접 추가하려면 아래 버튼을 클릭하세요.")
-                # 달력 모드 진입 시 직접입력 텍스트 초기화
-                if st.session_state.get('w_date_text', ''):
-                    st.session_state['w_date_text'] = ''
-
-                periods_to_keep = []
-                for _pi, (_ps, _pe) in enumerate(st.session_state['w_date_periods']):
-                    # 세션에 위젯 키가 없을 때만 초기값 설정 (value와 key 동시 사용 경고 방지)
-                    if f'dp_s_{_pi}' not in st.session_state:
-                        st.session_state[f'dp_s_{_pi}'] = _ps
-                    if f'dp_e_{_pi}' not in st.session_state:
-                        st.session_state[f'dp_e_{_pi}'] = _pe
-                    _dc1, _dc2, _dc3, _dc4 = st.columns([1, 1, 0.5, 0.3])
-                    with _dc1:
-                        _new_s = st.date_input(f"시작일" if _pi == 0 else f"시작일 {_pi+1}", key=f"dp_s_{_pi}")
-                    with _dc2:
-                        _new_e = st.date_input(f"종료일" if _pi == 0 else f"종료일 {_pi+1}", key=f"dp_e_{_pi}")
-                    # None 방어
-                    if _new_s is None: _new_s = _ps
-                    if _new_e is None: _new_e = _pe
-                    with _dc3:
-                        try:
-                            _p_days = max(1, (_new_e - _new_s).days + 1)
-                        except (TypeError, AttributeError):
-                            _p_days = 1
-                        st.markdown(f"<div style='padding-top:28px;font-size:14px;font-weight:bold;'>{_p_days}일</div>", unsafe_allow_html=True)
-                    with _dc4:
-                        if _pi > 0:
-                            if st.button("🗑️", key=f"dp_del_{_pi}", help="이 기간 삭제"):
-                                st.session_state['w_date_periods'] = [p for j, p in enumerate(st.session_state['w_date_periods']) if j != _pi]
-                                st.rerun()
-                    calc_days += _p_days
-                    periods_to_keep.append((_new_s, _new_e))
-                
-                st.session_state['w_date_periods'] = periods_to_keep
-                # 첫 기간 값을 w_sdate/w_edate에도 동기화
-                if periods_to_keep:
-                    st.session_state['w_sdate'] = periods_to_keep[0][0]
-                    st.session_state['w_edate'] = periods_to_keep[-1][1]
-                
-                _add_col1, _add_col2, _add_col3 = st.columns([0.3, 1, 2])
-                with _add_col1:
-                    st.write("")  # 사이드바와 간격
-                with _add_col2:
-                    if st.button("➕ 기간 추가", key="add_period_btn"):
-                        if st.session_state['w_date_periods']:
-                            last_end = st.session_state['w_date_periods'][-1][1]
-                            new_start = last_end + timedelta(days=2) if last_end else date.today()
-                            new_end = new_start
-                        else:
-                            new_start = date.today() + timedelta(days=7)
-                            new_end = new_start
-                        st.session_state['w_date_periods'].append((new_start, new_end))
-                        st.rerun()
-                with _add_col3:
-                    if len(st.session_state['w_date_periods']) > 1:
-                        st.caption(f"📅 전체 {len(st.session_state['w_date_periods'])}개 기간, 총 **{calc_days}일**")
+            periods_to_keep = []
+            for _pi, (_ps, _pe) in enumerate(st.session_state['w_date_periods']):
+                # 세션에 위젯 키가 없을 때만 초기값 설정 (value와 key 동시 사용 경고 방지)
+                if f'dp_s_{_pi}' not in st.session_state:
+                    st.session_state[f'dp_s_{_pi}'] = _ps
+                if f'dp_e_{_pi}' not in st.session_state:
+                    st.session_state[f'dp_e_{_pi}'] = _pe
+                _dc1, _dc2, _dc3, _dc4 = st.columns([1, 1, 0.5, 0.3])
+                with _dc1:
+                    _new_s = st.date_input(f"시작일" if _pi == 0 else f"시작일 {_pi+1}", key=f"dp_s_{_pi}")
+                with _dc2:
+                    _new_e = st.date_input(f"종료일" if _pi == 0 else f"종료일 {_pi+1}", key=f"dp_e_{_pi}")
+                # None 방어
+                if _new_s is None: _new_s = _ps
+                if _new_e is None: _new_e = _pe
+                with _dc3:
+                    try:
+                        _p_days = max(1, (_new_e - _new_s).days + 1)
+                    except (TypeError, AttributeError):
+                        _p_days = 1
+                    st.markdown(f"<div style='padding-top:28px;font-size:14px;font-weight:bold;'>{_p_days}일</div>", unsafe_allow_html=True)
+                with _dc4:
+                    if _pi > 0:
+                        if st.button("🗑️", key=f"dp_del_{_pi}", help="이 기간 삭제"):
+                            st.session_state['w_date_periods'] = [p for j, p in enumerate(st.session_state['w_date_periods']) if j != _pi]
+                            st.rerun()
+                calc_days += _p_days
+                periods_to_keep.append((_new_s, _new_e))
+            
+            st.session_state['w_date_periods'] = periods_to_keep
+            # 첫 기간 값을 w_sdate/w_edate에도 동기화
+            if periods_to_keep:
+                st.session_state['w_sdate'] = periods_to_keep[0][0]
+                st.session_state['w_edate'] = periods_to_keep[-1][1]
+            
+            _add_col1, _add_col2, _add_col3 = st.columns([0.3, 1, 2])
+            with _add_col1:
+                st.write("")  # 사이드바와 간격
+            with _add_col2:
+                if st.button("➕ 기간 추가", key="add_period_btn"):
+                    if st.session_state['w_date_periods']:
+                        last_end = st.session_state['w_date_periods'][-1][1]
+                        new_start = last_end + timedelta(days=2) if last_end else date.today()
+                        new_end = new_start
                     else:
-                        st.caption(f"📅 총 **{calc_days}일** (비연속 기간이면 '기간 추가' 버튼 클릭)")
+                        new_start = date.today() + timedelta(days=7)
+                        new_end = new_start
+                    st.session_state['w_date_periods'].append((new_start, new_end))
+                    st.rerun()
+            with _add_col3:
+                if len(st.session_state['w_date_periods']) > 1:
+                    st.caption(f"📅 전체 {len(st.session_state['w_date_periods'])}개 기간, 총 **{calc_days}일**")
+                else:
+                    st.caption(f"📅 총 **{calc_days}일** (비연속 기간이면 '기간 추가' 버튼 클릭)")
 
             xi1, xi2, xi3, xi4 = st.columns(4)
             xi1.text_input("👔 복장", key="w_dress", placeholder="예: 정장, 캐주얼, 유니폼")
@@ -1408,20 +1370,13 @@ def show(data):
         # 우측: 합계 → 품목리스트 → 단가조정 → 부대비용리스트
         # ────────────────────────────────────
         with col_result:
-            # ▶ 부가세 포함 여부 토글
-            vat_included = st.checkbox("부가세(VAT) 포함", value=st.session_state.get('est_vat_included', True), key="est_vat_included")
-
             # ▶ 합계 요약 박스 (항상 최상단)
             supply_sum = int(st.session_state['est_items']['매출합계'].sum()) if not st.session_state['est_items'].empty else 0
             cost_sum = int(st.session_state['est_items']['매입합계'].sum()) if not st.session_state['est_items'].empty else 0
             total_additional = int(st.session_state['additional_costs']['금액'].sum()) if not st.session_state.get('additional_costs', pd.DataFrame()).empty and '금액' in st.session_state.get('additional_costs', pd.DataFrame()).columns else 0
-            vat_val = int((supply_sum + total_additional) * 0.1) if vat_included else 0
+            vat_val = int((supply_sum + total_additional) * 0.1)
             profit_val = supply_sum - cost_sum
             margin_pct = (profit_val / supply_sum * 100) if supply_sum > 0 else 0
-
-            vat_label = f"부가세(10%): {vat_val:,}원 <span style='font-size:11px;color:#999;'>(공급가+부대비용)</span>" if vat_included else "부가세: 별도"
-            total_label = f"합계 {supply_sum + total_additional + vat_val:,}원"
-            total_sub = f"<span style='font-size:13px;color:#666;'>(VAT {vat_val:,}원 포함)</span>" if vat_included else "<span style='font-size:13px;color:#e67e22;'>(VAT 별도)</span>"
 
             st.markdown(f"""
                 <div class="result-box">
@@ -1431,7 +1386,7 @@ def show(data):
                     </div>
                     <div style="display:flex; justify-content:space-between; font-size:13px; color:#c2410c; margin-top:2px;">
                         <span>부대비용: {total_additional:,}원</span>
-                        <span>{vat_label}</span>
+                        <span>부가세(10%): {vat_val:,}원 <span style="font-size:11px;color:#999;">(공급가+부대비용)</span></span>
                     </div>
                     <hr style="margin:8px 0;">
                     <div style="display:flex; justify-content:space-between; font-size:14px; color:#064e3b; margin-bottom:5px;">
@@ -1439,8 +1394,8 @@ def show(data):
                         <span style="font-size:11px;color:#888;">부대비용은 실비 정산</span>
                     </div>
                     <div style="font-size:24px;font-weight:900;color:#064e3b;">
-                        {total_label}
-                        {total_sub}
+                        합계 {supply_sum + total_additional + vat_val:,}원
+                        <span style="font-size:13px;color:#666;">(VAT {vat_val:,}원 포함)</span>
                     </div>
                 </div>
             """, unsafe_allow_html=True)
@@ -1695,35 +1650,18 @@ def show(data):
                 _ck_contact = f"final_contact_{_g}"
                 _ck_loc = f"final_loc_{_g}"
                 if _ck_client not in st.session_state:
-                    st.session_state[_ck_client] = _safe_str(st.session_state.get('w_client') or st.session_state.get('_bak_w_client'))
+                    st.session_state[_ck_client] = _safe_str(st.session_state.get('w_client'))
                 if _ck_manager not in st.session_state:
-                    st.session_state[_ck_manager] = _safe_str(st.session_state.get('w_manager') or st.session_state.get('_bak_w_manager'))
+                    st.session_state[_ck_manager] = _safe_str(st.session_state.get('w_manager'))
                 if _ck_contact not in st.session_state:
-                    st.session_state[_ck_contact] = _safe_str(st.session_state.get('w_contact') or st.session_state.get('_bak_w_contact'))
+                    st.session_state[_ck_contact] = _safe_str(st.session_state.get('w_contact'))
                 if _ck_loc not in st.session_state:
-                    st.session_state[_ck_loc] = _safe_str(st.session_state.get('w_loc') or st.session_state.get('_bak_w_loc'))
+                    st.session_state[_ck_loc] = _safe_str(st.session_state.get('w_loc'))
                 f_client = st.text_input("상호", key=_ck_client)
                 c_1, c_2 = st.columns(2)
                 f_ref = c_1.text_input("참조 (담당자)", key=_ck_manager)
                 f_tel = c_2.text_input("연락처", key=_ck_contact)
                 f_addr = st.text_input("주소 (현장)", key=_ck_loc)
-
-                # ── 날짜/기간 직접 편집 ──
-                _ck_date = f"final_date_{_g}"
-                if _ck_date not in st.session_state:
-                    # w_date_text가 있으면 우선 사용, 없으면 기간에서 생성
-                    _existing_date_text = _safe_str(st.session_state.get('w_date_text') or st.session_state.get('_bak_w_date_text'))
-                    if _existing_date_text:
-                        st.session_state[_ck_date] = _existing_date_text
-                    else:
-                        _periods = st.session_state.get('w_date_periods', [])
-                        if _periods:
-                            st.session_state[_ck_date] = " / ".join([f"{p[0]} ~ {p[1]}" for p in _periods if p[0] and p[1]])
-                        else:
-                            st.session_state[_ck_date] = ''
-                f_date = st.text_input("📅 날짜/기간", key=_ck_date,
-                                       placeholder="예: 2026-03-15 ~ 2026-03-20, 날짜미정, 3월중",
-                                       help="달력 날짜 또는 '날짜미정', '3월중' 등 자유롭게 입력 가능")
 
             st.caption("📋 리스트 수정")
             # 할인액 컬럼 호환
@@ -1855,7 +1793,7 @@ def show(data):
             st.markdown('<div class="action-bar"></div>', unsafe_allow_html=True)
             b1, b2, b3 = st.columns([0.8, 1.2, 1])
             with b1:
-                vat_yn = st.checkbox("VAT 포함", value=st.session_state.get('est_vat_included', True), key="pub_vat_yn")
+                vat_yn = st.checkbox("VAT 포함", value=True, key="vat_yn")
                 discount_amt = st.number_input("💸 할인금액", min_value=0, step=10000, value=0, key="discount_amt", help="견적 총액에서 차감할 할인 금액")
             with b2:
                 banner_b64 = load_local_banner()
@@ -1933,19 +1871,12 @@ def show(data):
             _preview_mask = _preview_df['품목'].fillna('').astype(str).str.strip() != ''
             _preview_df = _preview_df[_preview_mask].reset_index(drop=True)
             final_supply = _preview_df['매출합계'].sum() if not _preview_df.empty else 0
-            # 다중 기간이면 / 구분자로 표시, TAB2 편집 필드 우선
-            if f_date and f_date.strip():
-                date_range_txt = f_date.strip()
+            # 다중 기간이면 / 구분자로 표시
+            _periods = st.session_state.get('w_date_periods', [])
+            if _periods:
+                date_range_txt = " / ".join([f"{p[0]} ~ {p[1]}" for p in _periods if p[0] and p[1]])
             else:
-                _date_text = _safe_str(st.session_state.get('w_date_text'))
-                if _date_text:
-                    date_range_txt = _date_text
-                else:
-                    _periods = st.session_state.get('w_date_periods', [])
-                    if _periods:
-                        date_range_txt = " / ".join([f"{p[0]} ~ {p[1]}" for p in _periods if p[0] and p[1]])
-                    else:
-                        date_range_txt = "날짜 미설정"
+                date_range_txt = "날짜 미설정"
 
             additional_costs_df = st.session_state.get('additional_costs', pd.DataFrame())
             if not additional_costs_df.empty:
