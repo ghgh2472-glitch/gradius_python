@@ -1022,10 +1022,13 @@ def save_estimate_details(est_data, metadata=None):
                 row_data[col_idx] = metadata.get('특이사항', '')
             elif header == "부대비용":
                 row_data[col_idx] = int(est_data.get('부대비용', 0))
-            elif "기록" in header or "일시" in header:
+            elif header == "기록일시":
                 row_data[col_idx] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             elif header in ["메모", "비고", "Notes", "Meta"]:
                 row_data[col_idx] = metadata_json
+            elif header.startswith("발송"):
+                # 발송여부/발송일시/발송방법/발송메모 — 기존 값 유지 (견적 저장 시 덮어쓰지 않음)
+                pass
             else:
                 # 기존 값 유지 (빈 값으로 덮어쓰지 않음)
                 pass
