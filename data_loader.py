@@ -2506,7 +2506,7 @@ def delete_estimate_version(inquiry_id: str, version_name: str):
 # ---------------------------------------------------------
 
 # 견적품목 표준 헤더 (save/load 동기화)
-_ESTIMATE_ITEMS_HEADERS = ['품목ID', '문의ID', '직군명', '수량', '일수', '매출단가', '매입단가', '규격', '비고', '팀장여부', '할인액']
+_ESTIMATE_ITEMS_HEADERS = ['품목ID', '문의ID', '직군명', '수량', '일수', '매출단가', '매입단가', '규격', '비고', '팀장여부', '할인액', '구분']
 
 
 def _safe_num(val, default=0):
@@ -2524,8 +2524,8 @@ def _safe_num(val, default=0):
         return default
 
 
-def save_estimate_items(inquiry_id: str, items_df):
-    """견적품목 시트에 직군별 품목 저장 (기존 항목 삭제 후 재작성)"""
+def save_estimate_items(inquiry_id: str, items_df, additional_costs_df=None):
+    """견적품목 시트에 직군별 품목 + 부대비용 저장 (기존 항목 삭제 후 재작성)"""
     client = get_connection()
     if not client:
         return False
@@ -2552,6 +2552,7 @@ def save_estimate_items(inquiry_id: str, items_df):
         # 새 품목 추가 — 배치 1회 API 호출 (방안 E)
         next_row = len(rows_to_keep) + 1
         batch_rows = []
+        # ── 인력 품목 ──
         for idx, item in items_df.iterrows():
             item_id = f"I-{datetime.now().strftime('%y%m%d')}-{str(uuid4())[:4]}"
             role_name = str(item.get('품목', '')).replace('[팀장]', '').strip()
@@ -2568,14 +2569,38 @@ def save_estimate_items(inquiry_id: str, items_df):
                 str(item.get('비고', '') if pd.notna(item.get('비고', '')) else ''),
                 '팀장' if '[팀장]' in str(item.get('품목', '')) else '',
                 _safe_num(item.get('할인액', 0)),
+                '인력',
             ]
             batch_rows.append(row)
         
-        if batch_rows:
-            end_row = next_row + len(batch_rows) - 1
-            wks.update(f'A{next_row}:K{end_row}', batch_rows, value_input_option='RAW')
+        # ── 부대비용 품목 ──
+        if additional_costs_df is not None and not additional_costs_df.empty:
+            for _, ac in additional_costs_df.iterrows():
+                ac_id = f"A-{datetime.now().strftime('%y%m%d')}-{str(uuid4())[:4]}"
+                row = [
+                    ac_id,
+                    str(inquiry_id),
+                    str(ac.get('항목', '') or ''),           # 직군명 → 항목명
+                    _safe_num(ac.get('수량', 1)),
+                    _safe_num(ac.get('일수', 1)),
+                    _safe_num(ac.get('단가', 0)),             # 매출단가 → 단가
+                    0,                                        # 매입단가 (부대비용은 매입 없음)
+                    '',                                       # 규격
+                    str(ac.get('비고', '') or ''),
+                    '',                                       # 팀장여부
+                    0,                                        # 할인액
+                    '부대비용',                                # 구분
+                ]
+                batch_rows.append(row)
         
-        print(f"✅ 견적품목 저장: {inquiry_id} - {len(items_df)}개 품목 (배치 1회)")
+        if batch_rows:
+            col_cnt = len(_ESTIMATE_ITEMS_HEADERS)  # 12 (A~L)
+            end_col = chr(ord('A') + col_cnt - 1)   # 'L'
+            end_row = next_row + len(batch_rows) - 1
+            wks.update(f'A{next_row}:{end_col}{end_row}', batch_rows, value_input_option='RAW')
+        
+        _ac_cnt = len(additional_costs_df) if additional_costs_df is not None and not additional_costs_df.empty else 0
+        print(f"✅ 견적품목 저장: {inquiry_id} - 인력 {len(items_df)}개 + 부대비용 {_ac_cnt}개 (배치 1회)")
         return True
     except Exception as e:
         print(f"❌ save_estimate_items 오류: {e}")
@@ -2583,8 +2608,13 @@ def save_estimate_items(inquiry_id: str, items_df):
 
 
 @st.cache_data(ttl=120)
-def load_estimate_items(inquiry_id: str):
-    """특정 문의ID의 견적품목 조회"""
+def load_estimate_items(inquiry_id: str, item_type: str = '인력'):
+    """특정 문의ID의 견적품목 조회
+    
+    Args:
+        inquiry_id: 문의ID
+        item_type: '인력' (인력 품목만), '부대비용' (부대비용만), 'all' (전체)
+    """
     client = get_connection()
     if not client:
         return pd.DataFrame()
@@ -2600,16 +2630,46 @@ def load_estimate_items(inquiry_id: str):
         for old_name, new_name in _col_map.items():
             if old_name in df.columns and new_name not in df.columns:
                 df = df.rename(columns={old_name: new_name})
+        # 구분 컬럼 없으면 기본값 '인력'
+        if '구분' not in df.columns:
+            df['구분'] = '인력'
+        else:
+            df['구분'] = df['구분'].fillna('').astype(str).str.strip()
+            df.loc[df['구분'] == '', '구분'] = '인력'
         # 숫자 컬럼 타입 보정
         for nc in ['수량', '일수', '매출단가', '매입단가', '할인액']:
             if nc in df.columns:
                 df[nc] = pd.to_numeric(df[nc], errors='coerce').fillna(0).astype(int)
         if '문의ID' in df.columns:
             df = df[df['문의ID'].astype(str).str.strip() == str(inquiry_id).strip()]
+        # 구분 필터링
+        if item_type != 'all':
+            df = df[df['구분'] == item_type]
         return df.reset_index(drop=True)
     except Exception as e:
         print(f"load_estimate_items error: {e}")
         return pd.DataFrame()
+
+
+def load_additional_costs(inquiry_id: str):
+    """견적품목 시트에서 부대비용 항목만 로드 → additional_costs DataFrame 형식으로 반환"""
+    raw = load_estimate_items(inquiry_id, item_type='부대비용')
+    if raw.empty:
+        return pd.DataFrame(columns=['항목', '수량', '일수', '단가', '금액', '비고'])
+    rows = []
+    for _, r in raw.iterrows():
+        qty = int(r.get('수량', 1))
+        days = int(r.get('일수', 1))
+        unit_price = int(r.get('매출단가', 0))
+        rows.append({
+            '항목': str(r.get('직군명', '')),
+            '수량': qty,
+            '일수': days,
+            '단가': unit_price,
+            '금액': qty * days * unit_price,
+            '비고': str(r.get('비고', '')),
+        })
+    return pd.DataFrame(rows) if rows else pd.DataFrame(columns=['항목', '수량', '일수', '단가', '금액', '비고'])
 
 
 # ---------------------------------------------------------

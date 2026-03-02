@@ -558,16 +558,21 @@ def show(data):
                 if k in st.session_state:
                     del st.session_state[k]
 
-            # ▶ 부대비용 항목 복원 (메타데이터에서)
-            _saved_add_costs = _est_meta_detail.get('additional_costs', [])
-            if _saved_add_costs:
-                _add_df = pd.DataFrame(_saved_add_costs)
-                for _nc in ['수량', '일수', '단가', '금액']:
-                    if _nc in _add_df.columns:
-                        _add_df[_nc] = pd.to_numeric(_add_df[_nc], errors='coerce').fillna(0).astype(int)
-                st.session_state['additional_costs'] = _add_df
+            # ▶ 부대비용 항목 복원 (견적품목 시트 우선, JSON 폴백)
+            _loaded_ac = db.load_additional_costs(target_id)
+            if not _loaded_ac.empty:
+                st.session_state['additional_costs'] = _loaded_ac
             else:
-                st.session_state['additional_costs'] = pd.DataFrame(columns=['항목', '수량', '일수', '단가', '금액', '비고'])
+                # 폴백: 기존 메타데이터 JSON에서 복원
+                _saved_add_costs = _est_meta_detail.get('additional_costs', [])
+                if _saved_add_costs:
+                    _add_df = pd.DataFrame(_saved_add_costs)
+                    for _nc in ['수량', '일수', '단가', '금액']:
+                        if _nc in _add_df.columns:
+                            _add_df[_nc] = pd.to_numeric(_add_df[_nc], errors='coerce').fillna(0).astype(int)
+                    st.session_state['additional_costs'] = _add_df
+                else:
+                    st.session_state['additional_costs'] = pd.DataFrame(columns=['항목', '수량', '일수', '단가', '금액', '비고'])
             if '_est_saved' in st.session_state:
                 del st.session_state['_est_saved']
 
@@ -1907,7 +1912,10 @@ def show(data):
                             with st.spinner("🚀 저장 중..."):
                                 if db.save_estimate_details(est_package, metadata=metadata):
                                     if not edited_df.empty:
-                                        db.save_estimate_items(target_id, edited_df)
+                                        db.save_estimate_items(target_id, edited_df, additional_costs_df=_add_costs_df if not _add_costs_df.empty else None)
+                                    elif not _add_costs_df.empty:
+                                        # 인력 품목은 없지만 부대비용만 있는 경우
+                                        db.save_estimate_items(target_id, pd.DataFrame(columns=['\ud488\ubaa9','\uaddc\uaca9','\uc218\ub7c9','\uc77c\uc218','\ub9e4\ucd9c\ub2e8\uac00','\ub9e4\uc785\ub2e8\uac00','\ud560\uc778\uc561','\ub9e4\ucd9c\ud569\uacc4','\ub9e4\uc785\ud569\uacc4','\ube44\uace0']), additional_costs_df=_add_costs_df)
                                     if sel_p.startswith("[접수]"):
                                         db.update_status(target_id, sc.STATUS_FLOW[1])
 
