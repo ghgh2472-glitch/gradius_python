@@ -18,27 +18,134 @@ logger = get_logger(__name__)
 SHEET_ID = "13gzHX1p-oMZnZjVfYR93RV1Zj5YAalOm56FWYU-p7RI" 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
 
+# ── 방안 A: 커넥션 풀링 ──────────────────────────────────
+# gspread client와 spreadsheet 객체를 앱 프로세스 수명 동안 재사용.
+# oauth2client가 내부적으로 토큰 만료 시 자동 refresh 하므로 안전.
+# @st.cache_resource는 모든 세션이 공유하는 싱글턴 캐시.
+
+@st.cache_resource
+def _get_cached_client():
+    """gspread 클라이언트 1회 생성 → 이후 재사용 (인증 오버헤드 제거)"""
+    try:
+        try:
+            st_secrets = st.secrets
+        except Exception:
+            st_secrets = None
+        client = auth.get_gspread_client(secrets_path="secrets.json", st_secrets=st_secrets, scopes=SCOPES)
+        if client:
+            print("[Pool] gspread client created (cached)")
+        return client
+    except Exception as e:
+        print(f"[Pool] client creation failed: {e}")
+        return None
+
+@st.cache_resource
+def _get_cached_spreadsheet():
+    """스프레드시트 객체 1회 생성 → 이후 재사용 (open_by_key 오버헤드 제거)"""
+    client = _get_cached_client()
+    if not client:
+        return None
+    try:
+        sh = client.open_by_key(SHEET_ID)
+        print(f"[Pool] spreadsheet opened (cached): {SHEET_ID[:12]}...")
+        return sh
+    except Exception as e:
+        print(f"[Pool] spreadsheet open failed: {e}")
+        return None
+
+# ── 방안 B: Worksheet 객체 캐시 ──────────────────────────
+# 시트명 → worksheet 객체를 메모리 캐시. ensure_*_sheet() 역할도 통합.
+# 시트가 없으면 자동 생성 (기존 ensure_ 로직 흡수).
+_worksheet_cache = {}  # {sheet_name: worksheet_object}
+
+# 시트별 헤더 정의 (ensure_* 함수의 헤더 정의를 통합)
+_SHEET_HEADERS = {
+    "출석부": ["기록ID", "배정ID", "문의ID", "인력명", "출석날짜", "출근시간", "퇴근시간",
+               "근무시간", "일급여", "출석상태", "사유", "비고", "기록일시"],
+    "평가표": ["평가ID", "배정ID", "인력명", "현장명", "근태", "수행", "외모",
+               "팀워크", "현장적응", "총점", "평가등급", "평가자", "평가일시",
+               "강점", "개선점", "재추천", "비고"],
+    "지급내역": ["지급ID", "배정ID", "인력명", "현장명", "파견기간", "파견일수",
+                "기본급", "야근비", "식사비", "교통비", "보너스", "소계",
+                "세금공제", "최종지급액", "지급상태", "지급일", "지급담당자", "비고"],
+}
+
+def _get_worksheet(sheet_name: str):
+    """워크시트 객체를 캐시에서 반환. 없으면 1회 API → 캐시 저장.
+    시트가 존재하지 않으면 _SHEET_HEADERS에 정의된 경우 자동 생성.
+    이후 호출은 API 0회 (메모리에서 즉시 반환).
+    """
+    if sheet_name in _worksheet_cache:
+        return _worksheet_cache[sheet_name]
+    
+    sh = _get_cached_spreadsheet()
+    if not sh:
+        return None
+    
+    try:
+        wks = sh.worksheet(sheet_name)
+    except gspread.exceptions.WorksheetNotFound:
+        # 시트가 없으면 자동 생성 (ensure_* 역할 통합)
+        if sheet_name in _SHEET_HEADERS:
+            headers = _SHEET_HEADERS[sheet_name]
+            wks = sh.add_worksheet(title=sheet_name, rows=1000, cols=len(headers))
+            wks.update('A1', [headers], value_input_option='RAW')
+            print(f"[Pool] 시트 '{sheet_name}' 자동 생성 (헤더 {len(headers)}컬럼)")
+        else:
+            print(f"[Pool] 시트 '{sheet_name}' 없음 (자동생성 미정의)")
+            return None
+    except Exception as e:
+        print(f"[Pool] worksheet('{sheet_name}') 오류: {e}")
+        return None
+    
+    _worksheet_cache[sheet_name] = wks
+    return wks
+
+def _invalidate_worksheet_cache(sheet_name: str = None):
+    """워크시트 캐시 무효화. sheet_name 지정 시 해당 시트만, None이면 전체."""
+    if sheet_name:
+        _worksheet_cache.pop(sheet_name, None)
+    else:
+        _worksheet_cache.clear()
+
+def _invalidate_connection_pool():
+    """커넥션 풀 전체 무효화 (인증 오류 복구용)"""
+    _worksheet_cache.clear()
+    try:
+        _get_cached_client.clear()
+    except Exception:
+        pass
+    try:
+        _get_cached_spreadsheet.clear()
+    except Exception:
+        pass
+    print("[Pool] Connection pool invalidated")
+
 def get_connection(max_retries=3):
-    """Google Sheets 연결 (503 등 일시 오류 시 자동 재시도)"""
+    """Google Sheets 연결 — 캐시된 클라이언트 반환 (기존 API 호환 유지).
+    
+    대부분의 함수는 이제 _get_cached_spreadsheet()을 직접 사용하지만,
+    기존 코드와의 호환성을 위해 유지합니다. 내부적으로 풀링된 객체를 반환.
+    """
     import time as _time
     for attempt in range(max_retries):
         try:
-            try:
-                st_secrets = st.secrets
-            except Exception:
-                st_secrets = None
-
-            client = auth.get_gspread_client(secrets_path="secrets.json", st_secrets=st_secrets, scopes=SCOPES)
+            client = _get_cached_client()
+            if client:
+                return client
+            # 캐시가 None이면 풀 리셋 후 재시도
+            _invalidate_connection_pool()
+            client = _get_cached_client()
             return client
         except Exception as e:
             err_msg = str(e)
             is_transient = any(code in err_msg for code in ['503', '429', '500', 'unavailable', 'Unavailable', 'UNAVAILABLE'])
             if is_transient and attempt < max_retries - 1:
-                wait = (attempt + 1) * 2  # 2초, 4초, 6초
+                wait = (attempt + 1) * 2
                 print(f"⏳ Google API 일시 오류 (시도 {attempt+1}/{max_retries}), {wait}초 후 재시도... : {err_msg[:80]}")
+                _invalidate_connection_pool()
                 _time.sleep(wait)
                 continue
-            # 최종 실패 또는 비일시적 오류
             try:
                 st.error(f"❌ 시트 연결 실패: {e}")
             except Exception:
@@ -2078,81 +2185,18 @@ def load_dispatch_sheet():
 
 
 def ensure_attendance_sheet():
-    """
-    출석부 시트 존재 확인 및 필요시 생성
-    """
-    client = get_connection()
-    if not client:
-        return False
-    
-    try:
-        sh = client.open_by_key(SHEET_ID)
-        
-        # 출석부 시트 확인
-        try:
-            wks = sh.worksheet("출석부")
-            # 이미 존재함
-            return True
-        except:
-            # 시트가 없음 → 생성 (save_attendance_record 의 13칼럼과 일치)
-            wks = sh.add_worksheet(title="출석부", rows=1000, cols=13)
-            
-            # 헤더 설정
-            headers = ["기록ID", "배정ID", "문의ID", "인력명", "출석날짜", "출근시간", "퇴근시간", "근무시간", "일급여", "출석상태", "사유", "비고", "기록일시"]
-            wks.update('A1', [headers], value_input_option='RAW')
-            
-            print("출석부 시트가 생성되었습니다.")
-            return True
-            
-    except Exception as e:
-        print(f"Attendance sheet error: {e}")
-        return False
+    """출석부 시트 존재 확인 및 필요시 생성 — _get_worksheet() 위임 (API 0회)"""
+    return _get_worksheet("출석부") is not None
 
 
 def ensure_evaluation_sheet():
-    """평가표 시트 존재 확인 및 필요시 생성"""
-    client = get_connection()
-    if not client:
-        return False
-    try:
-        sh = client.open_by_key(SHEET_ID)
-        try:
-            sh.worksheet("평가표")
-            return True
-        except Exception:
-            headers = ["평가ID", "배정ID", "인력명", "현장명", "근태", "수행", "외모",
-                       "팀워크", "현장적응", "총점", "평가등급", "평가자", "평가일시",
-                       "강점", "개선점", "재추천", "비고"]
-            wks = sh.add_worksheet(title="평가표", rows=1000, cols=len(headers))
-            wks.update('A1', [headers], value_input_option='RAW')
-            print("평가표 시트가 생성되었습니다.")
-            return True
-    except Exception as e:
-        print(f"Evaluation sheet error: {e}")
-        return False
+    """평가표 시트 존재 확인 및 필요시 생성 — _get_worksheet() 위임 (API 0회)"""
+    return _get_worksheet("평가표") is not None
 
 
 def ensure_payment_sheet():
-    """지급내역 시트 존재 확인 및 필요시 생성"""
-    client = get_connection()
-    if not client:
-        return False
-    try:
-        sh = client.open_by_key(SHEET_ID)
-        try:
-            sh.worksheet("지급내역")
-            return True
-        except Exception:
-            headers = ["지급ID", "배정ID", "인력명", "현장명", "파견기간", "파견일수",
-                       "기본급", "야근비", "식사비", "교통비", "보너스", "소계",
-                       "세금공제", "최종지급액", "지급상태", "지급일", "지급담당자", "비고"]
-            wks = sh.add_worksheet(title="지급내역", rows=1000, cols=len(headers))
-            wks.update('A1', [headers], value_input_option='RAW')
-            print("지급내역 시트가 생성되었습니다.")
-            return True
-    except Exception as e:
-        print(f"Payment sheet error: {e}")
-        return False
+    """지급내역 시트 존재 확인 및 필요시 생성 — _get_worksheet() 위임 (API 0회)"""
+    return _get_worksheet("지급내역") is not None
 
 
 def append_row(sheet_name: str, row_values: list) -> tuple:
@@ -2489,8 +2533,9 @@ def save_estimate_items(inquiry_id: str, items_df):
         if rows_to_keep:
             wks.update('A1', rows_to_keep, value_input_option='RAW')
         
-        # 새 품목 추가
+        # 새 품목 추가 — 배치 1회 API 호출 (방안 E)
         next_row = len(rows_to_keep) + 1
+        batch_rows = []
         for idx, item in items_df.iterrows():
             item_id = f"I-{datetime.now().strftime('%y%m%d')}-{str(uuid4())[:4]}"
             role_name = str(item.get('품목', '')).replace('[팀장]', '').strip()
@@ -2508,10 +2553,13 @@ def save_estimate_items(inquiry_id: str, items_df):
                 '팀장' if '[팀장]' in str(item.get('품목', '')) else '',
                 _safe_num(item.get('할인액', 0)),
             ]
-            wks.update(f'A{next_row}', [row], value_input_option='RAW')
-            next_row += 1
+            batch_rows.append(row)
         
-        print(f"✅ 견적품목 저장: {inquiry_id} - {len(items_df)}개 품목")
+        if batch_rows:
+            end_row = next_row + len(batch_rows) - 1
+            wks.update(f'A{next_row}:K{end_row}', batch_rows, value_input_option='RAW')
+        
+        print(f"✅ 견적품목 저장: {inquiry_id} - {len(items_df)}개 품목 (배치 1회)")
         return True
     except Exception as e:
         print(f"❌ save_estimate_items 오류: {e}")
