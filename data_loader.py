@@ -2780,6 +2780,163 @@ def update_payment_status(assign_id: str, new_status: str, pay_date: str = '') -
         return False
 
 
+def batch_save_payment_records(records: list) -> dict:
+    """지급내역 시트에 여러 건을 한 번에 저장 (API 호출 최소화).
+    
+    Args:
+        records: list of payment_dict
+    Returns:
+        {'saved': int, 'updated': int, 'failed': int}
+    """
+    if not records:
+        return {'saved': 0, 'updated': 0, 'failed': 0}
+    ensure_payment_sheet()
+    client = get_connection()
+    if not client:
+        return {'saved': 0, 'updated': 0, 'failed': len(records)}
+    try:
+        sh = client.open_by_key(SHEET_ID)
+        wks = sh.worksheet("지급내역")
+        all_vals = wks.get_all_values()
+        headers = all_vals[0] if all_vals else []
+        bid_col = headers.index('배정ID') + 1 if '배정ID' in headers else 2
+
+        # 기존 배정ID → 행번호 맵핑 (1회 읽기)
+        existing_map = {}
+        for i, row in enumerate(all_vals[1:], 2):
+            if len(row) >= bid_col:
+                _bid = str(row[bid_col - 1]).strip()
+                if _bid:
+                    existing_map[_bid] = i
+
+        saved, updated, failed = 0, 0, 0
+        from gspread.cell import Cell
+        batch_cells = []
+        new_rows = []
+
+        for pd_dict in records:
+            try:
+                target_bid = str(pd_dict.get('배정ID', '')).strip()
+                if not target_bid:
+                    failed += 1
+                    continue
+
+                pay_id = f"P-{datetime.now().strftime('%y%m%d')}-{str(uuid4())[:6]}"
+                row_values = [
+                    '',  # placeholder for pay_id
+                    pd_dict.get('배정ID', ''),
+                    pd_dict.get('인력명', ''),
+                    pd_dict.get('현장명', ''),
+                    pd_dict.get('파견기간', ''),
+                    pd_dict.get('파견일수', 0),
+                    pd_dict.get('기본급', 0),
+                    pd_dict.get('야근비', 0),
+                    pd_dict.get('식사비', 0),
+                    pd_dict.get('교통비', 0),
+                    pd_dict.get('보너스', 0),
+                    pd_dict.get('소계', 0),
+                    pd_dict.get('세금공제', 0),
+                    pd_dict.get('최종지급액', 0),
+                    pd_dict.get('지급상태', '대기'),
+                    pd_dict.get('지급일', ''),
+                    pd_dict.get('지급담당자', ''),
+                    pd_dict.get('비고', ''),
+                ]
+
+                if target_bid in existing_map:
+                    # 업데이트: 기존 행 위에 덮어쓰기 (셀 단위 배치)
+                    target_row = existing_map[target_bid]
+                    row_values[0] = all_vals[target_row - 1][0] if len(all_vals) >= target_row else pay_id
+                    for col_idx, val in enumerate(row_values):
+                        batch_cells.append(Cell(row=target_row, col=col_idx + 1, value=val))
+                    updated += 1
+                else:
+                    # 신규: 새 행 추가
+                    row_values[0] = pay_id
+                    new_rows.append(row_values)
+                    saved += 1
+            except Exception:
+                failed += 1
+
+        # 배치 업데이트 (기존 행 수정)
+        if batch_cells:
+            wks.update_cells(batch_cells, value_input_option='RAW')
+
+        # 신규 행 추가 (일괄 append)
+        if new_rows:
+            next_row = len(all_vals) + 1
+            needed = next_row + len(new_rows) - wks.row_count
+            if needed > 0:
+                wks.add_rows(max(needed, 100))
+            wks.update(f'A{next_row}', new_rows, value_input_option='RAW')
+
+        invalidate_payment_cache()
+        print(f"✅ batch_save: {saved} saved, {updated} updated, {failed} failed")
+        return {'saved': saved, 'updated': updated, 'failed': failed}
+    except Exception as e:
+        print(f"❌ batch_save_payment_records 오류: {e}")
+        return {'saved': 0, 'updated': 0, 'failed': len(records)}
+
+
+def batch_update_payment_status(updates: list) -> dict:
+    """여러 건의 지급상태를 한 번에 업데이트 (API 호출 최소화).
+    
+    Args:
+        updates: list of {'배정ID': str, '지급상태': str, '지급일': str}
+    Returns:
+        {'success': int, 'not_found': int, 'failed': int}
+    """
+    if not updates:
+        return {'success': 0, 'not_found': 0, 'failed': 0}
+    try:
+        ensure_payment_sheet()
+        client = get_connection()
+        if not client:
+            return {'success': 0, 'not_found': 0, 'failed': len(updates)}
+        sh = client.open_by_key(SHEET_ID)
+        wks = sh.worksheet("지급내역")
+        all_vals = wks.get_all_values()
+        headers = all_vals[0] if all_vals else []
+        bid_col = headers.index('배정ID') + 1 if '배정ID' in headers else 2
+        status_col_idx = headers.index('지급상태') + 1 if '지급상태' in headers else 15
+        date_col_idx = headers.index('지급일') + 1 if '지급일' in headers else 16
+
+        # 기존 배정ID → 행번호 맵핑 (1회 읽기)
+        existing_map = {}
+        for i, row in enumerate(all_vals[1:], 2):
+            if len(row) >= bid_col:
+                _bid = str(row[bid_col - 1]).strip()
+                if _bid:
+                    existing_map[_bid] = i
+
+        from gspread.cell import Cell
+        batch_cells = []
+        success, not_found = 0, 0
+
+        for u in updates:
+            _bid = str(u.get('배정ID', '')).strip()
+            _status = u.get('지급상태', '')
+            _date = u.get('지급일', '')
+            if _bid in existing_map:
+                _row = existing_map[_bid]
+                batch_cells.append(Cell(row=_row, col=status_col_idx, value=_status))
+                if _date:
+                    batch_cells.append(Cell(row=_row, col=date_col_idx, value=_date))
+                success += 1
+            else:
+                not_found += 1
+
+        if batch_cells:
+            wks.update_cells(batch_cells, value_input_option='RAW')
+
+        invalidate_payment_cache()
+        print(f"✅ batch_update_status: {success} ok, {not_found} not found")
+        return {'success': success, 'not_found': not_found, 'failed': 0}
+    except Exception as e:
+        print(f"❌ batch_update_payment_status 오류: {e}")
+        return {'success': 0, 'not_found': 0, 'failed': len(updates)}
+
+
 # ---------------------------------------------------------
 # 본사 인원 정보 (코드 내 상수)
 # ---------------------------------------------------------
