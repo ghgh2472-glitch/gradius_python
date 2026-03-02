@@ -1169,6 +1169,79 @@ def show(data):
         if not events:
             st.info("📅 표시할 행사 일정이 없습니다. 문의접수에서 행사시작일을 입력해주세요.")
         
+        # --- 캘린더 이벤트 클릭 시 상세카드 ---
+        try:
+            if cal_result and isinstance(cal_result, dict) and 'eventClick' in cal_result:
+                clicked = cal_result['eventClick'].get('event', {})
+                ep = clicked.get('extendedProps', {})
+                c_evt = ep.get('event_name', '')
+                c_client = ep.get('client_name', '')
+                c_status = ep.get('status', '')
+                c_need = int(ep.get('need', 0) or 0)
+                c_assigned = int(ep.get('assigned', 0) or 0)
+                c_names = ep.get('names', '') or '배정전'
+                c_loc = ep.get('location', '') or '장소미입력'
+                c_time = ep.get('time', '') or ''
+                c_start = clicked.get('start', '')[:10] if clicked.get('start') else ''
+                c_end_raw = clicked.get('end', '')
+                c_end = c_end_raw[:10] if c_end_raw else c_start
+                c_date_str = c_start + (f" ~ {c_end}" if c_end and c_end != c_start else '')
+                
+                # 배정 상세 (상태 포함)
+                staff_detail = ud.get_dispatch_detail_for_event(df_dispatch, c_evt)
+                if not staff_detail.empty:
+                    staff_lines = []
+                    for _, sr in staff_detail.iterrows():
+                        sname = sr.get('인력명', '')
+                        srole = sr.get('직무', '') if '직무' in sr.index else ''
+                        sstatus = sr.get('상태', '') if '상태' in sr.index else ''
+                        tag = f"<span style='background:#E5E7EB;padding:1px 6px;border-radius:4px;font-size:10px;'>{sstatus}</span>" if sstatus else ''
+                        role_tag = f"<span style='color:#6B7280;font-size:11px;'>({srole})</span>" if srole else ''
+                        staff_lines.append(f"{sname} {role_tag} {tag}")
+                    staff_html = "<br/>".join(staff_lines)
+                else:
+                    staff_html = "🙅 배정된 인력이 없습니다."
+                
+                # 배정 상태 색상
+                if c_need > 0 and c_assigned >= c_need:
+                    assign_color = "#10B981"; assign_text = f"✅ {c_assigned}/{c_need}명 배정완료"
+                elif c_assigned > 0:
+                    assign_color = "#F59E0B"; assign_text = f"⚠️ {c_assigned}/{c_need}명 배정중"
+                else:
+                    assign_color = "#EF4444"; assign_text = f"❌ 0/{c_need}명 배정필요" if c_need > 0 else "미배정"
+                
+                st_cfg = sc.STATUS_CONFIG.get(c_status, {})
+                st_icon = st_cfg.get('icon', '❓')
+                st_bg = st_cfg.get('bg', '#f3f4f6')
+                st_clr = st_cfg.get('color', '#6B7280')
+                
+                st.markdown(f"""
+                <div style="background:linear-gradient(135deg,#F0F9FF,#EFF6FF);border:1px solid #BFDBFE;
+                            border-left:5px solid #3B82F6;border-radius:10px;padding:18px 20px;
+                            margin:12px 0 8px 0;box-shadow:0 3px 8px rgba(59,130,246,0.12);">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+                        <div>
+                            <span style="font-size:16px;font-weight:700;color:#1E3A5F;">📌 {c_client} — {c_evt}</span>
+                            <span style="background:{st_bg};color:{st_clr};padding:3px 8px;border-radius:6px;
+                                        font-size:11px;font-weight:600;margin-left:8px;">{st_icon} {c_status}</span>
+                        </div>
+                        <span style="background:{assign_color};color:white;padding:4px 12px;border-radius:12px;
+                                    font-size:12px;font-weight:600;">👥 {assign_text}</span>
+                    </div>
+                    <div style="display:flex;gap:24px;color:#4B5563;font-size:13px;margin-bottom:10px;">
+                        <span>📅 {c_date_str}</span>
+                        <span>📍 {c_loc}</span>
+                        {f'<span>⏰ {c_time}</span>' if c_time else ''}
+                    </div>
+                    <div style="background:white;border-radius:6px;padding:10px 14px;border:1px solid #E5E7EB;">
+                        <div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:6px;">👤 배정 인력</div>
+                        <div style="font-size:12px;color:#4B5563;line-height:1.8;">{staff_html}</div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+        except Exception as e:
+            pass  # 클릭 이벤트 없음 — 정상
+        
         st.markdown("---")
         st.markdown('<div class="section-title">📋 전체 현장 목록 (배정현황 포함)</div>', unsafe_allow_html=True)
 

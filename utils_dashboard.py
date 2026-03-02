@@ -271,14 +271,20 @@ def get_calendar_events(df_inq, df_dispatch=None):
     col_time = find_col(df_inq, ["행사시간", "시간"])
     col_headcount = find_col(df_inq, ["필요인력", "요청인원", "인원"])
     
-    # 배정기록에서 행사별 인원수 미리 집계
+    # 배정기록에서 행사별 인원수 미리 집계 (확정/배정중만 — 후보·취소 제외)
     dispatch_counts = {}
     dispatch_names = {}
     if df_dispatch is not None and not df_dispatch.empty:
         _d_evt_col = find_col(df_dispatch, ["행사명"])
         _d_name_col = find_col(df_dispatch, ["인력명", "직원명", "인원"])
+        _d_status_col = find_col(df_dispatch, ["지급상태"])
+        # 후보·취소 상태 제외 (확정, 배정중, 확정(일정미입력) 등만 카운트)
+        _exclude_statuses = {'후보', '취소'}
         if _d_evt_col:
-            for evt, grp in df_dispatch.groupby(df_dispatch[_d_evt_col].astype(str).str.strip()):
+            _d_filtered = df_dispatch
+            if _d_status_col and _d_status_col in df_dispatch.columns:
+                _d_filtered = df_dispatch[~df_dispatch[_d_status_col].astype(str).str.strip().isin(_exclude_statuses)]
+            for evt, grp in _d_filtered.groupby(_d_filtered[_d_evt_col].astype(str).str.strip()):
                 dispatch_counts[evt] = len(grp)
                 if _d_name_col and _d_name_col in grp.columns:
                     names = grp[_d_name_col].astype(str).str.strip().tolist()
@@ -418,16 +424,33 @@ def get_calendar_events(df_inq, df_dispatch=None):
                 
                 title = f"{seg_title} [{info_suffix}]" if info_suffix else seg_title
                 
+                # 추가 정보 (클릭 시 상세카드 표시용)
+                col_loc = find_col(df_inq, ["장소", "현장"])
+                location = str(row.get(col_loc, '')).strip() if col_loc and col_loc in df_inq.columns else ''
+                if location in ('nan', 'None'): location = ''
+                
+                ext_props = {
+                    "event_name": str(event_name),
+                    "client_name": str(client_name),
+                    "status": status,
+                    "need": need,
+                    "assigned": assigned,
+                    "names": names_str,
+                    "location": location,
+                    "time": time_str,
+                }
+                if description:
+                    ext_props["description"] = description
+                
                 evt_obj = {
                     "title": title,
                     "start": seg_start, 
                     "end": end_dt_exclusive,
                     "backgroundColor": color, 
                     "borderColor": color, 
-                    "allDay": True
+                    "allDay": True,
+                    "extendedProps": ext_props,
                 }
-                if description:
-                    evt_obj["extendedProps"] = {"description": description}
                 
                 events.append(evt_obj)
     except Exception as e:
@@ -558,6 +581,9 @@ def get_dispatch_detail_for_event(df_dispatch, event_name):
     
     try:
         matched = df_dispatch[df_dispatch[col_event].astype(str).str.strip() == str(event_name).strip()]
+        # 후보·취소 제외하여 실제 배정된 인력만 표시
+        if col_status and col_status in matched.columns:
+            matched = matched[~matched[col_status].astype(str).str.strip().isin({'후보', '취소'})]
         if matched.empty: return pd.DataFrame()
         
         cols = [col_staff]
@@ -605,11 +631,16 @@ def get_all_events_with_status(df_inq, df_dispatch):
         df['D-Day'] = df['evt_dt'].apply(lambda x: (x - today).days)
         df = df.sort_values('D-Day')
         
-        # 배정인원 집계
+        # 배정인원 집계 (확정/배정중만 — 후보·취소 제외)
         if not df_dispatch.empty and col_event:
             col_dispatch_event = find_col(df_dispatch, ["행사명"])
+            col_dispatch_status = find_col(df_dispatch, ["지급상태"])
             if col_dispatch_event and col_dispatch_event in df_dispatch.columns:
-                dispatch_count = df_dispatch[col_dispatch_event].value_counts().to_dict()
+                _excl = {'후보', '취소'}
+                _d_valid = df_dispatch
+                if col_dispatch_status and col_dispatch_status in df_dispatch.columns:
+                    _d_valid = df_dispatch[~df_dispatch[col_dispatch_status].astype(str).str.strip().isin(_excl)]
+                dispatch_count = _d_valid[col_dispatch_event].value_counts().to_dict()
                 df['배정인원'] = df[col_event].map(dispatch_count).fillna(0).astype(int)
             else:
                 df['배정인원'] = 0
