@@ -242,7 +242,7 @@ def show_settlement_overview():
     if _ov_cnt > 0:
         _ov_cpr = 4
         _ov_card_rows = [_ov_filtered.iloc[i:i+_ov_cpr] for i in range(0, _ov_cnt, _ov_cpr)]
-        _ov_container = st.container(height=260 if _ov_cnt > 8 else None)
+        _ov_container = st.container(height=260) if _ov_cnt > 8 else st.container()
         with _ov_container:
             for _ocr in _ov_card_rows:
                 _ocols = st.columns(_ov_cpr)
@@ -918,7 +918,7 @@ def show_settlement_detail(data):
         _cols_per_row = 4
         _card_rows = [_filtered_targets.iloc[i:i+_cols_per_row] for i in range(0, len(_filtered_targets), _cols_per_row)]
 
-        _card_container = st.container(height=320 if _cnt_total > 8 else None)
+        _card_container = st.container(height=320) if _cnt_total > 8 else st.container()
         with _card_container:
             for _cr in _card_rows:
                 _cols = st.columns(_cols_per_row)
