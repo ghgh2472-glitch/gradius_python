@@ -508,6 +508,27 @@ def show(data):
                 'vat_yn': _est_meta_detail.get('vat_yn', True) if 'vat_yn' in _est_meta_detail else True,
             })
 
+            # ▶ 수정/체결수정 시 기존 견적상세에서 프로젝트 정보 덮어쓰기
+            #   (사용자가 이전 저장 시 최종확인에서 수정한 값 복원)
+            if (sel_p.startswith("[수정]") or sel_p.startswith("[체결수정]")) and _est_meta:
+                def _pick_proj(est_key, ss_key):
+                    v = str(_est_meta.get(est_key, '')).strip()
+                    if v and v not in ('nan', 'None', ''):
+                        st.session_state[ss_key] = _safe_str(v)
+                _pick_proj('업체명', 'w_client')
+                _pick_proj('현장주소', 'w_loc')
+                _pick_proj('책임자', 'w_manager')
+                _pick_proj('연락처', 'w_contact')
+                # 행사명: 견적상세의 행사명 우선
+                _pick_proj('행사명', 'w_event')
+                # JSON 메타데이터에서도 추가 복원 (현장주소, 책임자 등이 최종확인 값)
+                if _est_meta_detail:
+                    for _edk, _esk in [('현장주소', 'w_loc'), ('책임자', 'w_manager'),
+                                       ('연락처', 'w_contact'), ('담당자', 'w_manager')]:
+                        _edv = str(_est_meta_detail.get(_edk, '')).strip()
+                        if _edv and _edv not in ('nan', 'None', ''):
+                            st.session_state[_esk] = _safe_str(_edv)
+
             # ▶ 견적수정/체결수정 시 기존 품목 로드
             if sel_p.startswith("[수정]") or sel_p.startswith("[체결수정]"):
                 st.session_state['est_items'] = _load_existing_items(target_id)

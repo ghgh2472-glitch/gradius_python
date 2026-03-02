@@ -919,9 +919,22 @@ def save_estimate_details(est_data, metadata=None):
             logger.error(f"❌ {target_sheet_name} 시트를 찾을 수 없습니다")
             return False
         
-        # 2. 시트 헤더 읽기
+        # 2. 시트 헤더 읽기 + 누락 컬럼 자동 추가
         headers = wks.row_values(1)
         headers_clean = [str(h).strip() for h in headers]
+        
+        # 견적 메타데이터 저장에 필요한 컬럼이 없으면 자동 추가
+        _required_extra = ['복장', '식사', '주차', '특이사항', '부대비용', '비고']
+        _missing = [c for c in _required_extra if c not in headers_clean]
+        if _missing:
+            from gspread.cell import Cell as _Cell
+            _start_col = len(headers_clean) + 1
+            _header_cells = []
+            for _mi, _col_name in enumerate(_missing):
+                _header_cells.append(_Cell(row=1, col=_start_col + _mi, value=_col_name))
+            wks.update_cells(_header_cells, value_input_option='RAW')
+            headers_clean.extend(_missing)
+            logger.info(f"📝 견적상세 컬럼 자동 추가: {_missing}")
         
         # 3. 문의ID로 기존 행 찾기 (중복 방지)
         target_id = str(est_data.get('문의ID', '')).strip()
