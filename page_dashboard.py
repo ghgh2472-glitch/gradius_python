@@ -1650,12 +1650,11 @@ def show(data):
     with tab10:
         st.markdown('<div class="section-title">💸 미지급 인건비 현황</div>', unsafe_allow_html=True)
         
-        # 배정기록에서 미지급 건 추출
+        # 배정기록에서 미지급 건 추출 (지급내역 시트 기준으로 통일 판정)
         if not df_dispatch.empty:
             col_name = ud.find_col(df_dispatch, ["인력명", "이름", "성명"])
             col_venue = ud.find_col(df_dispatch, ["현장명", "행사명"])
             col_pay_amt = ud.find_col(df_dispatch, ["총지급액", "지급액"])
-            col_pay_status = ud.find_col(df_dispatch, ["지급상태", "급여상태"])
             col_date = ud.find_col(df_dispatch, ["파견일자", "파견기간", "날짜"])
             col_assign_id = ud.find_col(df_dispatch, ["배정ID"])
             
@@ -1667,31 +1666,61 @@ def show(data):
                 _pay_df = _pay_df[_pay_df['_지급액'] > 0].copy()
                 
                 if not _pay_df.empty:
-                    # 지급상태가 없거나 "미지급"/"대기"/"" 인 건 = 미지급
-                    if col_pay_status and col_pay_status in _pay_df.columns:
-                        _unpaid_mask = _pay_df[col_pay_status].astype(str).str.strip().isin(['', '미지급', '대기', 'nan', 'None'])
-                    else:
-                        # 지급상태 컬럼 자체가 없으면 → 지급내역 시트와 대조
-                        _unpaid_mask = pd.Series([True] * len(_pay_df), index=_pay_df.index)
-                        if not df_payment.empty:
-                            col_paid_bid = ud.find_col(df_payment, ["배정ID"])
-                            col_paid_status = ud.find_col(df_payment, ["지급상태"])
-                            if col_paid_bid and col_paid_status:
-                                paid_ids = set(
-                                    df_payment[
-                                        df_payment[col_paid_status].astype(str).str.contains('완료|지급', na=False)
-                                    ][col_paid_bid].astype(str).str.strip().values
-                                )
-                                if col_assign_id and col_assign_id in _pay_df.columns:
-                                    _unpaid_mask = ~_pay_df[col_assign_id].astype(str).str.strip().isin(paid_ids)
+                    # ── 지급내역 시트를 기준(Single Source of Truth)으로 판정 ──
+                    # 완료 = 지급내역에서 배정ID의 지급상태가 '완료' 또는 '확인완료'
+                    _completed_ids = set()   # 지급 완료된 배정ID
+                    _pending_ids = set()     # 대기 중인 배정ID
+                    _hq_confirmed_ids = set()  # 본사 확인완료 배정ID
                     
-                    _unpaid_df = _pay_df[_unpaid_mask].copy()
+                    if not df_payment.empty:
+                        col_paid_bid = ud.find_col(df_payment, ["배정ID"])
+                        col_paid_status = ud.find_col(df_payment, ["지급상태"])
+                        if col_paid_bid and col_paid_status:
+                            for _, _pr in df_payment.iterrows():
+                                _p_bid = str(_pr.get(col_paid_bid, '')).strip()
+                                _p_st = str(_pr.get(col_paid_status, '')).strip()
+                                if _p_st == '완료':
+                                    _completed_ids.add(_p_bid)
+                                elif _p_st == '확인완료':
+                                    _hq_confirmed_ids.add(_p_bid)
+                                    _completed_ids.add(_p_bid)  # 본사확인도 완료로 간주
+                                elif _p_st == '대기':
+                                    _pending_ids.add(_p_bid)
+                    
+                    # 본사인원 목록
+                    _hq_names = [s['이름'] for s in db.HQ_STAFF] if hasattr(db, 'HQ_STAFF') else []
+                    
+                    # 각 행에 지급 상태 매핑
+                    def _get_pay_status(row):
+                        _bid = str(row.get(col_assign_id, '')).strip() if col_assign_id and col_assign_id in _pay_df.columns else ''
+                        _name = str(row.get(col_name, '')).strip()
+                        _is_hq = _name in _hq_names
+                        if _bid in _completed_ids:
+                            return '확인완료' if _bid in _hq_confirmed_ids else '완료'
+                        elif _bid in _pending_ids:
+                            return '대기'
+                        else:
+                            return '미저장'
+                    
+                    _pay_df['_상태'] = _pay_df.apply(_get_pay_status, axis=1)
+                    _pay_df['_본사'] = _pay_df[col_name].astype(str).str.strip().isin(_hq_names) if col_name else False
+                    
+                    # 미지급 = 완료/확인완료가 아닌 모든 건
+                    _unpaid_df = _pay_df[~_pay_df['_상태'].isin(['완료', '확인완료'])].copy()
+                    
+                    # 외부 인력만 (본사인원 제외한 순수 미지급)
+                    _unpaid_ext = _unpaid_df[~_unpaid_df['_본사']].copy()
+                    _unpaid_hq = _unpaid_df[_unpaid_df['_본사']].copy()
+                    
+                    # 완료 건수
+                    _done_ext = len(_pay_df[(~_pay_df['_본사']) & (_pay_df['_상태'].isin(['완료']))])
+                    _done_hq = len(_pay_df[(_pay_df['_본사']) & (_pay_df['_상태'].isin(['확인완료']))])
+                    _total_ext = len(_pay_df[~_pay_df['_본사']])
+                    _total_hq = len(_pay_df[_pay_df['_본사']])
                     
                     # KPI 카드
-                    total_unpaid_pay = int(_unpaid_df['_지급액'].sum())
-                    total_unpaid_cnt = len(_unpaid_df)
-                    total_all_pay = int(_pay_df['_지급액'].sum())
-                    paid_cnt = len(_pay_df) - total_unpaid_cnt
+                    total_unpaid_pay = int(_unpaid_ext['_지급액'].sum())
+                    total_unpaid_cnt = len(_unpaid_ext)
                     
                     kp1, kp2, kp3, kp4 = st.columns(4)
                     with kp1:
@@ -1699,6 +1728,7 @@ def show(data):
                         <div style="background: linear-gradient(135deg, #FEF2F2, #FEE2E2); border-radius: 12px; padding: 16px; text-align: center; border: 1px solid #FECACA;">
                             <div style="font-size: 11px; color: #DC2626;">💸 미지급 총액</div>
                             <div style="font-size: 22px; font-weight: 800; color: #B91C1C;">{total_unpaid_pay:,}원</div>
+                            <div style="font-size: 10px; color: #9CA3AF;">외부인력 기준 (본사 제외)</div>
                         </div>
                         """, unsafe_allow_html=True)
                     with kp2:
@@ -1706,29 +1736,34 @@ def show(data):
                         <div style="background: linear-gradient(135deg, #FFF7ED, #FFEDD5); border-radius: 12px; padding: 16px; text-align: center; border: 1px solid #FED7AA;">
                             <div style="font-size: 11px; color: #EA580C;">👤 미지급 인원</div>
                             <div style="font-size: 22px; font-weight: 800; color: #C2410C;">{total_unpaid_cnt}명</div>
+                            <div style="font-size: 10px; color: #9CA3AF;">외부 {total_unpaid_cnt} | 본사 {len(_unpaid_hq)}명 미확인</div>
                         </div>
                         """, unsafe_allow_html=True)
                     with kp3:
                         st.markdown(f"""
                         <div style="background: linear-gradient(135deg, #F0FDF4, #DCFCE7); border-radius: 12px; padding: 16px; text-align: center; border: 1px solid #BBF7D0;">
-                            <div style="font-size: 11px; color: #059669;">✅ 지급완료</div>
-                            <div style="font-size: 22px; font-weight: 800; color: #047857;">{paid_cnt}명</div>
+                            <div style="font-size: 11px; color: #059669;">✅ 지급/확인 완료</div>
+                            <div style="font-size: 22px; font-weight: 800; color: #047857;">{_done_ext + _done_hq}명</div>
+                            <div style="font-size: 10px; color: #9CA3AF;">외부 {_done_ext}명 지급 | 본사 {_done_hq}명 확인</div>
                         </div>
                         """, unsafe_allow_html=True)
                     with kp4:
-                        pay_rate = int(paid_cnt / len(_pay_df) * 100) if len(_pay_df) > 0 else 0
+                        _total_all = _total_ext + _total_hq
+                        _done_all = _done_ext + _done_hq
+                        pay_rate = int(_done_all / _total_all * 100) if _total_all > 0 else 0
                         rate_color = "#059669" if pay_rate >= 80 else "#D97706" if pay_rate >= 50 else "#DC2626"
                         st.markdown(f"""
                         <div style="background: linear-gradient(135deg, #EFF6FF, #DBEAFE); border-radius: 12px; padding: 16px; text-align: center; border: 1px solid #BFDBFE;">
                             <div style="font-size: 11px; color: #2563EB;">📊 지급률</div>
                             <div style="font-size: 22px; font-weight: 800; color: {rate_color};">{pay_rate}%</div>
+                            <div style="font-size: 10px; color: #9CA3AF;">{_done_all}/{_total_all}명 처리</div>
                         </div>
                         """, unsafe_allow_html=True)
                     
                     st.markdown("---")
                     
                     # 미지급 목록
-                    if not _unpaid_df.empty:
+                    if not _unpaid_ext.empty:
                         st.markdown("##### 🚨 미지급 인력 목록")
                         
                         # 표시용 DataFrame 구성
@@ -1737,16 +1772,16 @@ def show(data):
                         if col_venue: display_cols_map['현장명'] = col_venue
                         if col_date: display_cols_map['파견일자'] = col_date
                         display_cols_map['지급액'] = '_지급액'
-                        if col_pay_status and col_pay_status in _unpaid_df.columns:
-                            display_cols_map['지급상태'] = col_pay_status
+                        display_cols_map['상태'] = '_상태'
                         
-                        valid_cols = {k: v for k, v in display_cols_map.items() if v in _unpaid_df.columns}
-                        _disp_df = _unpaid_df[list(valid_cols.values())].copy()
+                        valid_cols = {k: v for k, v in display_cols_map.items() if v in _unpaid_ext.columns}
+                        _disp_df = _unpaid_ext[list(valid_cols.values())].copy()
                         _disp_df.columns = list(valid_cols.keys())
                         _disp_df = _disp_df.sort_values('지급액', ascending=False).reset_index(drop=True)
                         
                         col_config = {
                             "지급액": st.column_config.NumberColumn("💰 지급액", format="%d원"),
+                            "상태": st.column_config.TextColumn("📋 상태", help="미저장=지급기록 미생성, 대기=기록 생성됨"),
                         }
                         
                         st.dataframe(_disp_df, use_container_width=True, hide_index=True, column_config=col_config)
@@ -1758,9 +1793,9 @@ def show(data):
                         """, unsafe_allow_html=True)
                         
                         # 현장별 미지급 요약
-                        if col_venue and col_venue in _unpaid_df.columns:
+                        if col_venue and col_venue in _unpaid_ext.columns:
                             st.markdown("##### 📍 현장별 미지급 요약")
-                            _venue_summary = _unpaid_df.groupby(_unpaid_df[col_venue].astype(str).str.strip()).agg(
+                            _venue_summary = _unpaid_ext.groupby(_unpaid_ext[col_venue].astype(str).str.strip()).agg(
                                 인원=('_지급액', 'count'),
                                 미지급합계=('_지급액', 'sum'),
                             ).reset_index()
@@ -1773,7 +1808,23 @@ def show(data):
                                 }
                             )
                     else:
-                        st.success("🎉 미지급 인건비 없음! 모든 급여가 지급 완료되었습니다.")
+                        st.success("🎉 외부인력 미지급 없음! 모든 급여가 지급 완료되었습니다.")
+                    
+                    # 본사인원 미확인 안내
+                    if not _unpaid_hq.empty:
+                        st.markdown("##### 🏢 본사인원 미확인")
+                        st.caption("본사인원은 별도정산 대상이며, 확인 처리만 필요합니다.")
+                        _hq_disp = []
+                        for _, _hr in _unpaid_hq.iterrows():
+                            _hq_disp.append({
+                                '이름': str(_hr.get(col_name, '')),
+                                '현장명': str(_hr.get(col_venue, '')) if col_venue else '',
+                                '상태': str(_hr.get('_상태', '미저장')),
+                            })
+                        if _hq_disp:
+                            st.dataframe(pd.DataFrame(_hq_disp), use_container_width=True, hide_index=True)
+                    elif _total_hq > 0:
+                        st.info(f"🏢 본사인원 {_done_hq}/{_total_hq}명 전원 확인 완료")
                 else:
                     st.info("💡 지급 대상 배정 기록이 없습니다.")
             else:
