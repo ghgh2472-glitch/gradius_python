@@ -13,8 +13,8 @@ import re, sys, os
 MIN_LINES = {
     "page_staff_new.py":  1600,   # 현재 2338
     "page_settlement.py": 1600,   # 현재 2311
-    "data_loader.py":     2000,   # 현재 2838
-    "page_estimate.py":   1500,   # 현재 2164
+    "data_loader.py":     2200,   # 현재 3100+
+    "page_estimate.py":   2000,   # 현재 2400+
     "page_contract.py":    280,   # 현재 425
     "page_inquiry.py":     220,   # 현재 338
     "utils_dashboard.py":  800,   # 현재 1157
@@ -57,6 +57,9 @@ REQUIRED_FUNCTIONS = {
     "page_estimate.py": [
         "show",                        # 메인 진입점
         "_show_send_status_section",   # 발송 상태 섹션
+        "_load_existing_items",        # 기존 품목 로드
+        "_collect_metadata",           # 메타데이터 수집
+        "_restore_metadata",           # 메타데이터 복원
     ],
     "utils_dashboard.py": [
         "get_settlement_overview",     # 정산 요약
@@ -124,6 +127,49 @@ def check_required_functions(base_dir):
     return errors
 
 
+# ──────────────────────────────────────────────────
+# 핵심 키워드 검증 (특정 기능이 전체 제거된 것을 감지)
+# ──────────────────────────────────────────────────
+REQUIRED_KEYWORDS = {
+    "page_estimate.py": [
+        ("w_date_text", "날짜 직접입력 기능"),
+        ("_date_input_mode", "날짜 달력/직접입력 모드 토글"),
+        ("additional_costs", "부대비용 기능"),
+        ("_bak_w_client", "탭 전환 백업/복원 로직"),
+        ("final_date_", "견적서 발행탭 날짜 편집 필드"),
+        ("save_estimate_items", "견적품목 저장 호출"),
+        ("load_additional_costs", "부대비용 로드 호출"),
+    ],
+    "data_loader.py": [
+        ("save_estimate_items", "견적품목 저장 함수"),
+        ("load_estimate_items", "견적품목 로드 함수"),
+        ("load_additional_costs", "부대비용 로드 함수"),
+        ("additional_costs_df", "부대비용 DF 파라미터"),
+        ("\'\uad6c\ubd84\'", "견적품목 구분 컬럼"),
+    ],
+    "utils_dashboard.py": [
+        ("후보", "후보군 제외 로직"),
+        ("취소", "취소 제외 로직"),
+        ("extendedProps", "캘린더 이벤트 상세 데이터"),
+    ],
+}
+
+
+def check_required_keywords(base_dir):
+    """핵심 키워드 존재 확인 (기능 전체 제거 감지)"""
+    errors = []
+    for fname, keywords in REQUIRED_KEYWORDS.items():
+        fpath = os.path.join(base_dir, fname)
+        if not os.path.exists(fpath):
+            continue
+        with open(fpath, 'r', encoding='utf-8') as f:
+            content = f.read()
+        for keyword, desc in keywords:
+            if keyword not in content:
+                errors.append(f"\u274c {fname}: \u2018{keyword}\u2019 \ub204\ub77d \u2192 {desc} \uc81c\uac70\ub428!")
+    return errors
+
+
 def check_syntax(base_dir):
     """Python 구문 오류 확인"""
     import py_compile
@@ -187,7 +233,7 @@ def main():
     
     # 1. 파일 존재
     if not quiet:
-        print("\n📁 [1/5] 필수 파일 존재 확인...")
+        print("\n📁 [1/6] 필수 파일 존재 확인...")
     errs = check_file_exists(base_dir)
     all_errors.extend(errs)
     if not quiet and not errs:
@@ -195,7 +241,7 @@ def main():
     
     # 2. 라인 수
     if not quiet:
-        print("\n📏 [2/5] 파일 크기 검증 (대량 삭제 감지)...")
+        print("\n📏 [2/6] 파일 크기 검증 (대량 삭제 감지)...")
     errs, warns = check_line_counts(base_dir)
     all_errors.extend(errs)
     all_warnings.extend(warns)
@@ -204,7 +250,7 @@ def main():
     
     # 3. 핵심 함수
     if not quiet:
-        print("\n🔧 [3/5] 핵심 함수 존재 확인...")
+        print("\n🔧 [3/6] 핵심 함수 존재 확인...")
     errs = check_required_functions(base_dir)
     all_errors.extend(errs)
     if not quiet and not errs:
@@ -212,15 +258,23 @@ def main():
     
     # 4. 구문 검사
     if not quiet:
-        print("\n📝 [4/5] Python 구문 검증...")
+        print("\n📝 [4/6] Python 구문 검증...")
     errs = check_syntax(base_dir)
     all_errors.extend(errs)
     if not quiet and not errs:
         print("   ✅ 모든 파일 구문 정상")
     
-    # 5. 크로스 레퍼런스
+    # 5. 핵심 키워드
     if not quiet:
-        print("\n🔗 [5/5] 모듈 간 크로스 레퍼런스 확인...")
+        print("\n🔑 [5/6] 핵심 키워드 존재 확인 (기능 누락 감지)...")
+    errs = check_required_keywords(base_dir)
+    all_errors.extend(errs)
+    if not quiet and not errs:
+        print("   ✅ 모든 핵심 키워드 존재")
+
+    # 6. 크로스 레퍼런스
+    if not quiet:
+        print("\n🔗 [6/6] 모듈 간 크로스 레퍼런스 확인...")
     errs = check_cross_references(base_dir)
     all_errors.extend(errs)
     if not quiet and not errs:
