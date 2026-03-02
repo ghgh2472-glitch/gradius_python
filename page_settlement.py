@@ -734,10 +734,14 @@ def show_settlement_detail(data):
             for _, _sr in _settlement_df.iterrows():
                 _s_id = str(_sr.get(_s_inq_col, '')).strip()
                 if _s_id:
-                    _supply = pd.to_numeric(_sr.get('공급가액', 0), errors='coerce') or 0
-                    _tax = pd.to_numeric(_sr.get('부가세', 0), errors='coerce') or 0
-                    _paid = pd.to_numeric(_sr.get('받은금액', 0), errors='coerce') or 0
-                    _bal = pd.to_numeric(_sr.get('잔액', 0), errors='coerce') or 0
+                    _supply = pd.to_numeric(_sr.get('공급가액', 0), errors='coerce')
+                    _supply = 0 if pd.isna(_supply) else _supply
+                    _tax = pd.to_numeric(_sr.get('부가세', 0), errors='coerce')
+                    _tax = 0 if pd.isna(_tax) else _tax
+                    _paid = pd.to_numeric(_sr.get('받은금액', 0), errors='coerce')
+                    _paid = 0 if pd.isna(_paid) else _paid
+                    _bal = pd.to_numeric(_sr.get('잔액', 0), errors='coerce')
+                    _bal = 0 if pd.isna(_bal) else _bal
                     if _bal == 0:
                         _bal = max(0, _supply + _tax - _paid)
                     _settle_inq_map[_s_id] = {
