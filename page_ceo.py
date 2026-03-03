@@ -140,6 +140,14 @@ def _build_inquiry_payment_data(dispatch_df, payment_df, staff_df=None):
     if dispatch_df.empty:
         return [], 0, 0, 0
 
+    # 취소/후보 상태 제외 (정산 페이지 get_assignments_by_inquiry와 동일)
+    _status_col = _find_col(dispatch_df, ["지급상태", "상태"])
+    if _status_col:
+        _exclude = ['취소', '후보']
+        dispatch_df = dispatch_df[~dispatch_df[_status_col].astype(str).str.strip().isin(_exclude)].copy()
+        if dispatch_df.empty:
+            return [], 0, 0, 0
+
     # 컬럼 찾기
     col_name = _find_col(dispatch_df, ["인력명", "이름", "성명"])
     col_venue = _find_col(dispatch_df, ["현장명", "행사명"])
@@ -525,6 +533,9 @@ def _render_tax_invoice_tab(settlement_df, not_issued_df, col_tax, col_company, 
         biz_num = str(row.get('사업자번호', '')).strip()
         email_val = str(row.get('이메일', '')).strip()
         ceo_name = str(row.get('대표자', '')).strip()
+        corp_name = str(row.get('법인명', '')).strip()
+        phone_val = str(row.get('연락처', '')).strip()
+        paid_val = str(row.get('받은금액', '')).strip()
 
         def _fmt(v):
             try:
@@ -546,28 +557,37 @@ def _render_tax_invoice_tab(settlement_df, not_issued_df, col_tax, col_company, 
             except Exception:
                 pass
 
+        # 받은금액 포맷
+        paid_str = _fmt(paid_val)
+
         col_left, col_right = st.columns([4, 1])
         with col_left:
             biz_lines = []
             if biz_num and biz_num not in ('nan', 'None', ''):
                 biz_lines.append(f"🏢 사업자번호: <b>{biz_num}</b>")
+            if corp_name and corp_name not in ('nan', 'None', ''):
+                biz_lines.append(f"🏗️ 법인명: <b>{corp_name}</b>")
             if ceo_name and ceo_name not in ('nan', 'None', ''):
                 biz_lines.append(f"👤 대표자: {ceo_name}")
             if email_val and email_val not in ('nan', 'None', ''):
                 biz_lines.append(f"📧 이메일: <b>{email_val}</b>")
+            if phone_val and phone_val not in ('nan', 'None', ''):
+                biz_lines.append(f"📞 연락처: <b>{phone_val}</b>")
 
             item_val = str(row.get('내용(품목)', '')).strip()
             item_line = ''
             if item_val and item_val not in ('nan', 'None', ''):
-                item_line = f'📦 품목: <b>{item_val}</b><br/>'
+                item_line = f'📋 내용(품목): <b>{item_val}</b><br/>'
 
             money_parts = []
             if supply_str:
-                money_parts.append(f"공급가액: <b>{supply_str}</b>")
+                money_parts.append(f"💰 공급가액: <b>{supply_str}</b>")
             if tax_str:
-                money_parts.append(f"부가세: <b>{tax_str}</b>")
+                money_parts.append(f"💰 부가세: <b>{tax_str}</b>")
             if amount_str:
-                money_parts.append(f"합계: <b>{amount_str}</b>")
+                money_parts.append(f"💰 청구금액(합계): <b>{amount_str}</b>")
+            if paid_str:
+                money_parts.append(f"✅ 받은금액: <b>{paid_str}</b>")
 
             missing = []
             if not biz_num or biz_num in ('nan', 'None', ''):
@@ -582,8 +602,8 @@ def _render_tax_invoice_tab(settlement_df, not_issued_df, col_tax, col_company, 
                     f'⚠️ 미입력: {", ".join(missing)}</div>'
                 )
 
-            biz_block = " · ".join(biz_lines) if biz_lines else ""
-            money_block = " | ".join(money_parts) if money_parts else ""
+            biz_block = "<br/>".join(biz_lines) if biz_lines else ""
+            money_block = "<br/>".join(money_parts) if money_parts else ""
             title = f"<b style='font-size:18px;'>{company}</b>"
             if site_name:
                 title += f" <span style='color:#6b7280;font-size:14px;'>({site_name})</span>"
