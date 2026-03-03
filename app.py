@@ -2,6 +2,7 @@
 import streamlit as st
 
 # 페이지 모듈 임포트
+import page_ceo        # 대표님 전용
 import page_dashboard  # 대시보드 (메인)
 import page_inquiry   # 1단계: 문의
 import page_estimate  # 2단계: 견적
@@ -85,6 +86,7 @@ with st.sidebar:
     
     # 메뉴 선택
     _menu_items = [
+        "🏢 대표님 전용",
         "📊 경영 대시보드",
         "📞 문의 접수 및 관리",
         "🧮 견적 통합 관리",
@@ -98,8 +100,8 @@ with st.sidebar:
     
     # 대시보드 바로가기 버튼 → 메뉴 전환
     _nav_map = {
-        "문의": 1, "견적": 2, "계약": 3, "인원": 4,
-        "출석": 5, "정산": 6, "상세확인": 7, "데이터": 8
+        "대표님": 0, "문의": 2, "견적": 3, "계약": 4, "인원": 5,
+        "출석": 6, "정산": 7, "상세확인": 8, "데이터": 9
     }
     _default_idx = 0
     if '_nav_target' in st.session_state:
@@ -159,7 +161,10 @@ except Exception as e:
     st.stop()
 
 # 메뉴에 따른 화면 표시
-if "대시보드" in menu:
+if "대표님" in menu:
+    page_ceo.show(data)
+
+elif "대시보드" in menu:
     page_dashboard.show(data)
 
 elif "문의" in menu:

@@ -16,6 +16,7 @@ MIN_LINES = {
     "data_loader.py":     2200,   # 현재 3100+
     "page_estimate.py":   2000,   # 현재 2400+
     "page_contract.py":    280,   # 현재 425
+    "page_ceo.py":         300,   # 현재 400+
     "page_inquiry.py":     220,   # 현재 338
     "utils_dashboard.py":  800,   # 현재 1157
 }
@@ -65,6 +66,13 @@ REQUIRED_FUNCTIONS = {
         "_collect_metadata",           # 메타데이터 수집
         "_restore_metadata",           # 메타데이터 복원
     ],
+    "page_ceo.py": [
+        "show",                        # 메인 진입점
+        "_render_tax_invoice_tab",     # 세금계산서 탭
+        "_render_payment_tab",         # 인력비 탭
+        "_get_tax_invoice_stats",      # 세금계산서 통계
+        "_get_unpaid_staff_stats",     # 미지급 통계
+    ],
     "utils_dashboard.py": [
         "get_settlement_overview",     # 정산 요약
         "get_operating_profit",        # 영업이익
@@ -77,7 +85,7 @@ REQUIRED_FUNCTIONS = {
 # 3. 모듈 임포트 검증 (app.py가 참조하는 모듈)
 # ──────────────────────────────────────────────────
 REQUIRED_FILES = [
-    "app.py", "page_dashboard.py", "page_inquiry.py", "page_estimate.py",
+    "app.py", "page_ceo.py", "page_dashboard.py", "page_inquiry.py", "page_estimate.py",
     "page_contract.py", "page_staff_new.py", "page_settlement.py",
     "page_search.py", "page_customer.py", "page_guide.py",
     "data_loader.py", "utils_dashboard.py", "status_config.py",
@@ -211,7 +219,7 @@ def check_cross_references(base_dir):
     dl_funcs -= {f for f in dl_funcs if f.startswith('_')}  # private 제외
     
     # 호출자 파일에서 db.func_name() 호출 패턴 확인
-    callers = ["page_settlement.py", "page_staff_new.py", "page_estimate.py",
+    callers = ["page_ceo.py", "page_settlement.py", "page_staff_new.py", "page_estimate.py",
                "page_contract.py", "page_inquiry.py"]
     for caller in callers:
         cpath = os.path.join(base_dir, caller)
