@@ -39,6 +39,7 @@ REQUIRED_FUNCTIONS = {
         "show_tax_invoice_management", # 세금계산서
         "_get_bank_info",              # 은행정보 조회
         "_save_bank_to_staff",         # 은행정보 저장
+        "_batch_save_bank_to_staff",   # 은행정보 배치 저장
         "_parse_tax_rate",             # 공제율 파싱
     ],
     "data_loader.py": [
@@ -48,10 +49,13 @@ REQUIRED_FUNCTIONS = {
         "invalidate_data",             # 전체 캐시 무효화
         "invalidate_main_only",        # 메인만 무효화
         "invalidate_dispatch_only",    # 배정/정산만 무효화
+        "invalidate_payment_cache",    # 지급내역 캐시 무효화
         "update_status",               # 상태 변경
         "save_payment_record",         # 지급 기록 저장
+        "batch_save_payment_records",  # 지급 배치 저장
         "save_settlement_record",      # 정산 기록 저장
         "ensure_inquiry_headers",      # 헤더 보장
+        "ensure_payment_headers",      # 지급내역 헤더 보장
         "get_assignments_by_inquiry",  # 배정 조회
     ],
     "page_estimate.py": [
@@ -145,8 +149,14 @@ REQUIRED_KEYWORDS = {
         ("load_estimate_items", "견적품목 로드 함수"),
         ("load_additional_costs", "부대비용 로드 함수"),
         ("additional_costs_df", "부대비용 DF 파라미터"),
-        ("\'\uad6c\ubd84\'", "견적품목 구분 컬럼"),
+        ("\'\uad6c\ubd84\'", "견적품목 구분 컬럼"),        ("ensure_payment_headers", "지급내역 헤더 마이그레이션"),
+        ("은행명", "지급내역 은행명 컬럼"),
+        ("계좌번호", "지급내역 계좌번호 컬럼"),
     ],
+    "page_settlement.py": [
+        ("_batch_save_bank_to_staff", "은행정보 배치 저장 기능"),
+        ("invalidate_payment_cache", "정밀 캐시 초기화"),
+        ("주민등록번호", "주민등록번호 필드"),    ],
     "utils_dashboard.py": [
         ("후보", "후보군 제외 로직"),
         ("취소", "취소 제외 로직"),

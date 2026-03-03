@@ -657,7 +657,7 @@ def save_payment_record(inquiry_id, total_paid, total_invoice):
         sh = client.open_by_key(db.SHEET_ID)
         wks = sh.worksheet("계약건은청구금액적기")
         
-        # 해당 행 찾기
+        # 해당 행 찾기 (get_all_records 1회로 데이터+헤더 모두 취득)
         all_records = wks.get_all_records()
         target_row = None
         for idx, record in enumerate(all_records, start=2):  # 2부터 시작 (헤더는 1)
@@ -669,40 +669,33 @@ def save_payment_record(inquiry_id, total_paid, total_invoice):
             st.error(f"❌ 문의ID '{inquiry_id}'를 찾을 수 없습니다.")
             return False
         
-        # 받은금액 컬럼 찾기
-        headers = wks.row_values(1)
-        paid_col_idx = None
-        for idx, header in enumerate(headers, start=1):
-            if '받은금액' in str(header):
-                paid_col_idx = idx
-                break
+        # 헤더 → 컬럼 인덱스 맵 구성 (get_all_records에서 추출)
+        headers = list(all_records[0].keys()) if all_records else []
+        col_map = {}
+        for i, h in enumerate(headers, start=1):
+            h_clean = str(h).strip()
+            if '받은금액' in h_clean:
+                col_map['받은금액'] = i
+            elif h_clean == '잔액':
+                col_map['잔액'] = i
+            elif h_clean == '진행상황':
+                col_map['진행상황'] = i
+            elif h_clean == '입금여부':
+                col_map['입금여부'] = i
         
-        if not paid_col_idx:
+        if '받은금액' not in col_map:
             st.error("❌ '받은금액' 컬럼을 찾을 수 없습니다.")
             return False
         
-        # 받은금액 업데이트
-        wks.update_cell(target_row, paid_col_idx, int(total_paid))
+        # 단일 배치로 모든 셀 업데이트 (API 1회)
+        from gspread.cell import Cell
+        batch_cells = [
+            Cell(row=target_row, col=col_map['받은금액'], value=int(total_paid))
+        ]
         
-        # 잔액 컬럼 찾기 및 업데이트
-        balance_col_idx = None
-        for idx, header in enumerate(headers, start=1):
-            if header == '잔액':
-                balance_col_idx = idx
-                break
-        
-        if balance_col_idx:
+        if '잔액' in col_map:
             remaining = int(total_invoice - total_paid)
-            wks.update_cell(target_row, balance_col_idx, remaining)
-        
-        # 진행상황 + 입금여부 컬럼 찾기 및 업데이트
-        col_indices = {}
-        for idx, header in enumerate(headers, start=1):
-            h = str(header).strip()
-            if h == '진행상황':
-                col_indices['진행상황'] = idx
-            elif h == '입금여부':
-                col_indices['입금여부'] = idx
+            batch_cells.append(Cell(row=target_row, col=col_map['잔액'], value=remaining))
         
         remaining_amt = total_invoice - total_paid
         if remaining_amt <= 0:
@@ -712,15 +705,11 @@ def save_payment_record(inquiry_id, total_paid, total_invoice):
         else:
             auto_deposit = "미입금"
         
-        from gspread.cell import Cell
-        extra_cells = []
-        # 입금여부만 자동 변경 (진행상황은 프로젝트 단계이므로 건드리지 않음)
-        if '입금여부' in col_indices:
-            extra_cells.append(Cell(row=target_row, col=col_indices['입금여부'], value=auto_deposit))
+        if '입금여부' in col_map:
+            batch_cells.append(Cell(row=target_row, col=col_map['입금여부'], value=auto_deposit))
         
         # ✅ 정산완료 자동 전환: 입금완료 + 기존 지급액 > 0 → 정산완료
-        if auto_deposit == "입금완료" and '진행상황' in col_indices:
-            # 기존 레코드에서 지급액 확인
+        if auto_deposit == "입금완료" and '진행상황' in col_map:
             existing_payout = 0
             for rec in all_records:
                 if str(rec.get('문의ID', '')).strip() == str(inquiry_id).strip():
@@ -730,10 +719,9 @@ def save_payment_record(inquiry_id, total_paid, total_invoice):
                         pass
                     break
             if existing_payout > 0:
-                extra_cells.append(Cell(row=target_row, col=col_indices['진행상황'], value='정산완료'))
+                batch_cells.append(Cell(row=target_row, col=col_map['진행상황'], value='정산완료'))
         
-        if extra_cells:
-            wks.update_cells(extra_cells, value_input_option='RAW')
+        wks.update_cells(batch_cells, value_input_option='RAW')
         
         return True
     except Exception as e:
@@ -1021,8 +1009,10 @@ def show_settlement_detail(data):
     # ① 실제 지급액 계산 (배정기록 시트에서 확정/이체 인력의 총지급액 합산)
     actual_cost = 0
     has_actual_data = False
+    _settle_assignments_raw = pd.DataFrame()  # 필터 전 원본 (급여탭 재사용)
     try:
-        _settle_assignments = db.get_assignments_by_inquiry(inq_id)
+        _settle_assignments_raw = db.get_assignments_by_inquiry(inq_id)
+        _settle_assignments = _settle_assignments_raw.copy()
         if not _settle_assignments.empty:
             # 상태 컴럼 식별
             _sa_status_col = None
@@ -1232,22 +1222,25 @@ def show_settlement_detail(data):
         with sep_info_col:
             st.info("💡 개인별 공제율은 아래 테이블 '공제율' 컬럼에서 변경하세요.\n\n🏢 본사인력은 '별도정산' 체크로 지급합계에서 제외됩니다.")
 
-        # 배정기록 시트에서 직접 인력 데이터 조회
+        # 배정기록 시트에서 직접 인력 데이터 조회 (손익요약에서 이미 로드한 데이터 재사용)
         inq_id = str(row.get('문의ID', '')).strip()
         assignment_df = pd.DataFrame()
         _load_error_msg = None
         if inq_id:
-            for _retry in range(2):  # 최대 2회 시도
-                try:
-                    if _retry > 0:
-                        import time as _t; _t.sleep(1)
-                        db.invalidate_dispatch_only()
-                    assignment_df = db.get_assignments_by_inquiry(inq_id)
-                    if not assignment_df.empty:
-                        break
-                except Exception as _e:
-                    _load_error_msg = str(_e)
-                    print(f"[Settlement] 배정데이터 로드 실패 (시도 {_retry+1}): {_e}")
+            if not _settle_assignments_raw.empty:
+                assignment_df = _settle_assignments_raw
+            else:
+                for _retry in range(2):  # 최대 2회 시도
+                    try:
+                        if _retry > 0:
+                            import time as _t; _t.sleep(1)
+                            db.invalidate_dispatch_only()
+                        assignment_df = db.get_assignments_by_inquiry(inq_id)
+                        if not assignment_df.empty:
+                            break
+                    except Exception as _e:
+                        _load_error_msg = str(_e)
+                        print(f"[Settlement] 배정데이터 로드 실패 (시도 {_retry+1}): {_e}")
 
         # STAFF 시트에서 은행/계좌 정보 로드
         df_staff = data.get('staff', pd.DataFrame())
@@ -1325,12 +1318,73 @@ def show_settlement_detail(data):
             except Exception as e:
                 print(f"계좌정보 저장 실패: {e}")
                 return False
+
+        def _batch_save_bank_to_staff(updates_list, staff_df):
+            """STAFF 시트에 여러 명의 은행/계좌 정보를 1회 API로 일괄 업데이트.
+            updates_list: [{'이름': str, '은행': str, '계좌': str}, ...]
+            """
+            if not updates_list:
+                return 0
+            try:
+                client = db.get_connection()
+                if not client:
+                    return 0
+                sh = client.open_by_key(db.SHEET_ID)
+                wks = sh.worksheet("STAFF")
+                all_vals = wks.get_all_values()
+                headers = [str(h).strip() for h in all_vals[0]] if all_vals else []
+
+                name_col_idx = None
+                for nc in ['이름', '인력명', '성명']:
+                    if nc in headers:
+                        name_col_idx = headers.index(nc)
+                        break
+                if name_col_idx is None:
+                    return 0
+
+                bank_col_idx = None
+                acct_col_idx = None
+                for i, h in enumerate(headers):
+                    if h in ('은행명', '은행') and bank_col_idx is None:
+                        bank_col_idx = i
+                    if h in ('계좌번호', '계좌') and acct_col_idx is None:
+                        acct_col_idx = i
+                if bank_col_idx is None or acct_col_idx is None:
+                    return 0
+
+                # 이름 → 행번호 맵 (1회 스캔)
+                name_row_map = {}
+                for ri in range(1, len(all_vals)):
+                    n = str(all_vals[ri][name_col_idx]).strip()
+                    if n:
+                        name_row_map[n] = ri + 1  # 1-based
+
+                from gspread.cell import Cell
+                batch_cells = []
+                count = 0
+                for u in updates_list:
+                    name = str(u['이름']).strip()
+                    row = name_row_map.get(name)
+                    if not row:
+                        continue
+                    batch_cells.append(Cell(row=row, col=bank_col_idx + 1, value=str(u['은행']).strip()))
+                    batch_cells.append(Cell(row=row, col=acct_col_idx + 1, value=str(u['계좌']).strip()))
+                    count += 1
+
+                if batch_cells:
+                    wks.update_cells(batch_cells, value_input_option='RAW')
+                return count
+            except Exception as e:
+                print(f"계좌정보 일괄저장 실패: {e}")
+                return 0
         
         if not assignment_df.empty:
+            # ── 지급내역 사전 로드 (1회만 호출, 아래 정합성 검증 + 지급상태 맵 둘 다 사용) ──
+            _pay_df_check = db.get_payment_records_by_inquiry(inq_id)
+
             # ── 정합성 자동 검증 ──
             _integrity_warnings = []
             _assign_count = len(assignment_df)
-            _pay_df_check = db.get_payment_records_by_inquiry(inq_id)
             _pay_count = len(_pay_df_check) if not _pay_df_check.empty else 0
             if _pay_count > 0 and _pay_count != _assign_count:
                 _integrity_warnings.append(f"⚠️ 배정 {_assign_count}명 ≠ 지급기록 {_pay_count}명 — 누락/중복 확인 필요")
@@ -1397,8 +1451,8 @@ def show_settlement_detail(data):
                         team_info[_tc]['leader'] = _t_name
 
             edit_rows = []
-            # ── 지급상태 사전 로드 (캐시됨) ──
-            _pay_records_early = db.get_payment_records_by_inquiry(inq_id)
+            # ── 지급상태 맵 구성 (위에서 이미 로드한 _pay_df_check 재사용) ──
+            _pay_records_early = _pay_df_check
             _pay_status_map_early = {}
             if not _pay_records_early.empty and '배정ID' in _pay_records_early.columns and '지급상태' in _pay_records_early.columns:
                 for _, _pr in _pay_records_early.iterrows():
@@ -1422,6 +1476,15 @@ def show_settlement_detail(data):
                 orig_data[a_name] = {'단가': a_rate, '일수': a_days}
 
                 bank, account = _get_bank_info(a_name, df_staff)
+                # 배정기록에서 은행/계좌/주민번호 (STAFF보다 배정기록 우선)
+                _a_bank_from_assign = str(arow.get('은행명', '')).strip() if '은행명' in assignment_df.columns else ''
+                _a_acct_from_assign = str(arow.get('계좌번호', '')).strip() if '계좌번호' in assignment_df.columns else ''
+                _a_ssn = str(arow.get('주민등록번호', '')).strip() if '주민등록번호' in assignment_df.columns else ''
+                # 배정기록에 은행/계좌가 있으면 우선 사용
+                if _a_bank_from_assign and _a_bank_from_assign not in ('nan', 'None', ''):
+                    bank = _a_bank_from_assign
+                if _a_acct_from_assign and _a_acct_from_assign not in ('nan', 'None', ''):
+                    account = _a_acct_from_assign
 
                 # 지급상태 조회
                 _pay_st = _pay_status_map_early.get(_a_aid, '-')
@@ -1464,6 +1527,7 @@ def show_settlement_detail(data):
                     '메모': '',
                     '_은행': bank or '',
                     '_계좌': account or '',
+                    '_주민등록번호': _a_ssn or '',
                     '_팀코드': _tc,
                     '_배정ID': _a_aid,
                 })
@@ -1500,7 +1564,7 @@ def show_settlement_detail(data):
                         '기타(숙박등)': added_row.get('기타(숙박등)', 0),
                         '기본급': 0, '공제': 0, '실수령': 0,
                         '메모': added_row.get('메모', ''),
-                        '_은행': '', '_계좌': '', '_배정ID': '',
+                        '_은행': '', '_계좌': '', '_주민등록번호': '', '_배정ID': '',
                     }
                     initial_df = pd.concat([initial_df, pd.DataFrame([new_row])], ignore_index=True)
 
@@ -1575,8 +1639,14 @@ def show_settlement_detail(data):
                             f'padding:8px 12px;margin:6px 0;"><b style="font-size:13px;">💰 팀 일괄결제 내역</b>'
                             f'{team_html}</div>', unsafe_allow_html=True)
 
+            # 은행/계좌를 표시용 컬럼으로 복사 (편집용은 _접두사 유지)
+            _display_df = initial_df.copy()
+            _display_df['은행'] = _display_df['_은행']
+            _display_df['계좌'] = _display_df['_계좌']
+            _display_df = _display_df.drop(columns=['_은행', '_계좌', '_주민등록번호', '_팀코드', '_배정ID'])
+
             edited_df = st.data_editor(
-                initial_df.drop(columns=['_은행', '_계좌', '_팀코드', '_배정ID']),
+                _display_df,
                 column_config={
                     '지급상태': st.column_config.TextColumn('지급', width=55, disabled=True, help="지급내역 시트 기준 상태"),
                     '이름': st.column_config.TextColumn('이름', width=75, disabled=True),
@@ -1595,6 +1665,8 @@ def show_settlement_detail(data):
                     '공제': st.column_config.NumberColumn('공제', width=70, format="%d", disabled=True),
                     '실수령': st.column_config.NumberColumn('실수령', width=90, format="%d", disabled=True),
                     '메모': st.column_config.TextColumn('메모', width=140, help="메모사항"),
+                    '은행': st.column_config.TextColumn('은행', width=80, disabled=True, help="STAFF/배정기록 기준"),
+                    '계좌': st.column_config.TextColumn('계좌', width=110, disabled=True, help="STAFF/배정기록 기준"),
                 },
                 use_container_width=True,
                 hide_index=True,
@@ -1639,12 +1711,14 @@ def show_settlement_detail(data):
                 elif e_name and e_name != 'N/A' and e_name not in orig_data:
                     changes.append("신규 충원")
 
-                # 은행/계좌 (원본에서 가져오기 — 충원 인원은 비어있음)
+                # 은행/계좌/주민번호 (원본에서 가져오기 — 충원 인원은 비어있음)
                 bank_val = ''
                 acct_val = ''
+                ssn_val = ''
                 if i < len(initial_df):
                     bank_val = str(initial_df.iloc[i].get('_은행', '')).strip()
                     acct_val = str(initial_df.iloc[i].get('_계좌', '')).strip()
+                    ssn_val = str(initial_df.iloc[i].get('_주민등록번호', '')).strip()
 
                 calc_rows.append({
                     '이름': e_name,
@@ -1665,6 +1739,7 @@ def show_settlement_detail(data):
                     '메모': str(erow.get('메모', '')),
                     '은행': bank_val,
                     '계좌': acct_val,
+                    '주민등록번호': ssn_val,
                     '_changes': changes,
                     '_tax_rate': person_rate,
                     '_팀코드': _e_tc,
@@ -1721,16 +1796,20 @@ def show_settlement_detail(data):
 
             with btn_c1:
                 if st.button("🏦 계좌정보 → STAFF 저장", key=f"save_bank_{inq_id}", use_container_width=True):
-                    save_count = 0
+                    # 변경된 계좌만 수집하여 배치 저장 (API 1회 읽기 + 1회 쓰기)
+                    _bank_updates = []
                     for cr in calc_rows:
                         if cr['은행'] and cr['계좌']:
                             orig_bank, orig_acct = _get_bank_info(cr['이름'], df_staff)
                             if cr['은행'] != (orig_bank or '') or cr['계좌'] != (orig_acct or ''):
-                                if _save_bank_to_staff(cr['이름'], cr['은행'], cr['계좌'], df_staff):
-                                    save_count += 1
-                    if save_count > 0:
-                        st.success(f"✅ {save_count}명 계좌정보 저장!")
-                        db.invalidate_data()
+                                _bank_updates.append({'이름': cr['이름'], '은행': cr['은행'], '계좌': cr['계좌']})
+                    if _bank_updates:
+                        save_count = _batch_save_bank_to_staff(_bank_updates, df_staff)
+                        if save_count > 0:
+                            st.success(f"✅ {save_count}명 계좌정보 저장!")
+                            db.invalidate_data()
+                        else:
+                            st.warning("저장 실패 — STAFF 시트를 확인해주세요.")
                     else:
                         st.info("변경된 계좌정보가 없습니다.")
 
@@ -1753,6 +1832,7 @@ def show_settlement_detail(data):
                         _save_status = _existing_status if _existing_status in ('완료', '확인완료') else '대기'
                         _batch_records.append({
                             '배정ID': a_assign_id,
+                            '문의ID': inq_id,
                             '인력명': cr['이름'],
                             '현장명': row['행사명'],
                             '파견기간': str(row.get('행사시작일', '')),
@@ -1768,6 +1848,9 @@ def show_settlement_detail(data):
                             '지급상태': _save_status,
                             '지급일': '',
                             '지급담당자': '',
+                            '은행명': cr.get('은행', ''),
+                            '계좌번호': cr.get('계좌', ''),
+                            '주민등록번호': cr.get('주민등록번호', ''),
                             '비고': _tc_note + f"{cr['공제율']} 공제" + (f" | {cr['메모']}" if cr['메모'] else "") + (' [본사인원]' if _is_hq_person else ''),
                         })
                     if _batch_records:
@@ -1781,7 +1864,8 @@ def show_settlement_detail(data):
                         _total_saved = _result['saved'] + _result['updated']
                         if _total_saved > 0:
                             st.success(f"✅ {' / '.join(parts)} 완료!")
-                            db.invalidate_data()
+                            db.invalidate_payment_cache()
+                            db.invalidate_dispatch_only()
                         else:
                             st.warning("저장할 기록이 없습니다." + (f" ({', '.join(parts)})" if parts else ""))
                     else:
@@ -1937,12 +2021,14 @@ def show_settlement_detail(data):
                     elif _a_status == '대기' and not _a_is_hq and _a_aid:
                         if st.button("💰 입금완료", key=f"_ap_pay_{_a_aid}", use_container_width=True):
                             db.update_payment_status(_a_aid, '완료', datetime.now().strftime('%Y-%m-%d'))
-                            db.invalidate_data()
+                            db.invalidate_payment_cache()
+                            db.invalidate_dispatch_only()
                             st.rerun()
                     elif _a_status == '대기' and _a_is_hq and _a_aid:
                         if st.button("🏢 확인", key=f"_ap_hq_{_a_aid}", use_container_width=True):
                             db.update_payment_status(_a_aid, '확인완료', datetime.now().strftime('%Y-%m-%d'))
-                            db.invalidate_data()
+                            db.invalidate_payment_cache()
+                            db.invalidate_dispatch_only()
                             st.rerun()
                     else:
                         st.caption("미저장")
@@ -1958,7 +2044,8 @@ def show_settlement_detail(data):
                     _now_str = datetime.now().strftime('%Y-%m-%d')
                     _bulk_updates = [{'배정ID': _bid, '지급상태': '완료', '지급일': _now_str} for _bid in _bulk_confirm_list]
                     db.batch_update_payment_status(_bulk_updates)
-                    db.invalidate_data()
+                    db.invalidate_payment_cache()
+                    db.invalidate_dispatch_only()
                     st.rerun()
 
             st.divider()
@@ -2108,7 +2195,8 @@ def show_settlement_detail(data):
                                             if _undo_updates:
                                                 db.batch_update_payment_status(_undo_updates)
                                             st.session_state.pop(_confirm_key, None)
-                                            db.invalidate_data()
+                                            db.invalidate_payment_cache()
+                                            db.invalidate_dispatch_only()
                                             st.rerun()
                                     with _uc2:
                                         if st.button("❌ 취소", key=f"no_{_undo_key}"):
@@ -2134,7 +2222,8 @@ def show_settlement_detail(data):
                                                 _team_updates.append({'배정ID': _m_aid, '지급상태': '완료', '지급일': _now_str})
                                     if _team_updates:
                                         db.batch_update_payment_status(_team_updates)
-                                    db.invalidate_data()
+                                    db.invalidate_payment_cache()
+                                    db.invalidate_dispatch_only()
                                     st.rerun()
                             else:
                                 st.caption("📝 지급기록을 먼저 저장하세요")
@@ -2238,7 +2327,8 @@ def show_settlement_detail(data):
                                         if st.button("✅ 확인", key=f"yes_{_undo_hq_key}"):
                                             db.update_payment_status(_ind_aid, '대기', '')
                                             st.session_state.pop(_confirm_hq_key, None)
-                                            db.invalidate_data()
+                                            db.invalidate_payment_cache()
+                                            db.invalidate_dispatch_only()
                                             st.rerun()
                                     with _uhc2:
                                         if st.button("❌ 취소", key=f"no_{_undo_hq_key}"):
@@ -2257,6 +2347,7 @@ def show_settlement_detail(data):
                                         # 지급기록이 없으면 자동 생성 (확인완료 상태로 직접 저장)
                                         _hq_payment = {
                                             '배정ID': _ind_aid,
+                                            '문의ID': inq_id,
                                             '인력명': cr['이름'],
                                             '현장명': row['행사명'],
                                             '파견기간': str(row.get('행사시작일', '')),
@@ -2271,12 +2362,16 @@ def show_settlement_detail(data):
                                             '최종지급액': cr['총액'],
                                             '지급상태': '확인완료',
                                             '지급일': _now_str,
+                                            '은행명': cr.get('은행', ''),
+                                            '계좌번호': cr.get('계좌', ''),
+                                            '주민등록번호': cr.get('주민등록번호', ''),
                                             '비고': '[본사인원] 확인완료',
                                         }
                                         db.save_payment_record(_hq_payment)
                                     else:
                                         db.update_payment_status(_ind_aid, '확인완료', _now_str)
-                                    db.invalidate_data()
+                                    db.invalidate_payment_cache()
+                                    db.invalidate_dispatch_only()
                                     st.rerun()
                         else:
                             # 외부 인력: 입금완료 버튼
@@ -2292,7 +2387,8 @@ def show_settlement_detail(data):
                                         if st.button("✅ 확인", key=f"yes_{_undo_ext_key}"):
                                             db.update_payment_status(_ind_aid, '대기', '')
                                             st.session_state.pop(_confirm_ext_key, None)
-                                            db.invalidate_data()
+                                            db.invalidate_payment_cache()
+                                            db.invalidate_dispatch_only()
                                             st.rerun()
                                     with _uec2:
                                         if st.button("❌ 취소", key=f"no_{_undo_ext_key}"):
@@ -2305,7 +2401,8 @@ def show_settlement_detail(data):
                             elif _ind_pay_status == '대기':
                                 if st.button("💰 입금완료", key=f"confirm_pay_{_ind_aid}", type="primary", use_container_width=True):
                                     db.update_payment_status(_ind_aid, '완료', datetime.now().strftime('%Y-%m-%d'))
-                                    db.invalidate_data()
+                                    db.invalidate_payment_cache()
+                                    db.invalidate_dispatch_only()
                                     st.rerun()
                             else:
                                 st.caption("📝 지급기록을 먼저 저장하세요")

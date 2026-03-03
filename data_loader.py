@@ -65,9 +65,10 @@ _SHEET_HEADERS = {
     "평가표": ["평가ID", "배정ID", "인력명", "현장명", "근태", "수행", "외모",
                "팀워크", "현장적응", "총점", "평가등급", "평가자", "평가일시",
                "강점", "개선점", "재추천", "비고"],
-    "지급내역": ["지급ID", "배정ID", "인력명", "현장명", "파견기간", "파견일수",
+    "지급내역": ["지급ID", "배정ID", "문의ID", "인력명", "현장명", "파견기간", "파견일수",
                 "기본급", "야근비", "식사비", "교통비", "보너스", "소계",
-                "세금공제", "최종지급액", "지급상태", "지급일", "지급담당자", "비고"],
+                "세금공제", "최종지급액", "지급상태", "지급일", "지급담당자",
+                "은행명", "계좌번호", "주민등록번호", "비고"],
 }
 
 def _get_worksheet(sheet_name: str):
@@ -2215,6 +2216,62 @@ def ensure_payment_sheet():
     return _get_worksheet("지급내역") is not None
 
 
+def ensure_payment_headers():
+    """지급내역 시트에 은행명/계좌번호/주민등록번호/문의ID 컬럼이 없으면 추가 (마이그레이션).
+    기존 18컬럼 → 22컬럼 확장. 앱 시작 시 1회만 실행됩니다.
+    """
+    if st.session_state.get('_payment_headers_checked'):
+        return  # 이미 확인 완료
+    try:
+        wks = _get_worksheet("지급내역")
+        if not wks:
+            st.session_state['_payment_headers_checked'] = True
+            return
+        headers = [str(h).strip() for h in wks.row_values(1)]
+        # 필요한 새 컬럼 확인 (비고 앞에 삽입하기 위해 순서 중요)
+        new_cols_after_지급담당자 = ['은행명', '계좌번호', '주민등록번호']
+        new_col_after_배정ID = '문의ID'
+        changed = False
+
+        # 문의ID 컬럼 (배정ID 뒤, 인력명 앞)
+        if new_col_after_배정ID not in headers:
+            bid_idx = headers.index('배정ID') + 1 if '배정ID' in headers else 2
+            # 인력명 컬럼 앞에 삽입
+            target_insert = bid_idx  # 0-based로는 bid_idx
+            wks.insert_cols([1], col=target_insert + 1)
+            wks.update_cell(1, target_insert + 1, '문의ID')
+            headers.insert(target_insert, '문의ID')
+            changed = True
+            print(f"[Payment] '문의ID' 컬럼 추가 (Col {target_insert + 1})")
+
+        # 은행명/계좌번호/주민등록번호 (지급담당자 뒤, 비고 앞)
+        for col_name in new_cols_after_지급담당자:
+            if col_name not in headers:
+                # 비고 컬럼 앞에 삽입
+                if '비고' in headers:
+                    bigo_idx = headers.index('비고')  # 0-based
+                    wks.insert_cols([1], col=bigo_idx + 1)
+                    wks.update_cell(1, bigo_idx + 1, col_name)
+                    headers.insert(bigo_idx, col_name)
+                else:
+                    # 비고 없으면 끝에 추가
+                    next_col = len(headers) + 1
+                    wks.update_cell(1, next_col, col_name)
+                    headers.append(col_name)
+                changed = True
+                print(f"[Payment] '{col_name}' 컬럼 추가")
+
+        if changed:
+            _invalidate_worksheet_cache("지급내역")
+            invalidate_payment_cache()
+
+        st.session_state['_payment_headers_checked'] = True
+        print(f"[OK] 지급내역 시트: 헤더 확인됨 ({len(headers)}컬럼)")
+    except Exception as e:
+        print(f"ensure_payment_headers error: {e}")
+        st.session_state['_payment_headers_checked'] = True
+
+
 def append_row(sheet_name: str, row_values: list) -> tuple:
     """
     특정 시트에 새로운 행을 추가합니다.
@@ -2770,10 +2827,11 @@ def save_payment_record(payment_dict: dict):
             if target_row > wks.row_count:
                 wks.add_rows(100)
         
-        # 지급내역 18컬럼 구조
+        # 지급내역 22컬럼 구조 (은행명/계좌번호/주민등록번호/문의ID 포함)
         row_values = [
             pay_id if target_row == len(all_vals) + 1 else all_vals[target_row - 1][0] if len(all_vals) >= target_row else pay_id,
             payment_dict.get('배정ID', ''),
+            payment_dict.get('문의ID', ''),
             payment_dict.get('인력명', ''),
             payment_dict.get('현장명', ''),
             payment_dict.get('파견기간', ''),
@@ -2789,6 +2847,9 @@ def save_payment_record(payment_dict: dict):
             payment_dict.get('지급상태', '대기'),
             payment_dict.get('지급일', ''),
             payment_dict.get('지급담당자', ''),
+            payment_dict.get('은행명', ''),
+            payment_dict.get('계좌번호', ''),
+            payment_dict.get('주민등록번호', ''),
             payment_dict.get('비고', ''),
         ]
         
@@ -2840,13 +2901,20 @@ def invalidate_payment_cache():
 
 
 def get_payment_records_by_inquiry(inquiry_id: str) -> pd.DataFrame:
-    """특정 문의ID에 해당하는 지급내역 조회 (캐시된 시트 사용, 배정ID → 배정기록.문의ID 매칭)"""
+    """특정 문의ID에 해당하는 지급내역 조회 (캐시된 시트 사용).
+    지급내역에 문의ID 컬럼이 있으면 직접 필터, 없으면 배정ID → 배정기록.문의ID 매칭으로 우회."""
     try:
         pay_df = _load_payment_sheet_cached()
         if pay_df.empty:
             return pd.DataFrame()
 
-        # 배정ID → 배정기록에서 문의ID로 필터
+        # 문의ID 컬럼이 있으면 직접 필터 (API 절약)
+        if '문의ID' in pay_df.columns:
+            filtered = pay_df[pay_df['문의ID'].astype(str).str.strip() == str(inquiry_id).strip()]
+            if not filtered.empty:
+                return filtered.reset_index(drop=True)
+
+        # fallback: 배정ID → 배정기록에서 문의ID로 필터
         assignments = get_assignments_by_inquiry(inquiry_id)
         if assignments.empty:
             return pd.DataFrame()
@@ -2949,6 +3017,7 @@ def batch_save_payment_records(records: list) -> dict:
                 row_values = [
                     '',  # placeholder for pay_id
                     pd_dict.get('배정ID', ''),
+                    pd_dict.get('문의ID', ''),
                     pd_dict.get('인력명', ''),
                     pd_dict.get('현장명', ''),
                     pd_dict.get('파견기간', ''),
@@ -2964,6 +3033,9 @@ def batch_save_payment_records(records: list) -> dict:
                     pd_dict.get('지급상태', '대기'),
                     pd_dict.get('지급일', ''),
                     pd_dict.get('지급담당자', ''),
+                    pd_dict.get('은행명', ''),
+                    pd_dict.get('계좌번호', ''),
+                    pd_dict.get('주민등록번호', ''),
                     pd_dict.get('비고', ''),
                 ]
 

@@ -151,6 +151,8 @@ with st.sidebar:
 try:
     # 문의작성 시트 헤더 자동 확장 (복장/식사/주차 컬럼 보장)
     db.ensure_inquiry_headers()
+    # 지급내역 시트 헤더 확장 (은행명/계좌번호/주민등록번호/문의ID 컬럼 보장)
+    db.ensure_payment_headers()
     data = db.get_data()
 except Exception as e:
     st.error(f"데이터 로드 중 오류 발생: {e}")
