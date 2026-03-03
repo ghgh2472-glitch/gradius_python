@@ -38,15 +38,16 @@ def _apply_styles():
 # 2. 데이터 로드 헬퍼
 # ==============================================================================
 def _load_all_ceo_data():
-    """세금계산서(settlement) + 배정/지급 데이터를 한 번에 로드"""
+    """세금계산서(settlement) + 배정/지급 + STAFF 데이터를 한 번에 로드"""
     dispatch_data = db.get_dispatch()
     settlement_df = dispatch_data.get('settlement', pd.DataFrame())
     dispatch_df = dispatch_data.get('dispatch', pd.DataFrame())
     payment_df = dispatch_data.get('payment', pd.DataFrame())
+    staff_df = dispatch_data.get('staff', pd.DataFrame())
     if not settlement_df.empty:
         settlement_df = settlement_df.fillna('').copy()
         settlement_df.columns = [str(c).replace('\n', ' ').strip() for c in settlement_df.columns]
-    return settlement_df, dispatch_df, payment_df
+    return settlement_df, dispatch_df, payment_df, staff_df
 
 
 def _find_col(df, candidates):
@@ -94,12 +95,48 @@ def _get_tax_invoice_stats(settlement_df):
 # ==============================================================================
 # 4. 인력비 현황 분석 — 정산 페이지와 동일한 team_info + calc_rows 로직
 # ==============================================================================
-def _build_inquiry_payment_data(dispatch_df, payment_df):
+def _get_bank_info_from_staff(staff_name, staff_df):
+    """STAFF 시트에서 이름으로 은행/계좌 검색 (정산 페이지와 동일 로직)"""
+    if staff_df.empty:
+        return '', ''
+    name_c = None
+    for c in ['이름', '인력명', '성명']:
+        if c in staff_df.columns:
+            name_c = c
+            break
+    if not name_c:
+        return '', ''
+    matched = staff_df[staff_df[name_c].astype(str).str.strip() == str(staff_name).strip()]
+    if matched.empty:
+        return '', ''
+    r = matched.iloc[0]
+    bank = str(r.get('은행명', r.get('은행', ''))).strip()
+    account = str(r.get('계좌번호', r.get('계좌', ''))).strip()
+    bank = bank if bank and bank not in ('nan', 'None', '') else ''
+    account = account if account and account not in ('nan', 'None', '') else ''
+    return bank, account
+
+
+def _extract_tax_label_from_remark(remark_str):
+    """지급내역 비고란에서 공제율 라벨 추출 (예: '3.3% 공제' → '3.3%')"""
+    remark = str(remark_str)
+    if '3.3%' in remark:
+        return '3.3%'
+    if '0.9%' in remark:
+        return '0.9%'
+    if '공제없음' in remark or '공제 없음' in remark:
+        return '공제없음'
+    return ''
+
+
+def _build_inquiry_payment_data(dispatch_df, payment_df, staff_df=None):
     """
     문의ID별로 배정기록을 그룹핑한 뒤, 정산 페이지와 동일하게
     team_info(팀 그룹핑) + calc_rows(급여 계산) 를 구성.
     Returns: list of dicts (각 문의별 급여 데이터)
     """
+    if staff_df is None:
+        staff_df = pd.DataFrame()
     if dispatch_df.empty:
         return [], 0, 0, 0
 
@@ -195,6 +232,13 @@ def _build_inquiry_payment_data(dispatch_df, payment_df):
             a_bank = str(arow.get(col_bank, '')).strip() if col_bank else ''
             a_acct = str(arow.get(col_acct, '')).strip() if col_acct else ''
             a_date = str(arow.get(col_date, '')).strip() if col_date else ''
+
+            # 은행/계좌 폴백: STAFF 시트 → 배정 시트 (정산 페이지와 동일 2단계)
+            staff_bank, staff_acct = _get_bank_info_from_staff(a_name, staff_df)
+            if not a_bank or a_bank in ('nan', 'None', ''):
+                a_bank = staff_bank
+            if not a_acct or a_acct in ('nan', 'None', ''):
+                a_acct = staff_acct
             tc = str(arow.get(col_team_code, '')).strip() if col_team_code else ''
             is_pay = str(arow.get(col_pay_target, 'Y')).strip().upper() == 'Y' if col_pay_target else True
             is_hq = a_name in hq_names
@@ -212,6 +256,7 @@ def _build_inquiry_payment_data(dispatch_df, payment_df):
 
             # 지급내역에서 상세 금액 가져오기 (저장된 경우)
             pr = pay_record_map.get(a_aid, {})
+            tax_label = ''  # 공제율 라벨
             if hasattr(pr, 'get'):
                 meal = ud.safe_int(pr.get('식사비', 0))
                 transport = ud.safe_int(pr.get('교통비', 0))
@@ -220,12 +265,38 @@ def _build_inquiry_payment_data(dispatch_df, payment_df):
                 saved_gross = ud.safe_int(pr.get('소계', 0))
                 saved_tax = ud.safe_int(pr.get('세금공제', 0))
                 saved_net = ud.safe_int(pr.get('최종지급액', 0))
+                # 비고란에서 공제율 복원
+                remark = str(pr.get('비고', ''))
+                tax_label = _extract_tax_label_from_remark(remark)
+                # 지급내역에 은행/계좌가 있으면 우선 사용 (가장 최신)
+                pr_bank = str(pr.get('은행명', '')).strip()
+                pr_acct = str(pr.get('계좌번호', '')).strip()
+                if pr_bank and pr_bank not in ('nan', 'None', ''):
+                    a_bank = pr_bank
+                if pr_acct and pr_acct not in ('nan', 'None', ''):
+                    a_acct = pr_acct
             else:
                 meal = transport = overtime = etc_cost = 0
                 saved_gross = saved_tax = saved_net = 0
 
             # 지급상태
             pst = pay_status_map.get(a_aid, '미저장')
+
+            # 공제율 결정: 비고란 > 세금공제 역산 > 기본 3.3%
+            if not tax_label:
+                if saved_gross > 0 and saved_tax > 0:
+                    ratio = saved_tax / saved_gross
+                    if abs(ratio - 0.033) < 0.005:
+                        tax_label = '3.3%'
+                    elif abs(ratio - 0.009) < 0.003:
+                        tax_label = '0.9%'
+                    else:
+                        tax_label = '3.3%'
+                elif saved_tax == 0 and saved_net > 0:
+                    tax_label = '공제없음'
+                else:
+                    tax_label = '3.3%'  # 미저장 시 기본
+            tax_rate = _parse_tax_rate(tax_label)
 
             # 금액 결정: 지급내역 저장된 게 있으면 그걸 사용 (정산 페이지와 동일한 값)
             if saved_net > 0:
@@ -234,7 +305,7 @@ def _build_inquiry_payment_data(dispatch_df, payment_df):
                 net = saved_net
             else:
                 gross = basic + meal + transport + overtime + etc_cost
-                tax = int(gross * 0.033)  # 기본 3.3%
+                tax = int(gross * tax_rate)
                 net = gross - tax
 
             calc_rows.append({
@@ -251,6 +322,7 @@ def _build_inquiry_payment_data(dispatch_df, payment_df):
                 '총액': gross,
                 '공제': tax,
                 '실수령': net,
+                '공제율': tax_label,
                 '은행': a_bank,
                 '계좌': a_acct,
                 '날짜': a_date,
@@ -288,7 +360,7 @@ def show(data):
     st.caption("세금계산서 발행 & 인력비 지급 — 확인 즉시 처리")
 
     try:
-        settlement_df, dispatch_df, payment_df = _load_all_ceo_data()
+        settlement_df, dispatch_df, payment_df, staff_df = _load_all_ceo_data()
     except Exception as e:
         st.error(f"데이터 로드 실패: {e}")
         return
@@ -301,7 +373,7 @@ def show(data):
 
     # ── 인력비 (정산 페이지 동일 로직) ──
     venue_data_list, staff_done, staff_total, total_unpaid_amt = (
-        _build_inquiry_payment_data(dispatch_df, payment_df)
+        _build_inquiry_payment_data(dispatch_df, payment_df, staff_df)
     )
     unpaid_count = sum(
         1 for vd in venue_data_list
@@ -658,14 +730,23 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
             onsite_tag = "" if leader_onsite else " 🚫불참"
             status_badge = "⏳" if leader_cr['지급상태'] == '대기' else "📝"
             status_txt = " [대기]" if leader_cr['지급상태'] == '대기' else " [미저장]"
+            leader_tax_label = leader_cr.get('공제율', '3.3%')
             bank_info = (f"💳 {leader_cr['은행']} {leader_cr['계좌']}"
                          if leader_cr['은행'] and leader_cr['은행'] not in ('nan', 'None', '')
                          else "❗ 계좌 미등록")
 
+            # 팀원 이름 목록 (expander 제목용)
+            member_names = [md['name'] for md in ti['member_details'] if md['name'] != leader]
+            member_list_txt = f" ({', '.join(member_names)})"
+
             with st.expander(
                 f"{status_badge} 👥 {leader}팀{status_txt} ({total_n}명, 현장{onsite_n}명{onsite_tag}) "
-                f"— ₩{leader_cr['실수령']:,} {bank_info}"
+                f"— ₩{leader_cr['총액']:,} [{leader_tax_label}] {bank_info}"
             ):
+                # 팀원 결제분 포함 안내
+                st.info(
+                    f"ℹ️ **{leader}**에게 팀원 {len(member_names)}명분{member_list_txt} 합산 지급"
+                )
                 # 팀 구성원 상세
                 st.markdown("**👥 팀 구성원**")
                 member_html = ''
@@ -724,7 +805,7 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
                         f"| 연장 | ₩{leader_cr['연장']:,} |\n"
                         f"| 기타(숙박등) | ₩{leader_cr['기타']:,} |\n"
                         f"| **총액** | **₩{leader_cr['총액']:,}** |\n"
-                        f"| 공제 | -₩{leader_cr['공제']:,} |\n"
+                        f"| 공제({leader_tax_label}) | -₩{leader_cr['공제']:,} |\n"
                         f"| **실수령 → {leader} 계좌** | **₩{leader_cr['실수령']:,}** |"
                     )
                 with c2:
@@ -768,6 +849,7 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
                 aid = cr['배정ID']
                 bank = cr['은행']
                 acct = cr['계좌']
+                ind_tax_label = cr.get('공제율', '3.3%')
                 bank_display = (f"💳 {bank} {acct}"
                                 if bank and bank not in ('nan', 'None', '')
                                 else "❗ 계좌 미등록")
@@ -776,7 +858,7 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
 
                 with st.expander(
                     f"{status_badge} 👤 {name}{status_txt} ({cr['직무']}) "
-                    f"— ₩{net:,} {bank_display}"
+                    f"— ₩{cr['총액']:,} [{ind_tax_label}] {bank_display}"
                 ):
                     c1, c2 = st.columns([2, 1])
                     with c1:
@@ -788,7 +870,7 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
                             f"| 연장 | ₩{cr['연장']:,} |\n"
                             f"| 기타(숙박등) | ₩{cr['기타']:,} |\n"
                             f"| **총액** | **₩{cr['총액']:,}** |\n"
-                            f"| 공제 | -₩{cr['공제']:,} |\n"
+                            f"| 공제({ind_tax_label}) | -₩{cr['공제']:,} |\n"
                             f"| **실수령** | **₩{net:,}** |"
                         )
                     with c2:
