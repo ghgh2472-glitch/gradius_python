@@ -18,20 +18,20 @@ def _apply_styles():
             border-radius: 14px; padding: 18px 14px; text-align: center;
             box-shadow: 0 2px 10px rgba(0,0,0,0.08); min-height: 110px;
         }
-        .ceo-kpi .kpi-label { font-size: 12px; font-weight: 600; opacity: 0.85; margin-bottom: 6px; }
-        .ceo-kpi .kpi-value { font-size: 26px; font-weight: 800; margin: 6px 0; }
-        .ceo-kpi .kpi-sub { font-size: 11px; opacity: 0.7; }
+        .ceo-kpi .kpi-label { font-size: 13px; font-weight: 600; opacity: 0.85; margin-bottom: 6px; }
+        .ceo-kpi .kpi-value { font-size: 32px; font-weight: 800; margin: 6px 0; }
+        .ceo-kpi .kpi-sub { font-size: 12px; opacity: 0.7; }
         .ceo-card {
             background: white; border: 1px solid #e5e7eb; border-radius: 10px;
-            padding: 16px; margin-bottom: 10px;
+            padding: 20px; margin-bottom: 12px;
             border-left: 4px solid #EF4444; transition: all 0.15s;
         }
         .ceo-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
         .ceo-card.done { border-left-color: #10B981; background: #F0FDF4; }
-        .ceo-card .card-title { font-size: 15px; font-weight: 700; color: #1e293b; margin-bottom: 4px; }
-        .ceo-card .card-detail { font-size: 12px; color: #6b7280; line-height: 1.7; }
-        .ceo-card .card-amount { font-size: 14px; font-weight: 700; color: #DC2626; }
-        .ceo-section { font-size: 18px; font-weight: 700; color: #111827; margin-bottom: 14px;
+        .ceo-card .card-title { font-size: 18px; font-weight: 700; color: #1e293b; margin-bottom: 8px; }
+        .ceo-card .card-detail { font-size: 14px; color: #4b5563; line-height: 1.9; }
+        .ceo-card .card-amount { font-size: 17px; font-weight: 700; color: #DC2626; }
+        .ceo-section { font-size: 20px; font-weight: 700; color: #111827; margin-bottom: 14px;
                        padding-left: 10px; border-left: 4px solid #6366F1; }
     </style>
     """, unsafe_allow_html=True)
@@ -122,6 +122,24 @@ def _get_unpaid_staff_stats(dispatch_df, payment_df):
         pay_df = pay_df[pay_df[col_pay_target].astype(str).str.strip().str.upper() != 'N'].copy()
 
     pay_df['_지급액'] = pay_df[col_pay_amt].apply(ud.safe_int)
+
+    # 지급내역(payment_df)에 기록된 최종지급액이 있으면 우선 사용 (팀장 합산금액 반영)
+    if not payment_df.empty and col_assign_id:
+        _pay_amt_col = _find_col(payment_df, ["최종지급액", "소계"])
+        _pay_bid_col = _find_col(payment_df, ["배정ID"])
+        if _pay_amt_col and _pay_bid_col:
+            _pay_amt_map = {}
+            for _, _pr in payment_df.iterrows():
+                _pbid = str(_pr.get(_pay_bid_col, '')).strip()
+                _pamt = ud.safe_int(_pr.get(_pay_amt_col, 0))
+                if _pbid and _pamt > 0:
+                    _pay_amt_map[_pbid] = _pamt
+            if _pay_amt_map:
+                def _override_amt(row):
+                    _bid = str(row.get(col_assign_id, '')).strip()
+                    return _pay_amt_map.get(_bid, row['_지급액'])
+                pay_df['_지급액'] = pay_df.apply(_override_amt, axis=1)
+
     pay_df = pay_df[pay_df['_지급액'] > 0].copy()
 
     if pay_df.empty:
@@ -407,6 +425,12 @@ def _render_tax_invoice_tab(settlement_df, not_issued_df, col_tax, col_company, 
             if email_val and email_val not in ('nan', 'None', ''):
                 biz_lines.append(f"📧 이메일: <b>{email_val}</b>")
 
+            # 품목 정보
+            item_val = str(row.get('내용(품목)', '')).strip()
+            item_line = ''
+            if item_val and item_val not in ('nan', 'None', ''):
+                item_line = f'📦 품목: <b>{item_val}</b><br/>'
+
             money_lines = []
             if supply_str:
                 money_lines.append(f"공급가액: <b>{supply_str}</b>")
@@ -420,26 +444,32 @@ def _render_tax_invoice_tab(settlement_df, not_issued_df, col_tax, col_company, 
                 missing.append("사업자번호")
             if not email_val or email_val in ('nan', 'None', ''):
                 missing.append("이메일")
-            missing_html = ""
+            missing_html = ''
             if missing:
-                missing_html = f"<div style='background:#FEF3C7;border-radius:4px;padding:3px 8px;margin-top:6px;font-size:11px;color:#92400E;'>⚠️ 미입력: {', '.join(missing)}</div>"
+                missing_html = (
+                    f'<div style="background:#FEF3C7;border-radius:6px;padding:6px 10px;'
+                    f'margin-top:8px;font-size:13px;color:#92400E;">'
+                    f'⚠️ 미입력: {", ".join(missing)}</div>'
+                )
 
             biz_block = " · ".join(biz_lines) if biz_lines else ""
             money_block = " | ".join(money_lines) if money_lines else ""
-            title = f"<b style='font-size:15px;'>{company}</b>"
+            title = f"<b style='font-size:18px;'>{company}</b>"
             if site_name:
-                title += f" <span style='color:#6b7280;font-size:13px;'>({site_name})</span>"
+                title += f" <span style='color:#6b7280;font-size:14px;'>({site_name})</span>"
 
-            st.markdown(f"""
-            <div class="ceo-card">
-                <div class="card-title">{title}</div>
-                <div class="card-detail">
-                    {biz_block}{'<br/>' if biz_block else ''}
-                    <span style="color:#C2410C;">{money_block}</span>
-                </div>
-                {missing_html}
-            </div>
-            """, unsafe_allow_html=True)
+            card_html = (
+                f'<div class="ceo-card">'
+                f'<div class="card-title">{title}</div>'
+                f'<div class="card-detail">'
+                f'{item_line}'
+                f'{biz_block}{"<br/>" if biz_block else ""}'
+                f'<span style="color:#C2410C;font-weight:600;">{money_block}</span>'
+                f'</div>'
+                f'{missing_html}'
+                f'</div>'
+            )
+            st.markdown(card_html, unsafe_allow_html=True)
 
         with col_right:
             st.markdown("<div style='padding-top:12px;'></div>", unsafe_allow_html=True)
@@ -464,6 +494,11 @@ def _render_tax_invoice_tab(settlement_df, not_issued_df, col_tax, col_company, 
                         st.rerun()
                 except Exception as e:
                     st.error(f"저장 실패: {e}")
+            st.link_button(
+                "🏛️ 홈택스",
+                "https://hometax.go.kr/websquare/websquare.html?w2xPath=/ui/pp/index_pp.xml&menuCd=index3",
+                use_container_width=True,
+            )
 
 
 # ==============================================================================
@@ -543,16 +578,18 @@ def _render_payment_tab(unpaid_ext, dispatch_df, payment_df, hq_names,
 
             col_l, col_r = st.columns([4, 1])
             with col_l:
-                st.markdown(f"""
-                <div class="ceo-card">
-                    <div class="card-title">👤 {name} <span style="font-size:11px;color:#6b7280;">({status_badge})</span></div>
-                    <div class="card-detail">
-                        {bank_display}<br/>
-                        💰 지급액: <b style="color:#DC2626;">₩{amt:,}</b>
-                        {f' · 📅 {date_val}' if date_val and date_val not in ('nan', 'None', '') else ''}
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
+                date_info = f' · 📅 {date_val}' if date_val and date_val not in ('nan', 'None', '') else ''
+                pay_card_html = (
+                    f'<div class="ceo-card">'
+                    f'<div class="card-title">👤 {name} '
+                    f'<span style="font-size:13px;color:#6b7280;">({status_badge})</span></div>'
+                    f'<div class="card-detail">'
+                    f'{bank_display}<br/>'
+                    f'💰 지급액: <b style="color:#DC2626;font-size:16px;">₩{amt:,}</b>'
+                    f'{date_info}'
+                    f'</div></div>'
+                )
+                st.markdown(pay_card_html, unsafe_allow_html=True)
 
             with col_r:
                 st.markdown("<div style='padding-top:12px;'></div>", unsafe_allow_html=True)
