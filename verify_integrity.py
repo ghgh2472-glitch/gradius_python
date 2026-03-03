@@ -71,7 +71,7 @@ REQUIRED_FUNCTIONS = {
         "_render_tax_invoice_tab",     # 세금계산서 탭
         "_render_payment_tab",         # 인력비 탭
         "_get_tax_invoice_stats",      # 세금계산서 통계
-        "_get_unpaid_staff_stats",     # 미지급 통계
+        "_build_inquiry_payment_data",  # 미지급 통계 (정산 페이지 동일 로직)
     ],
     "utils_dashboard.py": [
         "get_settlement_overview",     # 정산 요약
