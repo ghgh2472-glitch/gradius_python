@@ -110,11 +110,17 @@ def _get_unpaid_staff_stats(dispatch_df, payment_df):
     col_assign_id = _find_col(dispatch_df, ["배정ID"])
     col_bank = _find_col(dispatch_df, ["은행명", "은행"])
     col_acct = _find_col(dispatch_df, ["계좌번호", "계좌"])
+    col_pay_target = _find_col(dispatch_df, ["결제대상"])
 
     if not col_name or not col_pay_amt:
         return pd.DataFrame(), 0, 0, 0, []
 
     pay_df = dispatch_df.copy()
+
+    # 팀원(결제대상=N)은 팀장 계좌로 일괄지급되므로 개별 미지급 목록에서 제외
+    if col_pay_target and col_pay_target in pay_df.columns:
+        pay_df = pay_df[pay_df[col_pay_target].astype(str).str.strip().str.upper() != 'N'].copy()
+
     pay_df['_지급액'] = pay_df[col_pay_amt].apply(ud.safe_int)
     pay_df = pay_df[pay_df['_지급액'] > 0].copy()
 

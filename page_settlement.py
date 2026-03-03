@@ -1866,6 +1866,8 @@ def show_settlement_detail(data):
                             st.success(f"✅ {' / '.join(parts)} 완료!")
                             db.invalidate_payment_cache()
                             db.invalidate_dispatch_only()
+                            time.sleep(1)
+                            st.rerun()
                         else:
                             st.warning("저장할 기록이 없습니다." + (f" ({', '.join(parts)})" if parts else ""))
                     else:

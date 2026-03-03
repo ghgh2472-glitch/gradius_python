@@ -269,7 +269,7 @@ def load_dispatch_data():
     """배정기록과 계약건은청구금액적기를 함께 로드 (인력배정/정산 탭에서 사용)"""
     client = get_connection()
     if not client:
-        return {"dispatch": pd.DataFrame(), "settlement": pd.DataFrame()}
+        return {"dispatch": pd.DataFrame(), "settlement": pd.DataFrame(), "payment": pd.DataFrame()}
     
     try:
         sh = client.open_by_key(SHEET_ID)
@@ -324,10 +324,18 @@ def load_dispatch_data():
             print(f"[WARN] settlement sheet load failed: {str(e)[:60]}")
             result["settlement"] = pd.DataFrame()
         
+        # 지급내역 로드 (payment 캐시 활용)
+        try:
+            result["payment"] = _load_payment_sheet_cached()
+            print(f"[OK] payment sheet: {len(result['payment'])} rows loaded")
+        except Exception as e:
+            print(f"[WARN] payment sheet load failed: {str(e)[:60]}")
+            result["payment"] = pd.DataFrame()
+
         return result
     except Exception as e:
         print(f"[Error] dispatch data load error: {str(e)[:60]}")
-        return {"dispatch": pd.DataFrame(), "settlement": pd.DataFrame()}
+        return {"dispatch": pd.DataFrame(), "settlement": pd.DataFrame(), "payment": pd.DataFrame()}
 
 
 # ---------------------------------------------------------
@@ -479,6 +487,7 @@ def get_dispatch():
     """
     세션에 캐시된 배정/정산 데이터를 반환합니다.
     초기 로딩 시 이미 포함되어 있으면 그대로 사용, 없으면 지연 로드.
+    **payment는 항상 _load_payment_sheet_cached()에서 fresh하게 가져옴** (캐시 불일치 방지).
     """
     if '_dispatch_data' not in st.session_state or st.session_state['_dispatch_data'] is None:
         # 초기 로딩에서 이미 읽어왔는지 확인
@@ -487,12 +496,12 @@ def get_dispatch():
             st.session_state['_dispatch_data'] = {
                 "dispatch": app_data['dispatch'],
                 "settlement": app_data.get('settlement', pd.DataFrame()),
-                "payment": app_data.get('payment', pd.DataFrame()),
+                "payment": _load_payment_sheet_cached(),
             }
             # 배정기록 시트 컨텍스트 프리-워밍
             try:
                 _get_assign_sheet_ctx()
-                print("[SESSION] Dispatch data from initial load + assign ctx warmed")
+                print("[SESSION] Dispatch data from initial load + fresh payment + assign ctx warmed")
             except Exception as e:
                 print(f"[SESSION] Dispatch data from initial load (assign ctx warm failed: {e})")
         else:
@@ -3043,6 +3052,16 @@ def batch_save_payment_records(records: list) -> dict:
                     # 업데이트: 기존 행 위에 덮어쓰기 (셀 단위 배치)
                     target_row = existing_map[target_bid]
                     row_values[0] = all_vals[target_row - 1][0] if len(all_vals) >= target_row else pay_id
+                    # 기존 완료/확인완료 건의 지급상태와 지급일은 보존 (덮어쓰기 방지)
+                    existing_row = all_vals[target_row - 1] if len(all_vals) >= target_row else []
+                    status_col = headers.index('지급상태') if '지급상태' in headers else -1
+                    date_col = headers.index('지급일') if '지급일' in headers else -1
+                    if status_col >= 0 and len(existing_row) > status_col:
+                        existing_status = str(existing_row[status_col]).strip()
+                        if existing_status in ('완료', '확인완료'):
+                            row_values[status_col] = existing_status
+                            if date_col >= 0 and len(existing_row) > date_col:
+                                row_values[date_col] = existing_row[date_col]
                     for col_idx, val in enumerate(row_values):
                         batch_cells.append(Cell(row=target_row, col=col_idx + 1, value=val))
                     updated += 1

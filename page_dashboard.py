@@ -1730,9 +1730,15 @@ def show(data):
             col_pay_amt = ud.find_col(df_dispatch, ["총지급액", "지급액"])
             col_date = ud.find_col(df_dispatch, ["파견일자", "파견기간", "날짜"])
             col_assign_id = ud.find_col(df_dispatch, ["배정ID"])
+            col_pay_target = ud.find_col(df_dispatch, ["결제대상"])
             
             if col_name and col_pay_amt:
                 _pay_df = df_dispatch.copy()
+
+                # 팀원(결제대상=N)은 팀장 계좌로 일괄지급되므로 개별 미지급 목록에서 제외
+                if col_pay_target and col_pay_target in _pay_df.columns:
+                    _pay_df = _pay_df[_pay_df[col_pay_target].astype(str).str.strip().str.upper() != 'N'].copy()
+
                 _pay_df['_지급액'] = _pay_df[col_pay_amt].apply(ud.safe_int)
                 
                 # 지급액 > 0인 건만 대상
