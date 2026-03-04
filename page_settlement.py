@@ -1473,6 +1473,12 @@ def show_settlement_detail(data):
                         if _memo_clean:
                             _pay_memo_map[_aid_key] = _memo_clean
 
+            # 기타항목명 드롭다운 옵션 (기존 커스텀 값 포함)
+            _ETC_LABEL_OPTIONS = ['기타(숙박등)', '파트타임', '교육비', '장비비', '숙박비', '출장비', '식대추가', '야간수당', '특근수당', '기타수당']
+            for _v in _pay_etc_label_map.values():
+                if _v and _v not in _ETC_LABEL_OPTIONS:
+                    _ETC_LABEL_OPTIONS.append(_v)
+
             for i, arow in assignment_df.iterrows():
                 a_name = str(arow.get(name_col, 'N/A')) if name_col else 'N/A'
                 a_role = str(arow.get(role_col, '')) if role_col else ''
@@ -1678,7 +1684,7 @@ def show_settlement_detail(data):
                     '교통비': st.column_config.NumberColumn('교통비', width=70, min_value=0, step=5000, format="%d"),
                     '연장': st.column_config.NumberColumn('연장', width=70, min_value=0, step=5000, format="%d", help="연장근무 수당"),
                     '기타(숙박등)': st.column_config.NumberColumn('기타(숙박등)', width=85, min_value=0, step=5000, format="%d", help="숙박비, 기타 수당 등"),
-                    '기타항목명': st.column_config.TextColumn('기타항목명', width=95, help="기타 항목의 실제 이름 (예: 파트타임, 교육비)"),
+                    '기타항목명': st.column_config.SelectboxColumn('기타항목명', width=100, options=_ETC_LABEL_OPTIONS, help="기타 항목명 선택"),
                     '기본급': st.column_config.NumberColumn('기본급', width=90, format="%d", disabled=True),
                     '공제': st.column_config.NumberColumn('공제', width=70, format="%d", disabled=True),
                     '실수령': st.column_config.NumberColumn('실수령', width=90, format="%d", disabled=True),
