@@ -2733,6 +2733,10 @@ def show_tax_invoice_management():
                             value=_pick_val('내용(품목)'),
                             placeholder="인력파견 등")
                     
+                    edit_address = st.text_input("사업장주소",
+                        value=_pick_val('사업장주소'),
+                        placeholder="서울시 강남구 역삼로 000")
+                    
                     edit_note = st.text_area("발행관련 요청사항", 
                         value=_pick_val('발행요청사항'),
                         placeholder="계산서 발행일 지정, 분할 발행 등", height=80)
@@ -2768,6 +2772,7 @@ def show_tax_invoice_management():
                                         '이메일': edit_email,
                                         '연락처': edit_contact,
                                         '내용(품목)': edit_content,
+                                        '사업장주소': edit_address,
                                         '발행요청사항': edit_note,
                                     }
                                     for _hdr, _val in _update_map.items():
@@ -2796,6 +2801,7 @@ def show_tax_invoice_management():
                     ci1.markdown(f"**법인명**: {selected_row.get('법인명', '-')}")
                     ci2.markdown(f"**이메일**: {selected_row.get('이메일', '-')}")
                     ci2.markdown(f"**연락처**: {selected_row.get('연락처', '-')}")
+                    ci2.markdown(f"**사업장주소**: {selected_row.get('사업장주소', '-')}")
                     ci2.markdown(f"**청구금액**: {selected_row.get('청구금액', '-')}")
                     ci2.markdown(f"**내용(품목)**: {selected_row.get('내용(품목)', '-')}")
             

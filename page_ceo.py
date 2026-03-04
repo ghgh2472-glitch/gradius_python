@@ -844,7 +844,7 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
                         st.warning(f"❗ {leader} 계좌 미등록")
             # ── 팀 외부 입금완료 버튼 ──
             with _team_btn_col:
-                st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+                st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
                 if leader_cr['지급상태'] == '대기':
                     if st.button("💰 입금완료", key=f"ceo_team_{tc}_{inq_id}", type="primary",
                                  use_container_width=True):
@@ -913,7 +913,7 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
                             st.warning("❗ 계좌 미등록")
                 # ── 개별 외부 입금완료 버튼 ──
                 with _ind_btn_col:
-                    st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+                    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
                     if pst == '대기' and aid:
                         if st.button("💰 입금완료", key=f"ceo_ind_{aid}_{inq_id}", type="primary",
                                      use_container_width=True):
