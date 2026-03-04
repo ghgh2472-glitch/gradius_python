@@ -214,6 +214,13 @@ def _build_inquiry_payment_data(dispatch_df, payment_df, staff_df=None):
                 t_name = str(tr.get(col_name, ''))
                 t_rate = int(float(tr.get(col_rate, 0) or 0)) if col_rate else 0
                 t_days = int(float(tr.get(col_days, 1) or 1)) if col_days else 1
+                # 지급내역 파견일수로 override (정산 시 수정된 값 반영)
+                _t_aid = str(tr.get(col_assign_id, '')).strip() if col_assign_id else ''
+                _t_pr = pay_record_map.get(_t_aid, {})
+                if hasattr(_t_pr, 'get'):
+                    _pr_days = ud.safe_int(_t_pr.get('파견일수', 0))
+                    if _pr_days > 0:
+                        t_days = _pr_days
                 is_pay = str(tr.get(col_pay_target, 'Y')).strip().upper() == 'Y'
                 is_onsite = str(tr.get(col_onsite, 'Y')).strip().upper() != 'N' if col_onsite else True
 
@@ -241,6 +248,12 @@ def _build_inquiry_payment_data(dispatch_df, payment_df, staff_df=None):
             a_rate = int(float(arow.get(col_rate, 0) or 0)) if col_rate else 0
             a_days = int(float(arow.get(col_days, 1) or 1)) if col_days else 1
             a_aid = str(arow.get(col_assign_id, '')).strip() if col_assign_id else ''
+            # 지급내역 파견일수로 override (정산 시 수정된 값 반영)
+            _ind_pr = pay_record_map.get(a_aid, {})
+            if hasattr(_ind_pr, 'get'):
+                _pr_days = ud.safe_int(_ind_pr.get('파견일수', 0))
+                if _pr_days > 0:
+                    a_days = _pr_days
             a_bank = str(arow.get(col_bank, '')).strip() if col_bank else ''
             a_acct = str(arow.get(col_acct, '')).strip() if col_acct else ''
             a_date = str(arow.get(col_date, '')).strip() if col_date else ''
