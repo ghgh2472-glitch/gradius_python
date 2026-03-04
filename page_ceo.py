@@ -492,7 +492,9 @@ def show(data):
 
     st.markdown("---")
 
-    tab_tax, tab_pay, tab_deposit = st.tabs(["📄 세금계산서 발행 관리", "💸 인력비 지급 관리", "💰 업체 입금관리"])
+    tab_tax, tab_pay, tab_deposit, tab_profit = st.tabs(
+        ["📄 세금계산서 발행 관리", "💸 인력비 지급 관리", "💰 업체 입금관리", "📊 프로젝트 수익 보고"]
+    )
 
     with tab_tax:
         _render_tax_invoice_tab(settlement_df, not_issued_df, col_tax, col_company, col_inq_id,
@@ -503,6 +505,9 @@ def show(data):
 
     with tab_deposit:
         _render_deposit_tab(settlement_df, settlement_overview)
+
+    with tab_profit:
+        _render_profit_tab(settlement_df, payment_df)
 
 
 # ==============================================================================
@@ -1208,3 +1213,218 @@ def _render_deposit_tab(settlement_df, overview):
                             st.rerun()
                     else:
                         st.warning("입금 금액을 입력하세요.")
+
+
+# ==============================================================================
+# 9. 프로젝트 수익 보고 탭
+# ==============================================================================
+def _render_profit_tab(settlement_df, payment_df):
+    """행사종료 프로젝트별 수익(공급가액 - Σ지급내역.소계) 보고"""
+    st.markdown('<div class="ceo-section">📊 프로젝트별 최종 수익 보고</div>', unsafe_allow_html=True)
+    st.caption("행사종료 건만 표시 · 수익 = 공급가액 - 인력비 지급원가(소계 합산)")
+
+    if settlement_df.empty:
+        st.warning("⚠️ 정산 데이터가 없습니다.")
+        return
+
+    df = settlement_df.copy()
+    col_inq = _find_col(df, ['문의ID'])
+    col_company = _find_col(df, ['업체', '업체명'])
+    col_site = _find_col(df, ['현장명', '행사명'])
+    col_supply = _find_col(df, ['공급가액'])
+    col_progress = _find_col(df, ['진행상황'])
+
+    if not col_inq or not col_supply or not col_progress:
+        st.warning("⚠️ 필수 컬럼(문의ID, 공급가액, 진행상황)이 없습니다.")
+        return
+
+    # 행사종료 필터
+    df['_progress'] = df[col_progress].astype(str).str.strip()
+    df_done = df[df['_progress'] == '행사종료'].copy()
+
+    if df_done.empty:
+        st.info("행사종료된 프로젝트가 아직 없습니다.")
+        return
+
+    df_done['_supply'] = pd.to_numeric(df_done[col_supply], errors='coerce').fillna(0).astype(int)
+
+    # ── payment_df에서 문의ID별 소계 합산 ──
+    cost_map = {}  # 문의ID → 소계합산
+    staff_map = {}  # 문의ID → [{이름, 소계}, ...]
+    if not payment_df.empty:
+        p_inq = _find_col(payment_df, ['문의ID'])
+        p_subtotal = _find_col(payment_df, ['소계'])
+        p_name = _find_col(payment_df, ['인력명', '이름'])
+        if p_inq and p_subtotal:
+            for _, pr in payment_df.iterrows():
+                inq_id = str(pr.get(p_inq, '')).strip()
+                if not inq_id or inq_id in ('nan', 'None', ''):
+                    continue
+                sub = int(pd.to_numeric(pr.get(p_subtotal, 0), errors='coerce') or 0)
+                cost_map[inq_id] = cost_map.get(inq_id, 0) + sub
+                name = str(pr.get(p_name, '')) if p_name else ''
+                if inq_id not in staff_map:
+                    staff_map[inq_id] = []
+                staff_map[inq_id].append({'이름': name, '소계': sub})
+
+    # ── 프로젝트별 수익 계산 ──
+    profit_rows = []
+    for _, row in df_done.iterrows():
+        inq_id = str(row[col_inq]).strip()
+        company = str(row[col_company]).strip() if col_company else ''
+        site = str(row[col_site]).strip() if col_site else ''
+        supply = int(row['_supply'])
+        cost = cost_map.get(inq_id, 0)
+        profit = supply - cost
+        margin = round(profit / supply * 100, 1) if supply > 0 else 0.0
+        profit_rows.append({
+            'inq_id': inq_id,
+            'company': company,
+            'site': site,
+            'supply': supply,
+            'cost': cost,
+            'profit': profit,
+            'margin': margin,
+            'staffs': staff_map.get(inq_id, []),
+        })
+
+    # 수익 내림차순 정렬
+    profit_rows.sort(key=lambda x: x['profit'], reverse=True)
+
+    # ── KPI 요약 ──
+    total_supply = sum(p['supply'] for p in profit_rows)
+    total_cost = sum(p['cost'] for p in profit_rows)
+    total_profit = total_supply - total_cost
+    avg_margin = round(total_profit / total_supply * 100, 1) if total_supply > 0 else 0.0
+    count = len(profit_rows)
+    loss_count = sum(1 for p in profit_rows if p['profit'] < 0)
+
+    m1, m2, m3, m4 = st.columns(4)
+    with m1:
+        _bg = "#F0FDF4" if total_profit >= 0 else "#FEF2F2"
+        _clr = "#059669" if total_profit >= 0 else "#DC2626"
+        st.markdown(
+            f'<div class="ceo-kpi" style="background:{_bg};border:1px solid {_clr}33;">'
+            f'<div class="kpi-label" style="color:{_clr};">💰 총 수익</div>'
+            f'<div class="kpi-value" style="color:{_clr};">₩{total_profit:,}</div>'
+            f'<div class="kpi-sub">매출 ₩{total_supply:,}</div></div>',
+            unsafe_allow_html=True,
+        )
+    with m2:
+        _rc = "#059669" if avg_margin >= 30 else "#D97706" if avg_margin >= 10 else "#DC2626"
+        st.markdown(
+            f'<div class="ceo-kpi" style="background:#EFF6FF;border:1px solid #BFDBFE;">'
+            f'<div class="kpi-label" style="color:#2563EB;">📈 평균 수익률</div>'
+            f'<div class="kpi-value" style="color:{_rc};">{avg_margin}%</div>'
+            f'<div class="kpi-sub">목표 30% 이상</div></div>',
+            unsafe_allow_html=True,
+        )
+    with m3:
+        st.markdown(
+            f'<div class="ceo-kpi" style="background:#F0FDF4;border:1px solid #BBF7D0;">'
+            f'<div class="kpi-label" style="color:#059669;">✅ 완료 건수</div>'
+            f'<div class="kpi-value" style="color:#059669;">{count}건</div>'
+            f'<div class="kpi-sub">행사종료 프로젝트</div></div>',
+            unsafe_allow_html=True,
+        )
+    with m4:
+        _lclr = "#DC2626" if loss_count > 0 else "#059669"
+        st.markdown(
+            f'<div class="ceo-kpi" style="background:{"#FEF2F2" if loss_count > 0 else "#F0FDF4"};'
+            f'border:1px solid {_lclr}33;">'
+            f'<div class="kpi-label" style="color:{_lclr};">⚠️ 적자 프로젝트</div>'
+            f'<div class="kpi-value" style="color:{_lclr};">{loss_count}건</div>'
+            f'<div class="kpi-sub">수익 < 0</div></div>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("---")
+
+    # ── 필터 ──
+    fc, _ = st.columns([3, 7])
+    with fc:
+        profit_filter = st.radio(
+            "필터", ["📋 전체", "💚 흑자", "🔴 적자"],
+            key="ceo_profit_filter", horizontal=True, label_visibility="collapsed"
+        )
+
+    if profit_filter == "💚 흑자":
+        view_rows = [p for p in profit_rows if p['profit'] >= 0]
+    elif profit_filter == "🔴 적자":
+        view_rows = [p for p in profit_rows if p['profit'] < 0]
+    else:
+        view_rows = profit_rows
+
+    if not view_rows:
+        st.info("해당 조건의 프로젝트가 없습니다.")
+        return
+
+    st.caption(f"총 {len(view_rows)}건")
+
+    # ── 프로젝트 카드 리스트 ──
+    for p in view_rows:
+        profit_val = p['profit']
+        margin_val = p['margin']
+
+        if profit_val >= 0:
+            badge = "💚 흑자"
+            badge_bg = "#D1FAE5"
+            badge_clr = "#065F46"
+            card_border = "#10B981"
+        else:
+            badge = "🔴 적자"
+            badge_bg = "#FEE2E2"
+            badge_clr = "#991B1B"
+            card_border = "#EF4444"
+
+        # 수익률 바
+        bar_pct = max(0, min(100, int(margin_val)))
+        bar_color = "#10B981" if margin_val >= 30 else "#F59E0B" if margin_val >= 10 else "#EF4444"
+
+        with st.expander(
+            f"{badge}  **{p['company']}** — {p['site']}  |  수익 ₩{profit_val:,}  |  수익률 {margin_val}%"
+        ):
+            # 수익률 프로그레스 바
+            st.markdown(
+                f'<div style="background:#E5E7EB;border-radius:8px;height:10px;margin-bottom:12px;">'
+                f'<div style="background:{bar_color};border-radius:8px;height:100%;'
+                f'width:{bar_pct}%;"></div></div>'
+                f'<div style="text-align:right;font-size:12px;color:#6B7280;margin-top:-8px;">'
+                f'수익률 {margin_val}%</div>',
+                unsafe_allow_html=True,
+            )
+
+            # 금액 상세
+            ac1, ac2, ac3 = st.columns(3)
+            with ac1:
+                st.markdown(f"**공급가액 (매출)**")
+                st.markdown(f"### ₩{p['supply']:,}")
+            with ac2:
+                st.markdown(f"**지급원가**")
+                st.markdown(f"### ₩{p['cost']:,}")
+            with ac3:
+                clr = "#059669" if profit_val >= 0 else "#DC2626"
+                st.markdown(f"**수익**")
+                st.markdown(
+                    f"<h3 style='color:{clr};'>₩{profit_val:,}</h3>",
+                    unsafe_allow_html=True,
+                )
+
+            # 인력별 지급 내역
+            staffs = p['staffs']
+            if staffs:
+                st.markdown("---")
+                st.markdown(f"**👥 인력별 지급 내역** ({len(staffs)}명)")
+                staff_data = []
+                for s in sorted(staffs, key=lambda x: x['소계'], reverse=True):
+                    staff_data.append({
+                        '인력명': s['이름'],
+                        '소계(지급원가)': f"₩{s['소계']:,}",
+                    })
+                st.dataframe(
+                    pd.DataFrame(staff_data),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            else:
+                st.caption("💡 지급내역 데이터가 아직 없습니다.")
