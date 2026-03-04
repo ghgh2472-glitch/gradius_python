@@ -536,6 +536,10 @@ def _render_tax_invoice_tab(settlement_df, not_issued_df, col_tax, col_company, 
         corp_name = str(row.get('법인명', '')).strip()
         phone_val = str(row.get('연락처', '')).strip()
         paid_val = str(row.get('받은금액', '')).strip()
+        # 사업장주소: 전용 컬럼 우선, 없으면 현장주소 fallback
+        address_val = str(row.get('사업장주소', '')).strip()
+        if not address_val or address_val in ('nan', 'None', ''):
+            address_val = str(row.get('현장주소', '')).strip()
 
         def _fmt(v):
             try:
@@ -573,6 +577,8 @@ def _render_tax_invoice_tab(settlement_df, not_issued_df, col_tax, col_company, 
                 biz_lines.append(f"📧 이메일: <b>{email_val}</b>")
             if phone_val and phone_val not in ('nan', 'None', ''):
                 biz_lines.append(f"📞 연락처: <b>{phone_val}</b>")
+            if address_val and address_val not in ('nan', 'None', ''):
+                biz_lines.append(f"🏠 사업장주소: <b>{address_val}</b>")
 
             item_val = str(row.get('내용(품목)', '')).strip()
             item_line = ''
@@ -759,10 +765,13 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
             member_names = [md['name'] for md in ti['member_details'] if md['name'] != leader]
             member_list_txt = f" ({', '.join(member_names)})"
 
-            with st.expander(
+            # ── 팀 카드: 외부 버튼 + expander ──
+            _team_exp_col, _team_btn_col = st.columns([8, 2])
+            with _team_exp_col:
+              with st.expander(
                 f"{status_badge} 👥 {leader}팀{status_txt} ({total_n}명, 현장{onsite_n}명{onsite_tag}) "
-                f"— ₩{leader_cr['총액']:,} [{leader_tax_label}] {bank_info}"
-            ):
+                f"— 총 ₩{leader_cr['총액']:,} → 실수령 ₩{leader_cr['실수령']:,} [{leader_tax_label}공제 -₩{leader_cr['공제']:,}] {bank_info}"
+              ):
                 # 팀원 결제분 포함 안내
                 st.info(
                     f"ℹ️ **{leader}**에게 팀원 {len(member_names)}명분{member_list_txt} 합산 지급"
@@ -833,31 +842,32 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
                         st.info(f"🏦 {leader_cr['은행']}\n\n📋 {leader_cr['계좌']}\n\n👤 수령인: **{leader}**")
                     else:
                         st.warning(f"❗ {leader} 계좌 미등록")
-
-                    # 입금완료 버튼
-                    if leader_cr['지급상태'] == '대기':
-                        if st.button("💰 팀 입금완료", key=f"ceo_team_{tc}_{inq_id}", type="primary",
-                                     use_container_width=True):
-                            _now = datetime.now().strftime('%Y-%m-%d')
-                            team_updates = []
-                            if leader_cr['배정ID']:
-                                team_updates.append({'배정ID': leader_cr['배정ID'], '지급상태': '완료', '지급일': _now})
-                            # 팀원도 완료 처리
-                            for md in ti['member_details']:
-                                if md['name'] == leader:
-                                    continue
-                                m_aid = _find_member_aid(dispatch_df, inq_id, md['name'])
-                                if m_aid:
-                                    team_updates.append({'배정ID': m_aid, '지급상태': '완료', '지급일': _now})
-                            if team_updates:
-                                db.batch_update_payment_status(team_updates)
-                            db.invalidate_payment_cache()
-                            db.invalidate_dispatch_only()
-                            st.success(f"✅ {leader}팀 입금완료!")
-                            time.sleep(1)
-                            st.rerun()
-                    elif leader_cr['지급상태'] == '미저장':
-                        st.caption("📝 정산 페이지에서\n지급기록 먼저 저장")
+            # ── 팀 외부 입금완료 버튼 ──
+            with _team_btn_col:
+                st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+                if leader_cr['지급상태'] == '대기':
+                    if st.button("💰 입금완료", key=f"ceo_team_{tc}_{inq_id}", type="primary",
+                                 use_container_width=True):
+                        _now = datetime.now().strftime('%Y-%m-%d')
+                        team_updates = []
+                        if leader_cr['배정ID']:
+                            team_updates.append({'배정ID': leader_cr['배정ID'], '지급상태': '완료', '지급일': _now})
+                        # 팀원도 완료 처리
+                        for md in ti['member_details']:
+                            if md['name'] == leader:
+                                continue
+                            m_aid = _find_member_aid(dispatch_df, inq_id, md['name'])
+                            if m_aid:
+                                team_updates.append({'배정ID': m_aid, '지급상태': '완료', '지급일': _now})
+                        if team_updates:
+                            db.batch_update_payment_status(team_updates)
+                        db.invalidate_payment_cache()
+                        db.invalidate_dispatch_only()
+                        st.success(f"✅ {leader}팀 입금완료!")
+                        time.sleep(1)
+                        st.rerun()
+                elif leader_cr['지급상태'] == '미저장':
+                    st.caption("📝 미저장")
 
         # ── 개별 급여명세서 (팀장 이외) ──
         individual = [cr for cr in venue_unpaid if not cr['팀코드']]
@@ -876,10 +886,13 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
                 status_badge = "⏳" if pst == '대기' else "📝"
                 status_txt = " [대기]" if pst == '대기' else " [미저장]"
 
-                with st.expander(
+                # ── 개별 카드: 외부 버튼 + expander ──
+                _ind_exp_col, _ind_btn_col = st.columns([8, 2])
+                with _ind_exp_col:
+                  with st.expander(
                     f"{status_badge} 👤 {name}{status_txt} ({cr['직무']}) "
-                    f"— ₩{cr['총액']:,} [{ind_tax_label}] {bank_display}"
-                ):
+                    f"— 총 ₩{cr['총액']:,} → 실수령 ₩{net:,} [{ind_tax_label}공제 -₩{cr['공제']:,}] {bank_display}"
+                  ):
                     c1, c2 = st.columns([2, 1])
                     with c1:
                         st.markdown(
@@ -898,19 +911,21 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
                             st.info(f"🏦 {bank}\n\n📋 {acct}")
                         else:
                             st.warning("❗ 계좌 미등록")
-
-                        if pst == '대기' and aid:
-                            if st.button("💰 입금완료", key=f"ceo_ind_{aid}_{inq_id}", type="primary",
-                                         use_container_width=True):
-                                _now = datetime.now().strftime('%Y-%m-%d')
-                                db.update_payment_status(aid, '완료', _now)
-                                db.invalidate_payment_cache()
-                                db.invalidate_dispatch_only()
-                                st.success(f"✅ {name} 입금완료!")
-                                time.sleep(1)
-                                st.rerun()
-                        elif pst == '미저장':
-                            st.caption("📝 정산 페이지에서\n지급기록 먼저 저장")
+                # ── 개별 외부 입금완료 버튼 ──
+                with _ind_btn_col:
+                    st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+                    if pst == '대기' and aid:
+                        if st.button("💰 입금완료", key=f"ceo_ind_{aid}_{inq_id}", type="primary",
+                                     use_container_width=True):
+                            _now = datetime.now().strftime('%Y-%m-%d')
+                            db.update_payment_status(aid, '완료', _now)
+                            db.invalidate_payment_cache()
+                            db.invalidate_dispatch_only()
+                            st.success(f"✅ {name} 입금완료!")
+                            time.sleep(1)
+                            st.rerun()
+                    elif pst == '미저장':
+                        st.caption("📝 미저장")
 
         st.markdown("---")
 
