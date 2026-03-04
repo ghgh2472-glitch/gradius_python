@@ -13,7 +13,6 @@ plotly>=5.0
 streamlit-calendar>=0.1
 Pillow>=9.0
 pdf2image>=1.16
-streamlit-aggrid>=0.3
 scikit-learn>=1.0
 pydantic>=1.9
 google-api-python-client>=2.0
