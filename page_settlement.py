@@ -2189,7 +2189,7 @@ def show_settlement_detail(data):
                             | **실수령 → {_leader} 계좌** | **₩{leader_net:,}** |
                             """) if leader_cr else None
                             if leader_cr and leader_cr.get('메모'):
-                                st.caption(f"📝 메모: {leader_cr['메모']}")
+                                st.info(f"📝 메모: {leader_cr['메모']}")
                         with c2:
                             if leader_bank and leader_acct:
                                 st.info(f"🏦 {leader_bank}\n\n📋 {leader_acct}\n\n👤 수령인: **{_leader}**")
@@ -2295,7 +2295,7 @@ def show_settlement_detail(data):
                 acct_val = cr['계좌']
                 bank_info = f"💳 {bank_val} {acct_val}" if bank_val and acct_val else "❗ 계좌 미등록"
                 change_txt = f" | ⚡{', '.join(cr['_changes'])}" if cr['_changes'] else ""
-                memo_txt = f" | 📝{cr['메모']}" if cr['메모'] else ""
+                memo_txt = ""
 
                 with st.expander(f"{badge} {e_name}{status_txt} ({cr['직무']}) — ₩{gross:,} [{cr['공제율']}] {bank_info}{change_txt}{memo_txt}"):
                     if gross <= 0 and not is_sep:
@@ -2313,7 +2313,8 @@ def show_settlement_detail(data):
                         html_p = brain.get_payslip_html(
                             e_name, row['행사명'], cr['단가'], cr['일수'], gross,
                             tax_rate=person_rate, meal=cr['식비'], transport=cr['교통비'],
-                            overtime=cr['연장'], etc_cost=cr['기타(숙박등)']
+                            overtime=cr['연장'], etc_cost=cr['기타(숙박등)'],
+                            etc_label=cr.get('기타항목명', '기타(숙박등)')
                         )
                         st.components.v1.html(html_p, height=450)
                     with c2:
@@ -2334,8 +2335,6 @@ def show_settlement_detail(data):
                         | 공제({cr['공제율']}) | -₩{cr['공제']:,} |
                         | **실수령** | **₩{cr['실수령']:,}** |
                         """)
-                        if cr.get('메모'):
-                            st.caption(f"📝 메모: {cr['메모']}")
 
                         # ── 입금확인 / 본사확인 버튼 ──
                         st.markdown("---")

@@ -297,12 +297,19 @@ def _build_inquiry_payment_data(dispatch_df, payment_df, staff_df=None):
                 import re as _re
                 _etc_match = _re.search(r'\[기타:([^\]]+)\]', remark)
                 _etc_label = _etc_match.group(1) if _etc_match else '기타(숙박등)'
-                # 메모: 기존 | 구분자 뒤 텍스트에서 태그/플래그 제외한 순수 메모
+                # 메모: | 구분자 뒤 텍스트에서 태그/플래그 제외한 순수 메모
                 _memo_text = ''
                 if '|' in remark:
                     _after_pipe = remark.split('|', 1)[1].strip()
                     # 태그 제거 후 남은 텍스트
                     _memo_text = _re.sub(r'\[[^\]]*\]', '', _after_pipe).strip()
+                if not _memo_text:
+                    # | 없이 비고 끝에 메모를 쓴 경우: 공제율/태그 제거 후 남은 텍스트
+                    _cleaned = _re.sub(r'\[[^\]]*\]', '', remark)  # 태그 제거
+                    _cleaned = _re.sub(r'\d+\.\d+%\s*공제', '', _cleaned)  # 공제율 제거
+                    _cleaned = _cleaned.replace('본사인원', '').replace('확인완료', '').strip()
+                    if _cleaned and _cleaned not in ('공제', ''):
+                        _memo_text = _cleaned
                 # 지급내역에 은행/계좌가 있으면 우선 사용 (가장 최신)
                 pr_bank = str(pr.get('은행명', '')).strip()
                 pr_acct = str(pr.get('계좌번호', '')).strip()
@@ -805,6 +812,8 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
                 f"{status_badge} 👥 {leader}팀{status_txt} ({total_n}명, 현장{onsite_n}명{onsite_tag}) "
                 f"— 총 ₩{leader_cr['총액']:,} → 실수령 ₩{leader_cr['실수령']:,} [{leader_tax_label}공제 -₩{leader_cr['공제']:,}] {bank_info}"
               ):
+                if leader_cr.get('메모'):
+                    st.info(f"📝 메모: {leader_cr['메모']}")
                 # 팀원 결제분 포함 안내
                 st.info(
                     f"ℹ️ **{leader}**에게 팀원 {len(member_names)}명분{member_list_txt} 합산 지급"
@@ -870,8 +879,6 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
                         f"| 공제({leader_tax_label}) | -₩{leader_cr['공제']:,} |\n"
                         f"| **실수령 → {leader} 계좌** | **₩{leader_cr['실수령']:,}** |"
                     )
-                    if leader_cr.get('메모'):
-                        st.caption(f"📝 메모: {leader_cr['메모']}")
                 with c2:
                     if leader_cr['은행'] and leader_cr['은행'] not in ('nan', 'None', ''):
                         st.info(f"🏦 {leader_cr['은행']}\n\n📋 {leader_cr['계좌']}\n\n👤 수령인: **{leader}**")
@@ -927,6 +934,8 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
                     f"{status_badge} 👤 {name}{status_txt} ({cr['직무']}) "
                     f"— 총 ₩{cr['총액']:,} → 실수령 ₩{net:,} [{ind_tax_label}공제 -₩{cr['공제']:,}] {bank_display}"
                   ):
+                    if cr.get('메모'):
+                        st.info(f"📝 메모: {cr['메모']}")
                     c1, c2 = st.columns([2, 1])
                     with c1:
                         st.markdown(
@@ -940,8 +949,6 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
                             f"| 공제({ind_tax_label}) | -₩{cr['공제']:,} |\n"
                             f"| **실수령** | **₩{net:,}** |"
                         )
-                        if cr.get('메모'):
-                            st.caption(f"📝 메모: {cr['메모']}")
                     with c2:
                         if bank and bank not in ('nan', 'None', ''):
                             st.info(f"🏦 {bank}\n\n📋 {acct}")

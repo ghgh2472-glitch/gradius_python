@@ -218,7 +218,7 @@ class SettlementBrain:
         </div>
         </body></html>"""
 
-    def get_payslip_html(self, staff_name, project_name, pay, days, total, tax_rate=0.033, meal=0, transport=0, overtime=0, etc_cost=0):
+    def get_payslip_html(self, staff_name, project_name, pay, days, total, tax_rate=0.033, meal=0, transport=0, overtime=0, etc_cost=0, etc_label='기타(숙박등)'):
         """급여명세서 HTML — tax_rate: 0.033 (3.3%) 또는 0.009 (0.9%), meal/transport/overtime/etc_cost: 부대비용"""
         tax_rate = float(tax_rate) if tax_rate else 0.033
         meal = int(meal) if meal else 0
@@ -258,8 +258,8 @@ class SettlementBrain:
         if etc_cost > 0:
             extra_rows += f"""
             <tr>
-                <td style="padding:8px; border:1px solid #ddd;">🏨 기타(숙박등)</td>
-                <td style="padding:8px; border:1px solid #ddd;">숙박비 등 기타 수당</td>
+                <td style="padding:8px; border:1px solid #ddd;">🏨 {etc_label}</td>
+                <td style="padding:8px; border:1px solid #ddd;">{etc_label} 수당</td>
                 <td style="padding:8px; border:1px solid #ddd; text-align:right;">{etc_cost:,}원</td>
             </tr>"""
         # 부대비용 있으면 소계 행 추가
