@@ -2226,8 +2226,8 @@ def ensure_payment_sheet():
 
 
 def ensure_payment_headers():
-    """지급내역 시트에 은행명/계좌번호/주민등록번호/문의ID 컬럼이 없으면 추가 (마이그레이션).
-    기존 18컬럼 → 22컬럼 확장. 앱 시작 시 1회만 실행됩니다.
+    """지급내역 시트 헤더가 정상 22컬럼인지 확인.
+    insert_cols 미사용 — 헤더가 틀리면 전체 헤더 행을 올바르게 덮어쓰기.
     """
     if st.session_state.get('_payment_headers_checked'):
         return  # 이미 확인 완료
@@ -2236,46 +2236,29 @@ def ensure_payment_headers():
         if not wks:
             st.session_state['_payment_headers_checked'] = True
             return
-        headers = [str(h).strip() for h in wks.row_values(1)]
-        # 필요한 새 컬럼 확인 (비고 앞에 삽입하기 위해 순서 중요)
-        new_cols_after_지급담당자 = ['은행명', '계좌번호', '주민등록번호']
-        new_col_after_배정ID = '문의ID'
-        changed = False
+        expected = _SHEET_HEADERS["지급내역"]  # 정확한 22컬럼
+        raw = wks.row_values(1)
+        headers = [str(h).strip() for h in raw] if raw else []
 
-        # 문의ID 컬럼 (배정ID 뒤, 인력명 앞)
-        if new_col_after_배정ID not in headers:
-            bid_idx = headers.index('배정ID') + 1 if '배정ID' in headers else 2
-            # 인력명 컬럼 앞에 삽입
-            target_insert = bid_idx  # 0-based로는 bid_idx
-            wks.insert_cols([1], col=target_insert + 1)
-            wks.update_cell(1, target_insert + 1, '문의ID')
-            headers.insert(target_insert, '문의ID')
-            changed = True
-            print(f"[Payment] '문의ID' 컬럼 추가 (Col {target_insert + 1})")
+        # 정상 여부 판단: 22컬럼이고 모든 필수 헤더가 일치하면 OK
+        if len(headers) == len(expected) and all(h == e for h, e in zip(headers, expected)):
+            st.session_state['_payment_headers_checked'] = True
+            print(f"[OK] 지급내역 시트: 헤더 정상 ({len(expected)}컬럼)")
+            return
 
-        # 은행명/계좌번호/주민등록번호 (지급담당자 뒤, 비고 앞)
-        for col_name in new_cols_after_지급담당자:
-            if col_name not in headers:
-                # 비고 컬럼 앞에 삽입
-                if '비고' in headers:
-                    bigo_idx = headers.index('비고')  # 0-based
-                    wks.insert_cols([1], col=bigo_idx + 1)
-                    wks.update_cell(1, bigo_idx + 1, col_name)
-                    headers.insert(bigo_idx, col_name)
-                else:
-                    # 비고 없으면 끝에 추가
-                    next_col = len(headers) + 1
-                    wks.update_cell(1, next_col, col_name)
-                    headers.append(col_name)
-                changed = True
-                print(f"[Payment] '{col_name}' 컬럼 추가")
-
-        if changed:
-            _invalidate_worksheet_cache("지급내역")
-            invalidate_payment_cache()
-
+        # 헤더에 필수 키가 모두 포함되어 있으면 순서만 다른 경우 → 덮어쓰기
+        # 헤더 수가 다르거나 컬럼명이 틀리면 → 헤더 행만 올바르게 덮어쓰기
+        print(f"[Payment] 헤더 불일치 감지: {len(headers)}컬럼 → {len(expected)}컬럼으로 수정")
+        from gspread.cell import Cell
+        cells = [Cell(row=1, col=i + 1, value=v) for i, v in enumerate(expected)]
+        # 기존 초과 컬럼 헤더 지우기
+        for ci in range(len(expected), len(headers)):
+            cells.append(Cell(row=1, col=ci + 1, value=''))
+        wks.update_cells(cells, value_input_option='RAW')
+        _invalidate_worksheet_cache("지급내역")
+        invalidate_payment_cache()
         st.session_state['_payment_headers_checked'] = True
-        print(f"[OK] 지급내역 시트: 헤더 확인됨 ({len(headers)}컬럼)")
+        print(f"[OK] 지급내역 시트: 헤더 복원됨 ({len(expected)}컬럼)")
     except Exception as e:
         print(f"ensure_payment_headers error: {e}")
         st.session_state['_payment_headers_checked'] = True
@@ -3052,16 +3035,19 @@ def batch_save_payment_records(records: list) -> dict:
                     # 업데이트: 기존 행 위에 덮어쓰기 (셀 단위 배치)
                     target_row = existing_map[target_bid]
                     row_values[0] = all_vals[target_row - 1][0] if len(all_vals) >= target_row else pay_id
-                    # 기존 완료/확인완료 건의 지급상태와 지급일은 보존 (덮어쓰기 방지)
+                    # 기존 완료/확인완료 건의 지급상태와 지급일은 보존 (row_values 인덱스 15,16 사용)
                     existing_row = all_vals[target_row - 1] if len(all_vals) >= target_row else []
-                    status_col = headers.index('지급상태') if '지급상태' in headers else -1
-                    date_col = headers.index('지급일') if '지급일' in headers else -1
-                    if status_col >= 0 and len(existing_row) > status_col:
-                        existing_status = str(existing_row[status_col]).strip()
+                    # row_values[15] = 지급상태, row_values[16] = 지급일 (22컬럼 고정 구조)
+                    status_idx_in_row = 15  # EXPECTED_22에서 '지급상태' 위치
+                    date_idx_in_row = 16    # EXPECTED_22에서 '지급일' 위치
+                    status_col_sheet = headers.index('지급상태') if '지급상태' in headers else -1
+                    date_col_sheet = headers.index('지급일') if '지급일' in headers else -1
+                    if status_col_sheet >= 0 and len(existing_row) > status_col_sheet:
+                        existing_status = str(existing_row[status_col_sheet]).strip()
                         if existing_status in ('완료', '확인완료'):
-                            row_values[status_col] = existing_status
-                            if date_col >= 0 and len(existing_row) > date_col:
-                                row_values[date_col] = existing_row[date_col]
+                            row_values[status_idx_in_row] = existing_status
+                            if date_col_sheet >= 0 and len(existing_row) > date_col_sheet:
+                                row_values[date_idx_in_row] = existing_row[date_col_sheet]
                     for col_idx, val in enumerate(row_values):
                         batch_cells.append(Cell(row=target_row, col=col_idx + 1, value=val))
                     updated += 1
