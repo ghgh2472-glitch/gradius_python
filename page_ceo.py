@@ -492,7 +492,7 @@ def show(data):
 
     st.markdown("---")
 
-    tab_tax, tab_pay = st.tabs(["📄 세금계산서 발행 관리", "💸 인력비 지급 관리"])
+    tab_tax, tab_pay, tab_deposit = st.tabs(["📄 세금계산서 발행 관리", "💸 인력비 지급 관리", "💰 업체 입금관리"])
 
     with tab_tax:
         _render_tax_invoice_tab(settlement_df, not_issued_df, col_tax, col_company, col_inq_id,
@@ -500,6 +500,9 @@ def show(data):
 
     with tab_pay:
         _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_amt, dispatch_df)
+
+    with tab_deposit:
+        _render_deposit_tab(settlement_df, settlement_overview)
 
 
 # ==============================================================================
@@ -1015,3 +1018,193 @@ def _show_done_summary(staff_done, staff_total):
         '</div>',
         unsafe_allow_html=True,
     )
+
+
+# ==============================================================================
+# 8. 업체 입금관리 탭
+# ==============================================================================
+def _render_deposit_tab(settlement_df, overview):
+    """업체정산 현황 및 입금관리 — CEO 전용 입금 추적"""
+    from page_settlement import save_payment_record
+
+    st.markdown('<div class="ceo-section">💰 업체 입금 현황</div>', unsafe_allow_html=True)
+
+    if settlement_df.empty:
+        st.warning("정산 데이터가 없습니다.")
+        return
+
+    # ── 통계 메트릭 (4열) ──
+    total_invoice = overview.get('총청구액', 0)
+    total_paid = overview.get('받은금액', 0)
+    total_balance = overview.get('미수금액', 0)
+    collect_rate = overview.get('수금률', 0)
+
+    m1, m2, m3, m4 = st.columns(4)
+    with m1:
+        st.metric("📌 총 청구액", f"₩{total_invoice:,}")
+    with m2:
+        st.metric("💵 받은 금액", f"₩{total_paid:,}")
+    with m3:
+        _bal_color = "inverse" if total_balance > 0 else "off"
+        st.metric("🚨 미수금", f"₩{total_balance:,}", delta=f"-₩{total_balance:,}" if total_balance > 0 else "완납", delta_color=_bal_color)
+    with m4:
+        st.metric("📈 수금률", f"{collect_rate}%")
+
+    st.markdown("---")
+
+    # ── 행별 데이터 준비 ──
+    df = settlement_df.copy()
+    col_inq = _find_col(df, ['문의ID'])
+    col_company = _find_col(df, ['업체', '업체명'])
+    col_site = _find_col(df, ['현장명', '행사명'])
+    col_supply = _find_col(df, ['공급가액'])
+    col_tax = _find_col(df, ['부가세'])
+    col_paid_c = _find_col(df, ['받은금액'])
+    col_progress = _find_col(df, ['진행상황'])
+
+    if not col_inq or not col_company:
+        st.warning("필수 컬럼(문의ID, 업체)이 없습니다.")
+        return
+
+    # 수치 변환
+    df['_supply'] = pd.to_numeric(df[col_supply], errors='coerce').fillna(0).astype(int) if col_supply else 0
+    df['_tax'] = pd.to_numeric(df[col_tax], errors='coerce').fillna(0).astype(int) if col_tax else 0
+    df['_invoice'] = df['_supply'] + df['_tax']
+    df['_paid'] = pd.to_numeric(df[col_paid_c], errors='coerce').fillna(0).astype(int) if col_paid_c else 0
+    df['_balance'] = (df['_invoice'] - df['_paid']).clip(lower=0)
+    df['_progress'] = df[col_progress].astype(str).str.strip() if col_progress else ''
+
+    # ── 필터 ──
+    filter_col, _ = st.columns([3, 7])
+    with filter_col:
+        deposit_filter = st.radio(
+            "필터", ["🚨 미수금", "✅ 입금완료", "📋 전체"],
+            key="ceo_deposit_filter", horizontal=True, label_visibility="collapsed"
+        )
+
+    if deposit_filter == "🚨 미수금":
+        df_view = df[df['_balance'] > 0].sort_values('_balance', ascending=False)
+    elif deposit_filter == "✅ 입금완료":
+        df_view = df[(df['_balance'] <= 0) & (df['_paid'] > 0)].sort_values('_paid', ascending=False)
+    else:
+        df_view = df.sort_values('_balance', ascending=False)
+
+    if df_view.empty:
+        st.info("해당 조건의 건이 없습니다.")
+        return
+
+    st.caption(f"총 {len(df_view)}건")
+
+    # ── 카드 리스트 ──
+    for _, row in df_view.iterrows():
+        inq_id = str(row[col_inq]).strip()
+        company = str(row[col_company]).strip()
+        site = str(row[col_site]).strip() if col_site else ''
+        invoice = int(row['_invoice'])
+        paid = int(row['_paid'])
+        balance = int(row['_balance'])
+        progress = str(row.get('_progress', ''))
+
+        # 상태 결정
+        if balance <= 0 and paid > 0:
+            card_cls = "done"
+            badge = "✅ 입금완료"
+            badge_bg = "#D1FAE5"
+            badge_clr = "#065F46"
+        elif paid > 0:
+            card_cls = ""
+            badge = "🔶 부분입금"
+            badge_bg = "#FEF3C7"
+            badge_clr = "#92400E"
+        else:
+            card_cls = ""
+            badge = "🔴 미입금"
+            badge_bg = "#FEE2E2"
+            badge_clr = "#991B1B"
+
+        # 프로그레스 바 (수금률)
+        pct = int(paid / invoice * 100) if invoice > 0 else 0
+        bar_color = "#10B981" if pct >= 100 else "#F59E0B" if pct > 0 else "#EF4444"
+
+        with st.expander(
+            f"{badge}  **{company}** — {site}  |  청구 ₩{invoice:,}  |  받음 ₩{paid:,}  |  잔액 ₩{balance:,}"
+        ):
+            # 상단: 프로그레스 바
+            st.markdown(
+                f'<div style="background:#E5E7EB;border-radius:8px;height:10px;margin-bottom:12px;">'
+                f'<div style="background:{bar_color};border-radius:8px;height:100%;width:{min(pct, 100)}%;"></div>'
+                f'</div>'
+                f'<div style="text-align:right;font-size:12px;color:#6B7280;margin-top:-8px;">'
+                f'수금률 {pct}%</div>',
+                unsafe_allow_html=True,
+            )
+
+            # 상세 금액
+            ic1, ic2, ic3 = st.columns(3)
+            with ic1:
+                st.markdown(f"**공급가액** ₩{int(row['_supply']):,}")
+                if int(row['_tax']) > 0:
+                    st.caption(f"부가세 ₩{int(row['_tax']):,}")
+            with ic2:
+                st.markdown(f"**받은금액** ₩{paid:,}")
+            with ic3:
+                if balance > 0:
+                    st.markdown(f"**잔액** <span style='color:#DC2626;font-weight:700;'>₩{balance:,}</span>",
+                                unsafe_allow_html=True)
+                else:
+                    st.markdown("**잔액** ₩0 ✅")
+
+            # 진행상황 표시
+            if progress and progress not in ('nan', 'None', ''):
+                st.caption(f"📋 진행상황: {progress}")
+
+            # ── 입금 기록 입력 (잔액 있을 때만) ──
+            if balance > 0:
+                st.markdown("---")
+                st.markdown("**💳 입금 기록**")
+
+                # 빠른 입력 버튼
+                qc1, qc2, qc3 = st.columns(3)
+                fill_key = f"_ceo_dep_fill_{inq_id}"
+                with qc1:
+                    half = int(invoice * 0.5)
+                    if st.button(f"50% ₩{half:,}", key=f"ceo_dep_50_{inq_id}", use_container_width=True):
+                        st.session_state[fill_key] = half
+                        st.rerun()
+                with qc2:
+                    if st.button(f"잔금 ₩{balance:,}", key=f"ceo_dep_rem_{inq_id}", use_container_width=True):
+                        st.session_state[fill_key] = balance
+                        st.rerun()
+                with qc3:
+                    if st.button(f"전액 ₩{invoice:,}", key=f"ceo_dep_full_{inq_id}", use_container_width=True):
+                        st.session_state[fill_key] = invoice
+                        st.rerun()
+
+                # 입금 금액 입력
+                amt_key = f"ceo_dep_amt_{inq_id}"
+                if fill_key in st.session_state:
+                    st.session_state[amt_key] = st.session_state.pop(fill_key)
+
+                ac1, ac2, ac3 = st.columns([2, 1, 1])
+                with ac1:
+                    new_amount = st.number_input(
+                        "입금액", min_value=0, step=10000,
+                        key=amt_key, label_visibility="collapsed"
+                    )
+                with ac2:
+                    new_total = paid + new_amount
+                    st.metric("누적", f"₩{new_total:,}")
+                with ac3:
+                    new_remain = max(0, invoice - new_total)
+                    st.metric("잔액", f"₩{new_remain:,}")
+
+                if st.button("💾 입금 저장", key=f"ceo_dep_save_{inq_id}", type="primary", use_container_width=True):
+                    if new_amount > 0:
+                        result = save_payment_record(inq_id, new_total, invoice)
+                        if result:
+                            st.success(f"✅ {company} 입금 ₩{new_amount:,} 저장!")
+                            db.invalidate_data()
+                            time.sleep(1)
+                            st.rerun()
+                    else:
+                        st.warning("입금 금액을 입력하세요.")
