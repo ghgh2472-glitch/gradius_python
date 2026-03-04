@@ -1402,20 +1402,27 @@ def show(data):
                 _days_def = st.session_state.pop('_cost_days_default', max(1, calc_days))
                 cc1, cc2, cc3, cc4, cc5 = st.columns([1.4, 0.5, 0.5, 0.8, 0.4])
                 with cc1:
-                    cost_item = st.selectbox("항목", ["식비","숙박비","교통비","용역료","장비","기타"], index=_sel_idx, label_visibility="collapsed", key="cost_item_select")
+                    cost_item = st.selectbox("항목", ["식비","숙박비","교통비","용역료","장비","기타(직접입력)"], index=_sel_idx, label_visibility="collapsed", key="cost_item_select")
                 with cc2:
                     cost_qty = st.number_input("수량", min_value=1, value=_qty_def, label_visibility="collapsed", key="cost_qty_input")
                 with cc3:
                     cost_days = st.number_input("일수", min_value=1, value=_days_def, label_visibility="collapsed", key="cost_days_input")
                 with cc4:
                     cost_unit = st.number_input("단가", min_value=0, step=1000, value=_price_def, label_visibility="collapsed", key="cost_unit_input")
+                # 기타(직접입력) 선택 시 항목명 입력란 표시
+                _custom_cost_name = ''
+                if cost_item == '기타(직접입력)':
+                    _custom_cost_name = st.text_input("부대비용 항목명 직접입력", placeholder="예: 우천대비용품, 현수막, 차량렌트 등", key="cost_custom_name")
                 with cc5:
                     if st.button("➕", key="add_cost_btn", use_container_width=True):
-                        cost_amt = cost_qty * cost_days * cost_unit
-                        if cost_amt > 0:
+                        _final_item = _custom_cost_name.strip() if cost_item == '기타(직접입력)' else cost_item
+                        if cost_item == '기타(직접입력)' and not _final_item:
+                            st.warning("항목명을 입력하세요")
+                        elif cost_qty * cost_days * cost_unit > 0:
+                            cost_amt = cost_qty * cost_days * cost_unit
                             st.session_state['additional_costs'] = pd.concat([
                                 st.session_state['additional_costs'],
-                                pd.DataFrame([{"항목": cost_item, "수량": cost_qty, "일수": cost_days, "단가": cost_unit, "금액": cost_amt, "비고": ""}])
+                                pd.DataFrame([{"항목": _final_item, "수량": cost_qty, "일수": cost_days, "단가": cost_unit, "금액": cost_amt, "비고": ""}])
                             ], ignore_index=True)
                             st.rerun()
                         else:
