@@ -29,6 +29,10 @@ def _apply_styles():
         '.ceo-card .card-amount{font-size:17px;font-weight:700;color:#DC2626;}'
         '.ceo-section{font-size:20px;font-weight:700;color:#111827;margin-bottom:14px;'
         'padding-left:10px;border-left:4px solid #6366F1;}'
+        '[data-testid="stHorizontalBlock"] [data-testid="stColumn"]:last-child button[kind="primary"]{'
+        'margin-top:0 !important;}'
+        '[data-testid="stHorizontalBlock"] [data-testid="stColumn"]:last-child {'
+        'display:flex;align-items:flex-start;padding-top:4px;}'
         '</style>',
         unsafe_allow_html=True,
     )
@@ -536,10 +540,10 @@ def _render_tax_invoice_tab(settlement_df, not_issued_df, col_tax, col_company, 
         corp_name = str(row.get('법인명', '')).strip()
         phone_val = str(row.get('연락처', '')).strip()
         paid_val = str(row.get('받은금액', '')).strip()
-        # 사업장주소: 전용 컬럼 우선, 없으면 현장주소 fallback
+        # 사업장주소
         address_val = str(row.get('사업장주소', '')).strip()
         if not address_val or address_val in ('nan', 'None', ''):
-            address_val = str(row.get('현장주소', '')).strip()
+            address_val = ''
 
         def _fmt(v):
             try:
@@ -579,6 +583,8 @@ def _render_tax_invoice_tab(settlement_df, not_issued_df, col_tax, col_company, 
                 biz_lines.append(f"📞 연락처: <b>{phone_val}</b>")
             if address_val and address_val not in ('nan', 'None', ''):
                 biz_lines.append(f"🏠 사업장주소: <b>{address_val}</b>")
+            else:
+                biz_lines.append("🏠 사업장주소: <span style='color:#DC2626;'>미입력</span>")
 
             item_val = str(row.get('내용(품목)', '')).strip()
             item_line = ''
@@ -844,7 +850,6 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
                         st.warning(f"❗ {leader} 계좌 미등록")
             # ── 팀 외부 입금완료 버튼 ──
             with _team_btn_col:
-                st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
                 if leader_cr['지급상태'] == '대기':
                     if st.button("💰 입금완료", key=f"ceo_team_{tc}_{inq_id}", type="primary",
                                  use_container_width=True):
@@ -913,7 +918,6 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
                             st.warning("❗ 계좌 미등록")
                 # ── 개별 외부 입금완료 버튼 ──
                 with _ind_btn_col:
-                    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
                     if pst == '대기' and aid:
                         if st.button("💰 입금완료", key=f"ceo_ind_{aid}_{inq_id}", type="primary",
                                      use_container_width=True):
