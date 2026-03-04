@@ -1546,7 +1546,6 @@ def show_settlement_detail(data):
                     '기본급': display_basic,
                     '공제': 0,
                     '실수령': display_basic,
-                    '메모': _pay_memo_map.get(_a_aid, ''),
                     '_은행': bank or '',
                     '_계좌': account or '',
                     '_주민등록번호': _a_ssn or '',
@@ -1586,7 +1585,6 @@ def show_settlement_detail(data):
                         '기타(숙박등)': added_row.get('기타(숙박등)', 0),
                         '기타항목명': added_row.get('기타항목명', '기타(숙박등)'),
                         '기본급': 0, '공제': 0, '실수령': 0,
-                        '메모': added_row.get('메모', ''),
                         '_은행': '', '_계좌': '', '_주민등록번호': '', '_배정ID': '',
                     }
                     initial_df = pd.concat([initial_df, pd.DataFrame([new_row])], ignore_index=True)
@@ -1688,7 +1686,6 @@ def show_settlement_detail(data):
                     '기본급': st.column_config.NumberColumn('기본급', width=90, format="%d", disabled=True),
                     '공제': st.column_config.NumberColumn('공제', width=70, format="%d", disabled=True),
                     '실수령': st.column_config.NumberColumn('실수령', width=90, format="%d", disabled=True),
-                    '메모': st.column_config.TextColumn('메모', width=140, help="메모사항"),
                     '은행': st.column_config.TextColumn('은행', width=80, disabled=True, help="STAFF/배정기록 기준"),
                     '계좌': st.column_config.TextColumn('계좌', width=110, disabled=True, help="STAFF/배정기록 기준"),
                 },
@@ -1761,7 +1758,7 @@ def show_settlement_detail(data):
                     '총액': gross,
                     '공제': tax,
                     '실수령': net,
-                    '메모': str(erow.get('메모', '')),
+                    '메모': _pay_memo_map.get(_e_aid, ''),
                     '은행': bank_val,
                     '계좌': acct_val,
                     '주민등록번호': ssn_val,
@@ -1878,7 +1875,7 @@ def show_settlement_detail(data):
                             '은행명': cr.get('은행', ''),
                             '계좌번호': cr.get('계좌', ''),
                             '주민등록번호': cr.get('주민등록번호', ''),
-                            '비고': _tc_note + f"{cr['공제율']} 공제" + (_etc_tag if _etc_tag else '') + (f" | {cr['메모']}" if cr['메모'] else "") + (' [본사인원]' if _is_hq_person else ''),
+                            '비고': _tc_note + f"{cr['공제율']} 공제" + (_etc_tag if _etc_tag else '') + (f" | {_pay_memo_map.get(a_assign_id, '')}" if _pay_memo_map.get(a_assign_id, '') else "") + (' [본사인원]' if _is_hq_person else ''),
                         })
                     if _batch_records:
                         _result = db.batch_save_payment_records(_batch_records)
@@ -1915,7 +1912,7 @@ def show_settlement_detail(data):
                         '은행': cr['은행'],
                         '계좌번호': cr['계좌'],
                         '이체금액': cr['실수령'],
-                        '메모': cr['메모'] or f"{row['행사명']} 급여",
+                        '메모': cr['메모'] or f"{row['행사명']} 급여",  # 이체목록 엑셀용
                     })
                 if transfer_rows:
                     transfer_df = pd.DataFrame(transfer_rows)
