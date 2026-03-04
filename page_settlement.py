@@ -357,15 +357,16 @@ def show_settlement_overview():
         if st.button("💾 입금 저장", use_container_width=True, key="save_payment_btn"):
             if new_paid_amount > 0:
                 total_new_paid = current_paid + new_paid_amount
-                save_payment_record(
+                result = save_payment_record(
                     selected_row['문의ID'],
                     total_new_paid,
                     total_invoice_amt
                 )
-                st.success(f"✅ 입금이 저장되었습니다!\n- 합계: ₩{int(total_new_paid):,}")
-                st.balloons()
-                # 캐시만 무효화 (rerun 제거 — 데이터 증발 방지)
-                db.invalidate_data()
+                if result:
+                    st.success(f"✅ 입금이 저장되었습니다!\n- 합계: ₩{int(total_new_paid):,}")
+                    st.balloons()
+                    # 캐시만 무효화 (rerun 제거 — 데이터 증발 방지)
+                    db.invalidate_data()
             else:
                 st.error("❌ 입금 금액을 입력해주세요.")
     
@@ -660,8 +661,9 @@ def save_payment_record(inquiry_id, total_paid, total_invoice):
         # 해당 행 찾기 (get_all_records 1회로 데이터+헤더 모두 취득)
         all_records = wks.get_all_records()
         target_row = None
+        inquiry_id_str = str(inquiry_id).strip()
         for idx, record in enumerate(all_records, start=2):  # 2부터 시작 (헤더는 1)
-            if record.get('문의ID') == inquiry_id:
+            if str(record.get('문의ID', '')).strip() == inquiry_id_str:
                 target_row = idx
                 break
         
@@ -712,7 +714,7 @@ def save_payment_record(inquiry_id, total_paid, total_invoice):
         if auto_deposit == "입금완료" and '진행상황' in col_map:
             existing_payout = 0
             for rec in all_records:
-                if str(rec.get('문의ID', '')).strip() == str(inquiry_id).strip():
+                if str(rec.get('문의ID', '')).strip() == inquiry_id_str:
                     try:
                         existing_payout = int(float(rec.get('지급액', 0) or 0))
                     except:
