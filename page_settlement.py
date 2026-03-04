@@ -1454,9 +1454,24 @@ def show_settlement_detail(data):
             # ── 지급상태 맵 구성 (위에서 이미 로드한 _pay_df_check 재사용) ──
             _pay_records_early = _pay_df_check
             _pay_status_map_early = {}
+            _pay_etc_label_map = {}   # 배정ID → 기타항목명 (비고 태그에서 복원)
+            _pay_memo_map = {}        # 배정ID → 메모 (비고에서 복원)
             if not _pay_records_early.empty and '배정ID' in _pay_records_early.columns and '지급상태' in _pay_records_early.columns:
+                import re as _re_init
                 for _, _pr in _pay_records_early.iterrows():
-                    _pay_status_map_early[str(_pr['배정ID']).strip()] = str(_pr['지급상태']).strip()
+                    _aid_key = str(_pr['배정ID']).strip()
+                    _pay_status_map_early[_aid_key] = str(_pr['지급상태']).strip()
+                    # 비고에서 기타항목명 복원
+                    _rmk = str(_pr.get('비고', ''))
+                    _etc_m = _re_init.search(r'\[기타:([^\]]+)\]', _rmk)
+                    if _etc_m:
+                        _pay_etc_label_map[_aid_key] = _etc_m.group(1)
+                    # 비고에서 메모 복원 (| 뒤에서 태그/플래그 제외한 텍스트)
+                    if '|' in _rmk:
+                        _after = _rmk.split('|', 1)[1].strip()
+                        _memo_clean = _re_init.sub(r'\[[^\]]*\]', '', _after).strip()
+                        if _memo_clean:
+                            _pay_memo_map[_aid_key] = _memo_clean
 
             for i, arow in assignment_df.iterrows():
                 a_name = str(arow.get(name_col, 'N/A')) if name_col else 'N/A'
@@ -1521,10 +1536,11 @@ def show_settlement_detail(data):
                     '교통비': 0,
                     '연장': 0,
                     '기타(숙박등)': 0,
+                    '기타항목명': _pay_etc_label_map.get(_a_aid, '기타(숙박등)'),
                     '기본급': display_basic,
                     '공제': 0,
                     '실수령': display_basic,
-                    '메모': '',
+                    '메모': _pay_memo_map.get(_a_aid, ''),
                     '_은행': bank or '',
                     '_계좌': account or '',
                     '_주민등록번호': _a_ssn or '',
@@ -1562,6 +1578,7 @@ def show_settlement_detail(data):
                         '교통비': added_row.get('교통비', 0),
                         '연장': added_row.get('연장', 0),
                         '기타(숙박등)': added_row.get('기타(숙박등)', 0),
+                        '기타항목명': added_row.get('기타항목명', '기타(숙박등)'),
                         '기본급': 0, '공제': 0, '실수령': 0,
                         '메모': added_row.get('메모', ''),
                         '_은행': '', '_계좌': '', '_주민등록번호': '', '_배정ID': '',
@@ -1661,6 +1678,7 @@ def show_settlement_detail(data):
                     '교통비': st.column_config.NumberColumn('교통비', width=70, min_value=0, step=5000, format="%d"),
                     '연장': st.column_config.NumberColumn('연장', width=70, min_value=0, step=5000, format="%d", help="연장근무 수당"),
                     '기타(숙박등)': st.column_config.NumberColumn('기타(숙박등)', width=85, min_value=0, step=5000, format="%d", help="숙박비, 기타 수당 등"),
+                    '기타항목명': st.column_config.TextColumn('기타항목명', width=95, help="기타 항목의 실제 이름 (예: 파트타임, 교육비)"),
                     '기본급': st.column_config.NumberColumn('기본급', width=90, format="%d", disabled=True),
                     '공제': st.column_config.NumberColumn('공제', width=70, format="%d", disabled=True),
                     '실수령': st.column_config.NumberColumn('실수령', width=90, format="%d", disabled=True),
@@ -1732,6 +1750,7 @@ def show_settlement_detail(data):
                     '교통비': e_trans,
                     '연장': e_overtime,
                     '기타(숙박등)': e_etc,
+                    '기타항목명': str(erow.get('기타항목명', '기타(숙박등)')),
                     '기본급': basic,
                     '총액': gross,
                     '공제': tax,
@@ -1830,6 +1849,8 @@ def show_settlement_detail(data):
                         _is_hq_person = cr['구분'] == '본사'
                         _existing_status = cr.get('_지급상태', '')
                         _save_status = _existing_status if _existing_status in ('완료', '확인완료') else '대기'
+                        _etc_label = str(cr.get('기타항목명', '기타(숙박등)'))
+                        _etc_tag = f" [기타:{_etc_label}]" if _etc_label and _etc_label != '기타(숙박등)' else ''
                         _batch_records.append({
                             '배정ID': a_assign_id,
                             '문의ID': inq_id,
@@ -1851,7 +1872,7 @@ def show_settlement_detail(data):
                             '은행명': cr.get('은행', ''),
                             '계좌번호': cr.get('계좌', ''),
                             '주민등록번호': cr.get('주민등록번호', ''),
-                            '비고': _tc_note + f"{cr['공제율']} 공제" + (f" | {cr['메모']}" if cr['메모'] else "") + (' [본사인원]' if _is_hq_person else ''),
+                            '비고': _tc_note + f"{cr['공제율']} 공제" + (_etc_tag if _etc_tag else '') + (f" | {cr['메모']}" if cr['메모'] else "") + (' [본사인원]' if _is_hq_person else ''),
                         })
                     if _batch_records:
                         _result = db.batch_save_payment_records(_batch_records)
@@ -2159,11 +2180,13 @@ def show_settlement_detail(data):
                             | 식비 | ₩{leader_cr['식비']:,} |
                             | 교통비 | ₩{leader_cr['교통비']:,} |
                             | 연장 | ₩{leader_cr['연장']:,} |
-                            | 기타(숙박등) | ₩{leader_cr['기타(숙박등)']:,} |
+                            | {leader_cr.get('기타항목명', '기타(숙박등)')} | ₩{leader_cr['기타(숙박등)']:,} |
                             | **총액** | **₩{leader_gross:,}** |
                             | 공제({leader_tax_label}) | -₩{leader_tax:,} |
                             | **실수령 → {_leader} 계좌** | **₩{leader_net:,}** |
                             """) if leader_cr else None
+                            if leader_cr and leader_cr.get('메모'):
+                                st.caption(f"📝 메모: {leader_cr['메모']}")
                         with c2:
                             if leader_bank and leader_acct:
                                 st.info(f"🏦 {leader_bank}\n\n📋 {leader_acct}\n\n👤 수령인: **{_leader}**")
@@ -2303,11 +2326,13 @@ def show_settlement_detail(data):
                         | 식비 | ₩{cr['식비']:,} |
                         | 교통비 | ₩{cr['교통비']:,} |
                         | 연장 | ₩{cr['연장']:,} |
-                        | 기타(숙박등) | ₩{cr['기타(숙박등)']:,} |
+                        | {cr.get('기타항목명', '기타(숙박등)')} | ₩{cr['기타(숙박등)']:,} |
                         | **총액** | **₩{cr['총액']:,}** |
                         | 공제({cr['공제율']}) | -₩{cr['공제']:,} |
                         | **실수령** | **₩{cr['실수령']:,}** |
                         """)
+                        if cr.get('메모'):
+                            st.caption(f"📝 메모: {cr['메모']}")
 
                         # ── 입금확인 / 본사확인 버튼 ──
                         st.markdown("---")
@@ -2367,7 +2392,7 @@ def show_settlement_detail(data):
                                             '은행명': cr.get('은행', ''),
                                             '계좌번호': cr.get('계좌', ''),
                                             '주민등록번호': cr.get('주민등록번호', ''),
-                                            '비고': '[본사인원] 확인완료',
+                                            '비고': '[본사인원] 확인완료' + (f" [기타:{cr.get('기타항목명', '기타(숙박등)')}]" if cr.get('기타항목명', '기타(숙박등)') != '기타(숙박등)' else ''),
                                         }
                                         db.save_payment_record(_hq_payment)
                                     else:

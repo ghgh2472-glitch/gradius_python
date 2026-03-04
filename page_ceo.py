@@ -293,6 +293,16 @@ def _build_inquiry_payment_data(dispatch_df, payment_df, staff_df=None):
                 # 비고란에서 공제율 복원
                 remark = str(pr.get('비고', ''))
                 tax_label = _extract_tax_label_from_remark(remark)
+                # 비고란에서 기타항목명 + 메모 복원
+                import re as _re
+                _etc_match = _re.search(r'\[기타:([^\]]+)\]', remark)
+                _etc_label = _etc_match.group(1) if _etc_match else '기타(숙박등)'
+                # 메모: 기존 | 구분자 뒤 텍스트에서 태그/플래그 제외한 순수 메모
+                _memo_text = ''
+                if '|' in remark:
+                    _after_pipe = remark.split('|', 1)[1].strip()
+                    # 태그 제거 후 남은 텍스트
+                    _memo_text = _re.sub(r'\[[^\]]*\]', '', _after_pipe).strip()
                 # 지급내역에 은행/계좌가 있으면 우선 사용 (가장 최신)
                 pr_bank = str(pr.get('은행명', '')).strip()
                 pr_acct = str(pr.get('계좌번호', '')).strip()
@@ -303,6 +313,8 @@ def _build_inquiry_payment_data(dispatch_df, payment_df, staff_df=None):
             else:
                 meal = transport = overtime = etc_cost = 0
                 saved_gross = saved_tax = saved_net = 0
+                _etc_label = '기타(숙박등)'
+                _memo_text = ''
 
             # 지급상태
             pst = pay_status_map.get(a_aid, '미저장')
@@ -344,6 +356,8 @@ def _build_inquiry_payment_data(dispatch_df, payment_df, staff_df=None):
                 '교통비': transport,
                 '연장': overtime,
                 '기타': etc_cost,
+                '기타항목명': _etc_label,
+                '메모': _memo_text,
                 '총액': gross,
                 '공제': tax,
                 '실수령': net,
@@ -851,11 +865,13 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
                         f"| 식비 | ₩{leader_cr['식비']:,} |\n"
                         f"| 교통비 | ₩{leader_cr['교통비']:,} |\n"
                         f"| 연장 | ₩{leader_cr['연장']:,} |\n"
-                        f"| 기타(숙박등) | ₩{leader_cr['기타']:,} |\n"
+                        f"| {leader_cr.get('기타항목명', '기타(숙박등)')} | ₩{leader_cr['기타']:,} |\n"
                         f"| **총액** | **₩{leader_cr['총액']:,}** |\n"
                         f"| 공제({leader_tax_label}) | -₩{leader_cr['공제']:,} |\n"
                         f"| **실수령 → {leader} 계좌** | **₩{leader_cr['실수령']:,}** |"
                     )
+                    if leader_cr.get('메모'):
+                        st.caption(f"📝 메모: {leader_cr['메모']}")
                 with c2:
                     if leader_cr['은행'] and leader_cr['은행'] not in ('nan', 'None', ''):
                         st.info(f"🏦 {leader_cr['은행']}\n\n📋 {leader_cr['계좌']}\n\n👤 수령인: **{leader}**")
@@ -919,11 +935,13 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
                             f"| 식비 | ₩{cr['식비']:,} |\n"
                             f"| 교통비 | ₩{cr['교통비']:,} |\n"
                             f"| 연장 | ₩{cr['연장']:,} |\n"
-                            f"| 기타(숙박등) | ₩{cr['기타']:,} |\n"
+                            f"| {cr.get('기타항목명', '기타(숙박등)')} | ₩{cr['기타']:,} |\n"
                             f"| **총액** | **₩{cr['총액']:,}** |\n"
                             f"| 공제({ind_tax_label}) | -₩{cr['공제']:,} |\n"
                             f"| **실수령** | **₩{net:,}** |"
                         )
+                        if cr.get('메모'):
+                            st.caption(f"📝 메모: {cr['메모']}")
                     with c2:
                         if bank and bank not in ('nan', 'None', ''):
                             st.info(f"🏦 {bank}\n\n📋 {acct}")
