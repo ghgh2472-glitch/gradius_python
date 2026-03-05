@@ -749,7 +749,36 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
             continue
 
         venue_total = sum(cr['실수령'] for cr in venue_unpaid)
-        st.markdown(f"#### 📍 {venue} ({len(venue_unpaid)}명 · ₩{venue_total:,})")
+
+        # 현장 제목 + 이체 엑셀 다운로드 (미지급만)
+        _venue_title_col, _venue_dl_col = st.columns([3, 1])
+        with _venue_title_col:
+            st.markdown(f"#### 📍 {venue} ({len(venue_unpaid)}명 · ₩{venue_total:,})")
+        with _venue_dl_col:
+            import io as _io
+            _venue_transfer = []
+            for _vcr in venue_unpaid:
+                if _vcr['실수령'] <= 0:
+                    continue
+                _venue_transfer.append({
+                    '이름': _vcr['이름'],
+                    '은행': _vcr.get('은행', ''),
+                    '계좌번호': _vcr.get('계좌', ''),
+                    '이체금액': _vcr['실수령'],
+                    '메모': _vcr.get('메모', '') or f"{venue} 급여",
+                })
+            if _venue_transfer:
+                _vbuf = _io.BytesIO()
+                pd.DataFrame(_venue_transfer).to_excel(_vbuf, index=False, sheet_name='이체목록')
+                _vbuf.seek(0)
+                st.download_button(
+                    f"📥 이체 엑셀 ({len(_venue_transfer)}명)",
+                    data=_vbuf.getvalue(),
+                    file_name=f"이체_{venue}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    key=f"ceo_dl_venue_{inq_id}",
+                )
 
         # 현장 일괄 입금완료
         venue_pending = [cr for cr in venue_unpaid if cr['지급상태'] == '대기']
@@ -995,54 +1024,6 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
             sdf = pd.DataFrame(summary_rows).sort_values('미지급합계', ascending=False).reset_index(drop=True)
             st.dataframe(sdf, use_container_width=True, hide_index=True,
                          column_config={"미지급합계": st.column_config.NumberColumn("💰 미지급합계", format="%d원")})
-
-    # ── 📥 이체용 엑셀 다운로드 — 지급내역 시트 기준 ──
-    import io
-    all_transfer = []
-    for vd in venue_data_list:
-        for cr in vd['calc_rows']:
-            if cr['본사'] or cr['실수령'] <= 0:
-                continue
-            all_transfer.append({
-                '현장명': vd['venue'],
-                '이름': cr['이름'],
-                '은행': cr.get('은행', ''),
-                '계좌번호': cr.get('계좌', ''),
-                '이체금액': cr['실수령'],
-                '지급상태': cr['지급상태'],
-                '메모': cr.get('메모', '') or f"{vd['venue']} 급여",
-            })
-    if all_transfer:
-        # 미지급만 / 전체 선택
-        _dl_col1, _dl_col2 = st.columns([1, 1])
-        with _dl_col1:
-            unpaid_transfer = [r for r in all_transfer if r['지급상태'] not in ('완료', '확인완료')]
-            if unpaid_transfer:
-                buf1 = io.BytesIO()
-                pd.DataFrame(unpaid_transfer).drop(columns=['지급상태']).to_excel(buf1, index=False, sheet_name='이체목록')
-                buf1.seek(0)
-                st.download_button(
-                    f"📥 미지급 이체 엑셀 ({len(unpaid_transfer)}명)",
-                    data=buf1.getvalue(),
-                    file_name=f"이체_미지급_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                    key="ceo_dl_unpaid",
-                )
-            else:
-                st.button("📥 미지급 이체 엑셀", disabled=True, use_container_width=True, key="ceo_dl_unpaid")
-        with _dl_col2:
-            buf2 = io.BytesIO()
-            pd.DataFrame(all_transfer).to_excel(buf2, index=False, sheet_name='이체목록')
-            buf2.seek(0)
-            st.download_button(
-                f"📥 전체 이체 엑셀 ({len(all_transfer)}명)",
-                data=buf2.getvalue(),
-                file_name=f"이체_전체_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-                key="ceo_dl_all",
-            )
 
 
 def _find_member_aid(dispatch_df, inq_id, member_name):
