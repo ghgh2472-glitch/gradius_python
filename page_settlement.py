@@ -1965,18 +1965,39 @@ def show_settlement_detail(data):
                         st.warning("저장할 기록이 없습니다." + (f" ({', '.join(parts)})" if parts else ""))
 
             with btn_c3:
-                # ── 📥 은행이체 엑셀 다운로드 (B) ──
+                # ── 📥 은행이체 엑셀 다운로드 — 지급내역 시트 기준 ──
                 import io
                 transfer_rows = []
                 for cr in calc_rows:
                     if cr['별도'] or cr['실수령'] <= 0:
                         continue
+                    _dl_aid = cr.get('_배정ID', '')
+                    _dl_pr = _pay_record_map.get(_dl_aid, {})
+                    _has_saved = hasattr(_dl_pr, 'get') and int(float(_dl_pr.get('최종지급액', 0) or 0)) > 0
+                    if _has_saved:
+                        # 지급내역 시트에 저장된 값 사용
+                        _dl_name = str(_dl_pr.get('인력명', cr['이름']))
+                        _dl_bank = str(_dl_pr.get('은행명', '')).strip()
+                        _dl_acct = str(_dl_pr.get('계좌번호', '')).strip()
+                        _dl_amount = int(float(_dl_pr.get('최종지급액', 0) or 0))
+                        if not _dl_bank or _dl_bank in ('nan', 'None'):
+                            _dl_bank = cr['은행']
+                        if not _dl_acct or _dl_acct in ('nan', 'None'):
+                            _dl_acct = cr['계좌']
+                    else:
+                        # 미저장 시 현재 편집기 값 fallback
+                        _dl_name = cr['이름']
+                        _dl_bank = cr['은행']
+                        _dl_acct = cr['계좌']
+                        _dl_amount = cr['실수령']
+                    if _dl_amount <= 0:
+                        continue
                     transfer_rows.append({
-                        '이름': cr['이름'],
-                        '은행': cr['은행'],
-                        '계좌번호': cr['계좌'],
-                        '이체금액': cr['실수령'],
-                        '메모': cr['메모'] or f"{row['행사명']} 급여",  # 이체목록 엑셀용
+                        '이름': _dl_name,
+                        '은행': _dl_bank,
+                        '계좌번호': _dl_acct,
+                        '이체금액': _dl_amount,
+                        '메모': cr['메모'] or f"{row['행사명']} 급여",
                     })
                 if transfer_rows:
                     transfer_df = pd.DataFrame(transfer_rows)
