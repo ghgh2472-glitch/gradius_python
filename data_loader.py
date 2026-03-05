@@ -3138,6 +3138,56 @@ def batch_update_payment_status(updates: list) -> dict:
         return {'success': 0, 'not_found': 0, 'failed': len(updates)}
 
 
+def sync_dispatch_from_payment(records: list) -> dict:
+    """지급기록 저장 후 배정기록의 단가/일수/총지급액을 동기화.
+
+    Args:
+        records: list of {'배정ID': str, '단가': int, '일수': int, '총지급액': int}
+    Returns:
+        {'synced': int, 'not_found': int}
+    """
+    if not records:
+        return {'synced': 0, 'not_found': 0}
+    try:
+        wks, headers, id_col, col_map = _get_dispatch_sheet_cached(force=True)
+        rate_ci = col_map.get('지급단가')
+        days_ci = col_map.get('근무일수')
+        total_ci = col_map.get('총지급액')
+        if not rate_ci and not days_ci and not total_ci:
+            print("[sync_dispatch] 단가/일수/총지급액 컬럼 없음 — 동기화 건너뜀")
+            return {'synced': 0, 'not_found': 0}
+
+        from gspread.cell import Cell
+        batch_cells = []
+        synced, not_found = 0, 0
+
+        for rec in records:
+            bid = str(rec.get('배정ID', '')).strip()
+            if not bid:
+                continue
+            row_num = _find_row(id_col, bid)
+            if not row_num:
+                not_found += 1
+                continue
+            if rate_ci and rec.get('단가') is not None:
+                batch_cells.append(Cell(row=row_num, col=rate_ci, value=int(rec['단가'])))
+            if days_ci and rec.get('일수') is not None:
+                batch_cells.append(Cell(row=row_num, col=days_ci, value=int(rec['일수'])))
+            if total_ci and rec.get('총지급액') is not None:
+                batch_cells.append(Cell(row=row_num, col=total_ci, value=int(rec['총지급액'])))
+            synced += 1
+
+        if batch_cells:
+            wks.update_cells(batch_cells, value_input_option='RAW')
+            _invalidate_worksheet_cache("배정기록")
+
+        print(f"✅ sync_dispatch: {synced} synced, {not_found} not found")
+        return {'synced': synced, 'not_found': not_found}
+    except Exception as e:
+        print(f"❌ sync_dispatch_from_payment 오류: {e}")
+        return {'synced': 0, 'not_found': 0}
+
+
 # ---------------------------------------------------------
 # 본사 인원 정보 (코드 내 상수)
 # ---------------------------------------------------------

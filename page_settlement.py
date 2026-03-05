@@ -1456,6 +1456,7 @@ def show_settlement_detail(data):
             # ── 지급상태 맵 구성 (위에서 이미 로드한 _pay_df_check 재사용) ──
             _pay_records_early = _pay_df_check
             _pay_status_map_early = {}
+            _pay_record_map = {}      # 배정ID → 지급내역 행 (전체 금액 복원용)
             _pay_etc_label_map = {}   # 배정ID → 기타항목명 (비고 태그에서 복원)
             _pay_memo_map = {}        # 배정ID → 메모 (비고에서 복원)
             if not _pay_records_early.empty and '배정ID' in _pay_records_early.columns and '지급상태' in _pay_records_early.columns:
@@ -1463,6 +1464,7 @@ def show_settlement_detail(data):
                 for _, _pr in _pay_records_early.iterrows():
                     _aid_key = str(_pr['배정ID']).strip()
                     _pay_status_map_early[_aid_key] = str(_pr['지급상태']).strip()
+                    _pay_record_map[_aid_key] = _pr
                     # 비고에서 기타항목명 복원
                     _rmk = str(_pr.get('비고', ''))
                     _etc_m = _re_init.search(r'\[기타:([^\]]+)\]', _rmk)
@@ -1530,24 +1532,73 @@ def show_settlement_detail(data):
                     display_basic = a_rate * a_days
                     team_note = ''
 
+                # ── 지급내역 저장값 우선 적용 (있으면 배정기록 대신 사용) ──
+                _pr = _pay_record_map.get(_a_aid, {})
+                _has_pr = hasattr(_pr, 'get') and int(float(_pr.get('소계', 0) or 0)) > 0
+                if _has_pr:
+                    _pr_meal = int(float(_pr.get('식사비', 0) or 0))
+                    _pr_trans = int(float(_pr.get('교통비', 0) or 0))
+                    _pr_overtime = int(float(_pr.get('야근비', 0) or 0))
+                    _pr_etc = int(float(_pr.get('보너스', 0) or 0))
+                    _pr_days = int(float(_pr.get('파견일수', 0) or 0))
+                    if _pr_days > 0:
+                        a_days = _pr_days
+                    _pr_basic = int(float(_pr.get('기본급', 0) or 0))
+                    _pr_gross = int(float(_pr.get('소계', 0) or 0))
+                    _pr_tax = int(float(_pr.get('세금공제', 0) or 0))
+                    _pr_net = int(float(_pr.get('최종지급액', 0) or 0))
+                    # 공제율 복원
+                    _pr_remark = str(_pr.get('비고', ''))
+                    _pr_tax_label = default_tax_label
+                    if '3.3%' in _pr_remark:
+                        _pr_tax_label = '3.3%'
+                    elif '0.9%' in _pr_remark:
+                        _pr_tax_label = '0.9%'
+                    elif '공제없음' in _pr_remark or (_pr_gross > 0 and _pr_tax == 0):
+                        _pr_tax_label = '공제없음'
+                    # 은행/계좌: 지급내역이 가장 최신
+                    _pr_bank = str(_pr.get('은행명', '')).strip()
+                    _pr_acct = str(_pr.get('계좌번호', '')).strip()
+                    _pr_ssn = str(_pr.get('주민등록번호', '')).strip()
+                    if _pr_bank and _pr_bank not in ('nan', 'None', ''):
+                        bank = _pr_bank
+                    if _pr_acct and _pr_acct not in ('nan', 'None', ''):
+                        account = _pr_acct
+                    if _pr_ssn and _pr_ssn not in ('nan', 'None', ''):
+                        _a_ssn = _pr_ssn
+                    # 팀장이면 기본급은 지급내역 값 사용 (팀 합산 이미 반영됨)
+                    if _tc and _tc in team_info:
+                        display_basic = _pr_basic if _pr_basic > 0 else display_basic
+                    else:
+                        display_basic = _pr_basic if _pr_basic > 0 else display_basic
+                else:
+                    _pr_meal = 0
+                    _pr_trans = 0
+                    _pr_overtime = 0
+                    _pr_etc = 0
+                    _pr_gross = display_basic
+                    _pr_tax = 0
+                    _pr_net = display_basic
+                    _pr_tax_label = default_tax_label
+
                 edit_rows.append({
                     '지급상태': _pay_st,
                     '이름': a_name,
                     '직무': a_role,
                     '구분': '본사' if is_hq else a_type,
                     '팀': team_note,
-                    '공제율': default_tax_label,
+                    '공제율': _pr_tax_label,
                     '별도': True if is_hq else False,
                     '단가': a_rate,
                     '일수': a_days,
-                    '식비': 0,
-                    '교통비': 0,
-                    '연장': 0,
-                    '기타(숙박등)': 0,
+                    '식비': _pr_meal,
+                    '교통비': _pr_trans,
+                    '연장': _pr_overtime,
+                    '기타(숙박등)': _pr_etc,
                     '기타항목명': _pay_etc_label_map.get(_a_aid, '기타(숙박등)'),
                     '기본급': display_basic,
-                    '공제': 0,
-                    '실수령': display_basic,
+                    '공제': _pr_tax,
+                    '실수령': _pr_net,
                     '_은행': bank or '',
                     '_계좌': account or '',
                     '_주민등록번호': _a_ssn or '',
@@ -1890,6 +1941,17 @@ def show_settlement_detail(data):
                         _total_saved = _result['saved'] + _result['updated']
                         if _total_saved > 0:
                             st.success(f"✅ {' / '.join(parts)} 완료!")
+                            # 배정기록 동기화 (단가/일수/총지급액)
+                            _dispatch_sync = []
+                            for _br in _batch_records:
+                                _dispatch_sync.append({
+                                    '배정ID': _br['배정ID'],
+                                    '단가': int(_br.get('기본급', 0)),
+                                    '일수': int(_br.get('파견일수', 0)),
+                                    '총지급액': int(_br.get('소계', 0)),
+                                })
+                            if _dispatch_sync:
+                                db.sync_dispatch_from_payment(_dispatch_sync)
                             db.invalidate_payment_cache()
                             db.invalidate_dispatch_only()
                             time.sleep(1)
