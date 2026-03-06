@@ -989,7 +989,7 @@ def show_settlement_detail(data):
     """, unsafe_allow_html=True)
 
     # --------------------------------------------------------------------------
-    # 손익 요약 (실제 지급액 기반 — 배정기록 우선, fallback으로 견적/특이사항)
+    # 손익 요약 (지급내역 기준 — 저장된 지급내역이 없으면 안내 메시지)
     # --------------------------------------------------------------------------
     df_est = data.get('estimate', pd.DataFrame())
     inq_id = str(row.get('문의ID', '')).strip()
@@ -1008,44 +1008,27 @@ def show_settlement_detail(data):
         except:
             return 0
 
-    # ① 실제 지급액 계산 (배정기록 시트에서 확정/이체 인력의 총지급액 합산)
+    # ① 지급내역에서 실제 지급액 합산
     actual_cost = 0
     has_actual_data = False
-    _settle_assignments_raw = pd.DataFrame()  # 필터 전 원본 (급여탭 재사용)
+    _settle_assignments_raw = pd.DataFrame()  # 급여탭 재사용
+    _pay_df_summary = pd.DataFrame()
     try:
-        _settle_assignments_raw = db.get_assignments_by_inquiry(inq_id)
-        _settle_assignments = _settle_assignments_raw.copy()
-        if not _settle_assignments.empty:
-            # 상태 컴럼 식별
-            _sa_status_col = None
-            for _sc in ['지급상태', '상태']:
-                if _sc in _settle_assignments.columns:
-                    _sa_status_col = _sc
-                    break
-            # 취소된 건 제외, 후보 제외 (배정중/확정/이체완료 등만 포함)
-            if _sa_status_col:
-                _settle_assignments = _settle_assignments[
-                    ~_settle_assignments[_sa_status_col].astype(str).str.strip().isin(['취소', '후보'])
-                ]
-            # 팀원(결제대상=N)은 팀장에 합산되므로 직접 합산 시 중복 방지
-            _pay_target_col = '결제대상' if '결제대상' in _settle_assignments.columns else None
-            if _pay_target_col:
-                # 팀원(결제대상=N) 도 인건비로 계산되어야 하므로 전체 포함
-                pass
-            # 총지급액 / (단가 x 일수) 합산
-            _total_col = '총지급액' if '총지급액' in _settle_assignments.columns else None
-            _rate_col = next((c for c in ['지급단가', '단가'] if c in _settle_assignments.columns), None)
-            _days_col = next((c for c in ['근무일수', '일수'] if c in _settle_assignments.columns), None)
-            for _, _sa_row in _settle_assignments.iterrows():
-                _sa_total = _safe_int(_sa_row.get(_total_col, 0)) if _total_col else 0
-                if _sa_total > 0:
-                    actual_cost += _sa_total
-                elif _rate_col and _days_col:
-                    _sa_rate = _safe_int(_sa_row.get(_rate_col, 0))
-                    _sa_days = _safe_int(_sa_row.get(_days_col, 0))
-                    actual_cost += _sa_rate * _sa_days
+        _pay_df_summary = db.get_payment_records_by_inquiry(inq_id)
+        if not _pay_df_summary.empty:
+            # 소계 또는 최종지급액 합산
+            _pay_cost_col = next((c for c in ['소계', '최종지급액'] if c in _pay_df_summary.columns), None)
+            if _pay_cost_col:
+                for _, _pr in _pay_df_summary.iterrows():
+                    actual_cost += _safe_int(_pr.get(_pay_cost_col, 0))
             if actual_cost > 0:
                 has_actual_data = True
+    except Exception:
+        pass
+
+    # 배정기록 원본은 급여탭에서 재사용하므로 로드
+    try:
+        _settle_assignments_raw = db.get_assignments_by_inquiry(inq_id)
     except Exception:
         pass
 
@@ -1073,19 +1056,19 @@ def show_settlement_detail(data):
 
     # 데이터 출처 표시
     cost_label = "실제 지급액" if has_actual_data else "예상 인건비"
-    cost_sublabel = "(배정기록 기준)" if has_actual_data else "(견적 기준)"
+    cost_sublabel = "(지급내역 기준)" if has_actual_data else "(견적 기준)"
 
     st.markdown("##### 📊 손익 요약")
     if has_actual_data:
-        st.caption("✅ 실제 배정/지급 데이터 기반으로 계산되었습니다.")
+        st.caption("✅ 지급내역 저장 데이터 기반으로 계산되었습니다.")
+        m1, m2, m3, m4 = st.columns(4)
+        profit_sign = "+" if profit >= 0 else ""
+        with m1: st.markdown(f"""<div class="metric-card"><div class="metric-label">총 매출 (공급가액)</div><div class="metric-val">{summary['매출']:,}</div></div>""", unsafe_allow_html=True)
+        with m2: st.markdown(f"""<div class="metric-card"><div class="metric-label">{cost_label} {cost_sublabel}</div><div class="metric-val cost-val">{summary['매입']:,}</div></div>""", unsafe_allow_html=True)
+        with m3: st.markdown(f"""<div class="metric-card"><div class="metric-label">순수익</div><div class="metric-val profit-val">{profit_sign}{summary['수익']:,}</div></div>""", unsafe_allow_html=True)
+        with m4: st.markdown(f"""<div class="metric-card"><div class="metric-label">수익률</div><div class="metric-val">{summary['수익률']:.1f}%</div></div>""", unsafe_allow_html=True)
     else:
-        st.caption("⚠️ 배정기록이 없어 견적 기준 예상치로 표시됩니다.")
-    m1, m2, m3, m4 = st.columns(4)
-    profit_sign = "+" if profit >= 0 else ""
-    with m1: st.markdown(f"""<div class="metric-card"><div class="metric-label">총 매출 (공급가액)</div><div class="metric-val">{summary['매출']:,}</div></div>""", unsafe_allow_html=True)
-    with m2: st.markdown(f"""<div class="metric-card"><div class="metric-label">{cost_label} {cost_sublabel}</div><div class="metric-val cost-val">{summary['매입']:,}</div></div>""", unsafe_allow_html=True)
-    with m3: st.markdown(f"""<div class="metric-card"><div class="metric-label">순수익</div><div class="metric-val profit-val">{profit_sign}{summary['수익']:,}</div></div>""", unsafe_allow_html=True)
-    with m4: st.markdown(f"""<div class="metric-card"><div class="metric-label">수익률</div><div class="metric-val">{summary['수익률']:.1f}%</div></div>""", unsafe_allow_html=True)
+        st.info("💡 지급내역 저장 후 손익 요약이 표시됩니다. 아래 인력 급여 정산에서 일괄 저장해 주세요.")
 
     st.divider()
 
@@ -1398,7 +1381,7 @@ def show_settlement_detail(data):
                     _integrity_warnings.append(f"⚠️ 견적 공급가액(₩{_est_supply:,}) ≠ 정산 매출(₩{summary['매출']:,}) — 금액 차이 확인")
             # 적자 경고
             if summary['수익'] < 0:
-                _integrity_warnings.append(f"🚨 적자 경고: 지출(₩{summary['지출']:,}) > 매출(₩{summary['매출']:,}) → 순손실 ₩{abs(summary['수익']):,}")
+                _integrity_warnings.append(f"🚨 적자 경고: 매입(₩{summary['매입']:,}) > 매출(₩{summary['매출']:,}) → 순손실 ₩{abs(summary['수익']):,}")
             if _integrity_warnings:
                 for _iw in _integrity_warnings:
                     st.warning(_iw)
