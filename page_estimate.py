@@ -268,6 +268,7 @@ def show(data):
         cols_per_row = 4
         rows_data = [_filtered.iloc[i:i+cols_per_row] for i in range(0, len(_filtered), cols_per_row)]
 
+        _card_idx = 0
         for row_chunk in rows_data:
             cols = st.columns(cols_per_row)
             for col_idx, (_, row) in enumerate(row_chunk.iterrows()):
@@ -306,9 +307,10 @@ def show(data):
                         <div class="card-meta">{_meta_html}</div>
                     </div>
                     """, unsafe_allow_html=True)
-                    if st.button("선택", key=f"sel_{tab_prefix}_{_label}", use_container_width=True):
+                    if st.button("선택", key=f"sel_{tab_prefix}_{_card_idx}_{_label}", use_container_width=True):
                         st.session_state['_card_selected'] = _label
                         st.rerun()
+                    _card_idx += 1
 
     with st.expander(f"📋 프로젝트 대기열 ({_cnt_total}건)", expanded=(_cnt_total > 0 and sel_p == "(신규작성)")):
         tab_all, tab_new, tab_edit, tab_contracted = st.tabs([
