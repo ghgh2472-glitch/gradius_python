@@ -447,7 +447,7 @@ def tab_assignment(data):
         for i, rs in enumerate(role_status):
             # 인일 기준 진행률
             md_p = (rs['actual_mandays'] / rs['needed_mandays'] * 100) if rs['needed_mandays'] > 0 else 0
-            with cols[i % (len(role_status) + 1)]:
+            with cols[i % len(cols)]:
                 with st.container():
                     rc1, rc2 = st.columns([2, 1])
                     with rc1:
@@ -469,7 +469,7 @@ def tab_assignment(data):
                             st.caption(f"📅 {' · '.join(parts)}")
 
         # 전체 인일 요약 (마지막 컬럼)
-        with cols[len(role_status) % (len(role_status) + 1)]:
+        with cols[len(role_status) % len(cols)]:
             with st.container():
                 st.markdown("**📊 전체**")
                 total_persons = sum(rs['assigned'] for rs in role_status)
