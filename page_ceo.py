@@ -1091,6 +1091,8 @@ def _render_deposit_tab(settlement_df, overview):
     col_inq = _find_col(df, ['문의ID'])
     col_company = _find_col(df, ['업체', '업체명'])
     col_site = _find_col(df, ['현장명', '행사명'])
+    col_date = _find_col(df, ['파견일자', '행사일자', '행사시작일'])
+    col_addr = _find_col(df, ['현장주소', '장소', '행사장소'])
     col_supply = _find_col(df, ['공급가액'])
     col_tax = _find_col(df, ['부가세'])
     col_paid_c = _find_col(df, ['받은금액'])
@@ -1134,6 +1136,8 @@ def _render_deposit_tab(settlement_df, overview):
         inq_id = str(row[col_inq]).strip()
         company = str(row[col_company]).strip()
         site = str(row[col_site]).strip() if col_site else ''
+        event_date = str(row[col_date]).strip() if col_date and col_date in row.index else ''
+        event_addr = str(row[col_addr]).strip() if col_addr and col_addr in row.index else ''
         invoice = int(row['_invoice'])
         paid = int(row['_paid'])
         balance = int(row['_balance'])
@@ -1160,9 +1164,21 @@ def _render_deposit_tab(settlement_df, overview):
         pct = int(paid / invoice * 100) if invoice > 0 else 0
         bar_color = "#10B981" if pct >= 100 else "#F59E0B" if pct > 0 else "#EF4444"
 
-        with st.expander(
-            f"{badge}  **{company}** — {site}  |  청구 ₩{invoice:,}  |  받음 ₩{paid:,}  |  잔액 ₩{balance:,}"
-        ):
+        # expander 제목 구성: 업체 — 행사명 | 날짜 | 장소 | 금액
+        _title_parts = [f"{badge}  **{company}**"]
+        if site:
+            _title_parts.append(f"— {site}")
+        _detail_parts = []
+        if event_date and event_date not in ('nan', 'None', ''):
+            _detail_parts.append(f"📅{event_date}")
+        if event_addr and event_addr not in ('nan', 'None', ''):
+            _detail_parts.append(f"📍{event_addr}")
+        _detail_parts.append(f"청구 ₩{invoice:,}")
+        _detail_parts.append(f"받음 ₩{paid:,}")
+        _detail_parts.append(f"잔액 ₩{balance:,}")
+        _expander_title = f"{' '.join(_title_parts)}  |  {'  |  '.join(_detail_parts)}"
+
+        with st.expander(_expander_title):
             # 상단: 프로그레스 바
             st.markdown(
                 f'<div style="background:#E5E7EB;border-radius:8px;height:10px;margin-bottom:12px;">'
