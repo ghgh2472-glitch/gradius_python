@@ -23,8 +23,8 @@ except ImportError:
     GCAL_AVAILABLE = False
     logger.warning("google-api-python-client 미설치 — 구글 캘린더 연동 비활성화")
 
-# 기본 캘린더 ID (대표님 캘린더 — 설정에서 변경 가능)
-DEFAULT_CALENDAR_ID = "primary"
+# 기본 캘린더 ID (대표님 캘린더)
+DEFAULT_CALENDAR_ID = "gkeem.official@gmail.com"
 
 SCOPES = [
     "https://www.googleapis.com/auth/calendar",
