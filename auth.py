@@ -31,6 +31,7 @@ def get_gspread_client(secrets_path="secrets.json", st_secrets=None, scopes=None
         scopes = [
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive",
+            "https://www.googleapis.com/auth/calendar",
         ]
 
     # 1) Try file-based credentials

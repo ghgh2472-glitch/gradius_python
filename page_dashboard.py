@@ -1104,11 +1104,30 @@ def show(data):
 
         events = ud.get_calendar_events(cal_df, df_dispatch)
         
-        # 이벤트 건수 표시
-        if events:
-            st.caption(f"📅 {len(events)}개 일정")
-        else:
-            st.caption("📅 표시할 일정이 없습니다.")
+        # 이벤트 건수 + 구글 캘린더 동기화 버튼
+        _gcal_c1, _gcal_c2 = st.columns([3, 1])
+        with _gcal_c1:
+            if events:
+                st.caption(f"📅 {len(events)}개 일정")
+            else:
+                st.caption("📅 표시할 일정이 없습니다.")
+        with _gcal_c2:
+            if events and st.button("🔄 구글 캘린더 동기화", key="gcal_sync_btn", use_container_width=True):
+                try:
+                    import google_calendar as gcal
+                    available, msg = gcal.is_calendar_available()
+                    if available:
+                        with st.spinner("구글 캘린더에 동기화 중..."):
+                            result = gcal.sync_all_events(events)
+                        if result['success']:
+                            st.success(f"✅ {result['synced']}건 동기화 완료!")
+                        else:
+                            st.warning(f"⚠️ {result['message']}")
+                    else:
+                        st.error(f"❌ {msg}")
+                        st.info("💡 Google Cloud Console에서 Calendar API 활성화 후,\n서비스 계정을 캘린더에 공유해주세요.")
+                except Exception as _ge:
+                    st.error(f"동기화 오류: {_ge}")
         
         cal_options = {
             "headerToolbar": {

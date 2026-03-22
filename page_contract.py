@@ -415,6 +415,18 @@ def show(data):
                         st.warning(f"⚠️ 고객정보 업데이트 실패 (계약은 정상 저장됨): {_ce}")
 
                 st.info("📧 다음 단계: 세금계산서 발행 준비 완료")
+
+                # ── 구글 캘린더 자동 동기화 ──
+                try:
+                    import google_calendar as gcal
+                    gcal_result = gcal.sync_single_event_from_inquiry(dict(selected_project))
+                    if gcal_result.get('success'):
+                        st.toast("📅 구글 캘린더에 일정 동기화 완료")
+                    else:
+                        print(f"[GCAL] 동기화 실패: {gcal_result.get('message', '')}")
+                except Exception as _gcal_e:
+                    print(f"[GCAL] 동기화 오류 (계약은 정상 저장됨): {_gcal_e}")
+
                 # 이전 업체 검색 임시값 정리
                 for k in ['_prev_biz_num', '_prev_biz_ceo', '_prev_biz_company', '_prev_biz_email']:
                     st.session_state.pop(k, None)
