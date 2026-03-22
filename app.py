@@ -12,6 +12,7 @@ import data_management                   # 데이터 관리 도구
 import page_attendance # 5단계: 출석부
 import page_settlement  # 6단계: 정산
 import page_project_detail  # 프로젝트 상세확인
+import page_ai_assistant    # AI 비서 에이전트
 
 # 데이터 모듈 임포트
 import data_loader as db
@@ -95,13 +96,14 @@ with st.sidebar:
         "📋 출석부 관리",
         "💰 정산 및 급여 관리",
         "🔍 프로젝트 상세확인",
+        "🤖 AI 비서",
         "🛠️ 데이터 관리"
     ]
     
     # 대시보드 바로가기 버튼 → 메뉴 전환
     _nav_map = {
         "대표님": 0, "문의": 2, "견적": 3, "계약": 4, "인원": 5,
-        "출석": 6, "정산": 7, "상세확인": 8, "데이터": 9
+        "출석": 6, "정산": 7, "상세확인": 8, "AI비서": 9, "데이터": 10
     }
     _default_idx = 0
     if '_nav_target' in st.session_state:
@@ -187,6 +189,9 @@ elif "정산" in menu:
 
 elif "상세확인" in menu:
     page_project_detail.show(data)
+
+elif "AI 비서" in menu:
+    page_ai_assistant.show(data)
 
 elif "데이터 관리" in menu:
     data_management.show_data_management()
