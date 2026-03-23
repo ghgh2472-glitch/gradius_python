@@ -155,11 +155,11 @@ def _render_chat_tab(data, df_dispatch, df_settlement, gemini_ok):
     # 히스토리 표시
     for msg in st.session_state['_ai_chat_history']:
         if msg['role'] == 'user':
-            st.markdown(f"""<div class="ai-chat-msg ai-chat-user">
-                <b>🙋 질문</b><br/>{msg['content']}</div>""", unsafe_allow_html=True)
+            with st.chat_message("user"):
+                st.markdown(msg['content'])
         else:
-            st.markdown(f"""<div class="ai-chat-msg ai-chat-bot">
-                <b>🤖 AI 비서</b><br/>{msg['content']}</div>""", unsafe_allow_html=True)
+            with st.chat_message("assistant"):
+                st.markdown(msg['content'])
 
     # 입력
     col_input, col_clear = st.columns([5, 1])
@@ -253,15 +253,11 @@ def _render_briefing_tab(data, df_inq, df_dispatch, df_settlement, gemini_ok):
         else:
             briefing = cached
 
-        st.markdown(f"""<div class="ai-briefing-card">
-            {briefing}
-        </div>""", unsafe_allow_html=True)
+        st.markdown(briefing)
     else:
         # Gemini 없으면 규칙 기반 요약
         summary = ai.generate_executive_summary(df_inq, df_dispatch, df_settlement)
-        st.markdown(f"""<div class="ai-briefing-card">
-            <b>📊 경영 현황 요약</b><br/><br/>{summary}
-        </div>""", unsafe_allow_html=True)
+        st.markdown(f"**📊 경영 현황 요약**\n\n{summary}")
 
 
 def _render_kpi_cards(df_inq, df_settlement, df_dispatch):
