@@ -2,9 +2,9 @@
 """
 Gradius ERP AI 비서를 위한 Gemini API 클라이언트.
 핵심 원칙:
-  1. 숫자 계산은 pandas (ai_helper), Gemini는 자연어 설명만
-  2. 민감정보(주민번호, 계좌, 연락처) 절대 외부 전송 안 함
-  3. 기존 ai_helper 함수를 '도구'로 재활용
+  1. 실제 데이터 테이블을 Gemini에 직접 전달 → 어떤 질문이든 답변 가능
+  2. 민감정보(주민번호, 계좌, 연락처) 자동 제거 후 전달
+  3. Gemini 100만 토큰 컨텍스트 활용 — 전체 ERP 데이터가 ~1% 미만
 """
 
 import streamlit as st
@@ -94,168 +94,119 @@ def is_available() -> bool:
 
 
 # ==============================================================================
-# 3. 질문 분류 및 데이터 컨텍스트 빌드
+# 3. 전체 데이터 컨텍스트 빌드 (모든 ERP 데이터를 안전하게 전달)
 # ==============================================================================
 
-_QUESTION_CATEGORIES = {
-    "매출": ["매출", "수익", "이익", "공급가", "청구", "정산", "수금", "금액", "돈", "입금",
-            "얼마", "매출액", "수입", "실적"],
-    "미수금": ["미수", "잔액", "미입금", "안 들어온", "안들어온", "독촉", "미지급", "안받은"],
-    "인력": ["인력", "인원", "배정", "스태프", "직원", "부족", "필요",
-            "직무", "역할", "직군", "직급", "나간", "나갔", "투입", "파견",
-            "주차", "안내", "보안", "진행", "기술", "요원", "도우미",
-            "몇 번", "몇번", "많이", "가장", "순위", "통계"],
-    "고객": ["업체", "고객", "거래", "이탈", "재계약", "충성", "거래처", "회사"],
-    "일정": ["일정", "현장", "행사", "D-day", "디데이", "이번 주", "다음 주", "임박",
-            "이번주", "다음주", "예정", "스케줄", "언제"],
-    "리스크": ["리스크", "위험", "경고", "주의", "긴급", "문제", "이슈"],
-    "견적": ["견적", "단가", "추천가", "적정가", "가격", "비용"],
-    "비교": ["비교", "대비", "추이", "변화", "증감", "지난달", "전월", "전년",
-            "작년", "올해", "vs"],
+# 각 시트에서 Gemini에 보낼 컬럼 (민감정보 제외)
+_SAFE_COLUMNS = {
+    'inq': ['문의ID', '업체명', '행사명', '행사시작일', '행사종료일', '상태', '체결',
+            '필요인력', '장소', '현장주소', '특이사항', '작성일', '담당자',
+            '행사유형', '복장', '식사', '주차'],
+    'settlement': ['문의ID', '현장명', '업체', '파견일자', '책임자', '현장주소',
+                   '청구금액', '공급가액', '부가세', '받은금액', '잔액',
+                   '진행상황', '입금여부', '세금계산서 발행여부',
+                   '지급액', '이익', '법인명', '내용(품목)'],
+    'dispatch': ['배정ID', '문의ID', '행사명', '인력명', '직무', '지급단가',
+                 '근무일수', '총지급액', '지급상태', '구분', '파견일자',
+                 '팀코드', '결제대상'],
+    'estimate': ['문의ID', '업체명', '행사명', '공급가액', '부가세', '합계금액',
+                 '매입원가', '예상수익', '필요인력', '상태'],
+    'staff': ['이름', '직무', '경력', '평점', '가용상태', '선호지역', '메모'],
+    'payment': ['문의ID', '인력명', '직무', '지급액', '지급상태', '지급일'],
 }
 
 
-def _classify_question(question: str) -> List[str]:
-    """질문을 카테고리로 분류 (복수 가능)"""
-    categories = []
-    q = question.lower()
-    for cat, keywords in _QUESTION_CATEGORIES.items():
-        if any(kw in q for kw in keywords):
-            categories.append(cat)
-    return categories if categories else ["일반"]
+def _df_to_safe_text(df: pd.DataFrame, sheet_name: str, max_rows: int = 200) -> str:
+    """DataFrame을 민감정보 제거 후 텍스트 테이블로 변환"""
+    if df.empty:
+        return f"[{sheet_name}] 데이터 없음 (0건)"
+
+    # 허용된 컬럼만 선택 (있는 것만)
+    safe_cols = _SAFE_COLUMNS.get(sheet_name, [])
+    if safe_cols:
+        available = [c for c in safe_cols if c in df.columns]
+        if not available:
+            # 허용 목록에 없으면 민감 컬럼 제외하고 전부
+            available = [c for c in df.columns if c not in _SENSITIVE_COLUMNS]
+        safe_df = df[available].head(max_rows)
+    else:
+        safe_df = _sanitize_dataframe(df).head(max_rows)
+
+    # 값 마스킹
+    for col in safe_df.columns:
+        safe_df[col] = safe_df[col].astype(str).apply(_sanitize_value)
+
+    # 마크다운 테이블로 변환
+    total = len(df)
+    header = f"[{sheet_name}] 총 {total}건" + (f" (상위 {max_rows}건 표시)" if total > max_rows else "")
+    table = safe_df.to_csv(index=False, sep='|')
+
+    return f"{header}\n{table}"
 
 
-def _build_data_context(categories: List[str], data: Dict,
-                        df_dispatch: pd.DataFrame,
+def _build_full_context(data: Dict, df_dispatch: pd.DataFrame,
                         df_settlement: pd.DataFrame) -> str:
-    """카테고리에 맞는 안전한 데이터 요약 생성 (Gemini에 전달할 부분)"""
+    """모든 ERP 데이터를 안전하게 텍스트로 변환"""
+    parts = []
+    today = datetime.now().strftime('%Y-%m-%d (%A)')
+    parts.append(f"=== Gradius ERP 전체 데이터 ({today}) ===\n")
+
+    # 1) 문의 데이터
     df_inq = data.get('inq', pd.DataFrame())
+    parts.append(_df_to_safe_text(df_inq, 'inq'))
+
+    # 2) 정산 데이터
+    parts.append(_df_to_safe_text(df_settlement, 'settlement'))
+
+    # 3) 배정 데이터
+    parts.append(_df_to_safe_text(df_dispatch, 'dispatch'))
+
+    # 4) 견적 데이터
     df_estimate = data.get('estimate', pd.DataFrame())
-    context_parts = []
-    today = datetime.now().strftime('%Y-%m-%d')
-    context_parts.append(f"[오늘 날짜: {today}]")
+    parts.append(_df_to_safe_text(df_estimate, 'estimate'))
 
-    # --- 기본 현황 (항상 포함) ---
-    context_parts.append(f"[전체 문의 건수: {len(df_inq)}건]")
-    if not df_inq.empty:
-        status_col = None
-        for col in ['상태', '체결']:
-            if col in df_inq.columns:
-                status_col = col
-                break
-        if status_col:
-            counts = df_inq[status_col].astype(str).str.strip().value_counts().to_dict()
-            context_parts.append(f"[상태별 건수: {counts}]")
+    # 5) 인력 데이터
+    df_staff = data.get('staff', pd.DataFrame())
+    parts.append(_df_to_safe_text(df_staff, 'staff'))
 
-    # --- 카테고리별 데이터 수집 ---
-    if "매출" in categories or "비교" in categories:
-        summary = ai.generate_executive_summary(df_inq, df_dispatch, df_settlement)
-        context_parts.append(f"[경영 요약: {summary}]")
-        predictions = ai.predict_monthly_revenue(df_settlement, months_ahead=3)
-        if predictions:
-            pred_text = ", ".join(f"{p['month']}: ₩{p['predicted']:,}({p['confidence']})" for p in predictions)
-            context_parts.append(f"[매출 예측: {pred_text}]")
+    # 6) 지급 데이터
+    df_payment = data.get('payment', pd.DataFrame())
+    if not df_payment.empty:
+        parts.append(_df_to_safe_text(df_payment, 'payment'))
 
-    if "미수금" in categories:
-        if not df_settlement.empty:
-            for col in ['잔액', '미수금액']:
-                if col in df_settlement.columns:
-                    unpaid = pd.to_numeric(df_settlement[col], errors='coerce').fillna(0)
-                    unpaid_rows = df_settlement[unpaid > 0]
-                    if not unpaid_rows.empty:
-                        company_col = None
-                        for c in ['업체', '업체명', '현장명']:
-                            if c in unpaid_rows.columns:
-                                company_col = c
-                                break
-                        if company_col:
-                            details = []
-                            for _, r in unpaid_rows.head(10).iterrows():
-                                details.append(f"{r[company_col]}: ₩{int(unpaid[r.name]):,}")
-                            context_parts.append(f"[미수금 목록: {'; '.join(details)}]")
-                        context_parts.append(f"[총 미수금: ₩{int(unpaid.sum()):,}, {len(unpaid_rows)}건]")
-                    break
+    # 7) AI 분석 결과 보강 (숫자 정확도 위해)
+    supplements = []
+    try:
+        role_stats = ud.get_role_statistics(df_dispatch)
+        if not role_stats.empty:
+            lines = [f"{r['직군']}: {r['배정횟수']}회" +
+                     (f"(₩{int(r['총지급액']):,})" if '총지급액' in r.index and r['총지급액'] > 0 else "")
+                     for _, r in role_stats.iterrows()]
+            supplements.append(f"[직군별 배정 통계 TOP10] {', '.join(lines)}")
+    except Exception:
+        pass
 
-    if "인력" in categories:
-        demand = ai.predict_staff_demand(df_inq, weeks_ahead=4)
-        if demand:
-            demand_text = ", ".join(f"{d['week']}: {d['estimated_staff']}명({d['events']}건)" for d in demand)
-            context_parts.append(f"[인력 수요 예측: {demand_text}]")
-        context_parts.append(f"[배정 건수: {len(df_dispatch)}건]")
-
-        # 직군별 배정 통계 (대시보드에서 쓰는 것과 동일)
-        try:
-            role_stats = ud.get_role_statistics(df_dispatch)
-            if not role_stats.empty:
-                role_lines = []
-                for _, row in role_stats.iterrows():
-                    line = f"{row['직군']}: {row['배정횟수']}회"
-                    if '총지급액' in row.index and row['총지급액'] > 0:
-                        line += f"(₩{int(row['총지급액']):,})"
-                    role_lines.append(line)
-                context_parts.append(f"[직군별 배정 통계(Top10): {', '.join(role_lines)}]")
-        except Exception:
-            pass
-
-        # 현장별 배정 현황
-        if not df_dispatch.empty:
-            for ecol in ['행사명', '현장명']:
-                if ecol in df_dispatch.columns:
-                    event_counts = df_dispatch[ecol].astype(str).str.strip().value_counts().head(5)
-                    if not event_counts.empty:
-                        ev_text = ", ".join(f"{n}: {c}명" for n, c in event_counts.items())
-                        context_parts.append(f"[현장별 배정 현황(Top5): {ev_text}]")
-                    break
-
-    if "고객" in categories:
-        retention = ai.analyze_customer_retention(df_inq)
-        if retention['total_customers'] > 0:
-            context_parts.append(f"[고객 분석: 총 {retention['total_customers']}사, "
-                                 f"재계약률 {retention['retention_rate']}%]")
-            if retention['top_loyal']:
-                loyal_text = ", ".join(f"{c['company']}({c['count']}회)" for c in retention['top_loyal'])
-                context_parts.append(f"[충성 고객: {loyal_text}]")
-            if retention['at_risk']:
-                risk_text = ", ".join(f"{c['company']}({c['days_since']}일전)" for c in retention['at_risk'])
-                context_parts.append(f"[이탈위험 고객: {risk_text}]")
-
-    if "일정" in categories:
-        demand = ai.predict_staff_demand(df_inq, weeks_ahead=2)
-        if demand:
-            for d in demand:
-                context_parts.append(f"[{d['week']} 예정: {d['events']}건, 필요인력 {d['estimated_staff']}명]")
-
-    if "리스크" in categories:
+    try:
         risks = ai.analyze_risks(df_inq, df_dispatch, df_settlement)
         if risks:
             for r in risks:
-                context_parts.append(f"[리스크({r['level']}): {r['type']} - {r['message']} → {r['action']}]")
+                supplements.append(f"[리스크-{r['level']}] {r['type']}: {r['message']} → {r['action']}")
+    except Exception:
+        pass
 
-    if "견적" in categories:
-        price = ai.suggest_estimate_price(df_estimate, num_staff=5, num_days=1)
-        if price['recommended_supply'] > 0:
-            context_parts.append(f"[견적 참고: 5인1일 기준 추천 ₩{price['recommended_supply']:,}, "
-                                 f"범위 ₩{price['min_price']:,}~₩{price['max_price']:,}, "
-                                 f"마진 {price['avg_margin']}%]")
+    try:
+        retention = ai.analyze_customer_retention(df_inq)
+        if retention.get('total_customers', 0) > 0:
+            supplements.append(f"[고객분석] 총 {retention['total_customers']}사, "
+                               f"재계약률 {retention['retention_rate']}%")
+    except Exception:
+        pass
 
-    if "일반" in categories:
-        summary = ai.generate_executive_summary(df_inq, df_dispatch, df_settlement)
-        context_parts.append(f"[경영 요약: {summary}]")
-        risks = ai.analyze_risks(df_inq, df_dispatch, df_settlement)
-        if risks:
-            high = [r for r in risks if r['level'] == '높음']
-            if high:
-                context_parts.append(f"[긴급 리스크: {high[0]['type']} - {high[0]['message']}]")
-        # 일반 질문에도 기본 직군 통계 포함
-        try:
-            role_stats = ud.get_role_statistics(df_dispatch)
-            if not role_stats.empty:
-                role_lines = [f"{row['직군']}: {row['배정횟수']}회" for _, row in role_stats.head(5).iterrows()]
-                context_parts.append(f"[직군별 배정 통계(Top5): {', '.join(role_lines)}]")
-        except Exception:
-            pass
+    if supplements:
+        parts.append("\n=== AI 분석 보강 ===")
+        parts.extend(supplements)
 
-    return "\n".join(context_parts)
+    return "\n\n".join(parts)
 
 
 # ==============================================================================
@@ -263,19 +214,31 @@ def _build_data_context(categories: List[str], data: Dict,
 # ==============================================================================
 
 _SYSTEM_PROMPT = """당신은 "Gradius ERP AI 비서"입니다.
-인력파견 전문 회사 Gradius의 경영 데이터를 기반으로 질문에 답합니다.
+인력파견 전문 회사 Gradius의 **전체 경영 데이터**를 제공받고 있습니다.
 
 핵심 규칙:
-1. 제공된 [데이터]만 사용하여 답변하세요. 데이터에 없는 숫자를 만들어내지 마세요.
+1. 제공된 데이터 테이블에서 직접 수치를 읽어 답변하세요. 데이터에 없는 숫자를 만들어내지 마세요.
 2. 금액은 항상 ₩와 천단위 쉼표를 사용하세요 (예: ₩15,000,000).
 3. 답변은 간결하고 실무적으로 작성하세요.
 4. 경영 판단에 도움이 되는 조언이나 액션 아이템을 포함하세요.
-5. 확실하지 않은 내용은 "데이터 기준으로는 확인이 어렵습니다"라고 솔직히 말하세요.
+5. 확실하지 않으면 "데이터 기준으로는 확인이 어렵습니다"라고 솔직히 말하세요.
+6. 데이터를 나열할 때는 표(마크다운 테이블) 형태로 정리하세요.
+7. 여러 테이블을 조합해서 분석할 수 있습니다 (문의ID 등으로 연결).
 
 비즈니스 컨텍스트:
-- 업종: 인력파견 (행사/이벤트 스태프, 안내, 보안 등)
+- 업종: 인력파견 (행사/이벤트 스태프, 안내, 보안, 주차 등)
 - 워크플로: 문의접수 → 견적 → 계약체결 → 인력배정 → 행사진행 → 정산
 - 상태값: 접수, 견적, 체결, 배정완료, 진행중, 완료, 정산완료 / 미체결, 보류, 취소
+- 정산 시트의 '잔액'이 양수이면 미수금(아직 안 받은 금액)
+
+제공되는 데이터:
+- inq: 문의/계약 전체 목록
+- settlement: 정산 데이터 (매출, 입금, 미수금)
+- dispatch: 인력 배정 상세 (누가 어디로 갔는지)
+- estimate: 견적 데이터
+- staff: 인력 풀
+- payment: 지급 내역
+- AI 분석 보강: 직군별 통계, 리스크, 고객 분석
 """
 
 # ==============================================================================
@@ -284,38 +247,22 @@ _SYSTEM_PROMPT = """당신은 "Gradius ERP AI 비서"입니다.
 
 def ask(question: str, data: Dict, df_dispatch: pd.DataFrame,
         df_settlement: pd.DataFrame, model: str = None) -> str:
-    """사용자 질문 → 데이터 분석 → Gemini 응답
-
-    Args:
-        question: 사용자 질문
-        data: get_data() 반환 딕셔너리
-        df_dispatch: 배정 DataFrame
-        df_settlement: 정산 DataFrame
-        model: 사용할 모델 (기본: gemini-2.5-flash)
-
-    Returns:
-        AI 응답 텍스트
-    """
+    """사용자 질문 → 전체 데이터 컨텍스트 → Gemini 응답"""
     client = _get_client()
     if not client:
         return "⚠️ Gemini API Key가 설정되지 않았습니다. 관리자에게 문의하세요."
 
-    # 1) 질문 분류
-    categories = _classify_question(question)
+    # 전체 데이터를 텍스트로 변환 (키워드 분류 없이 모든 데이터 전달)
+    data_context = _build_full_context(data, df_dispatch, df_settlement)
 
-    # 2) 안전한 데이터 컨텍스트 빌드
-    data_context = _build_data_context(categories, data, df_dispatch, df_settlement)
-
-    # 3) 프롬프트 조합
-    user_prompt = f"""아래는 현재 Gradius ERP 데이터 요약입니다:
+    user_prompt = f"""아래는 현재 Gradius ERP 전체 데이터입니다:
 
 {data_context}
 
 사용자 질문: {question}
 
-위 데이터를 기반으로 답변해주세요."""
+위 데이터를 분석하여 정확하게 답변해주세요. 수치는 데이터에서 직접 계산하세요."""
 
-    # 4) Gemini 호출
     use_model = model or _MODEL_DEFAULT
     try:
         response = client.models.generate_content(
@@ -324,14 +271,13 @@ def ask(question: str, data: Dict, df_dispatch: pd.DataFrame,
             config={
                 "system_instruction": _SYSTEM_PROMPT,
                 "temperature": 0.3,
-                "max_output_tokens": 1024,
+                "max_output_tokens": 2048,
             }
         )
         return response.text
     except Exception as e:
         error_msg = str(e)
         if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
-            # lite 모델로 폴백
             if use_model != _MODEL_LITE:
                 try:
                     response = client.models.generate_content(
@@ -340,7 +286,7 @@ def ask(question: str, data: Dict, df_dispatch: pd.DataFrame,
                         config={
                             "system_instruction": _SYSTEM_PROMPT,
                             "temperature": 0.3,
-                            "max_output_tokens": 1024,
+                            "max_output_tokens": 2048,
                         }
                     )
                     return response.text
@@ -357,11 +303,9 @@ def generate_briefing(data: Dict, df_dispatch: pd.DataFrame,
     if not client:
         return None
 
-    # 모든 카테고리 데이터 수집
-    all_categories = ["매출", "미수금", "인력", "리스크", "일정"]
-    data_context = _build_data_context(all_categories, data, df_dispatch, df_settlement)
+    data_context = _build_full_context(data, df_dispatch, df_settlement)
 
-    prompt = f"""아래는 오늘의 Gradius ERP 데이터 요약입니다:
+    prompt = f"""아래는 오늘의 Gradius ERP 전체 데이터입니다:
 
 {data_context}
 
@@ -369,7 +313,7 @@ def generate_briefing(data: Dict, df_dispatch: pd.DataFrame,
 포맷:
 1. 핵심 요약 (2~3문장)
 2. 주요 지표 (금액, 건수 중심)
-3. 주의 필요 사항
+3. 주의 필요 사항 (미수금, 리스크 등)
 4. 오늘의 추천 액션 (구체적으로 2~3개)
 
 친근하지만 전문적인 톤으로, 한국어로 작성하세요."""
@@ -381,7 +325,7 @@ def generate_briefing(data: Dict, df_dispatch: pd.DataFrame,
             config={
                 "system_instruction": _SYSTEM_PROMPT,
                 "temperature": 0.4,
-                "max_output_tokens": 1500,
+                "max_output_tokens": 2048,
             }
         )
         return response.text
@@ -393,7 +337,7 @@ def generate_briefing(data: Dict, df_dispatch: pd.DataFrame,
                 config={
                     "system_instruction": _SYSTEM_PROMPT,
                     "temperature": 0.4,
-                    "max_output_tokens": 1500,
+                    "max_output_tokens": 2048,
                 }
             )
             return response.text
