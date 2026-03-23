@@ -14,6 +14,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 import ai_helper as ai
+import utils_dashboard as ud
 
 # ==============================================================================
 # 1. 민감정보 마스킹
@@ -97,14 +98,20 @@ def is_available() -> bool:
 # ==============================================================================
 
 _QUESTION_CATEGORIES = {
-    "매출": ["매출", "수익", "이익", "공급가", "청구", "정산", "수금", "금액", "돈", "입금"],
-    "미수금": ["미수", "잔액", "미입금", "안 들어온", "안들어온", "독촉"],
-    "인력": ["인력", "인원", "배정", "스태프", "직원", "부족", "필요"],
-    "고객": ["업체", "고객", "거래", "이탈", "재계약", "충성"],
-    "일정": ["일정", "현장", "행사", "D-day", "디데이", "이번 주", "다음 주", "임박"],
-    "리스크": ["리스크", "위험", "경고", "주의", "긴급"],
-    "견적": ["견적", "단가", "추천가", "적정가"],
-    "비교": ["비교", "대비", "추이", "변화", "증감", "지난달", "전월", "전년"],
+    "매출": ["매출", "수익", "이익", "공급가", "청구", "정산", "수금", "금액", "돈", "입금",
+            "얼마", "매출액", "수입", "실적"],
+    "미수금": ["미수", "잔액", "미입금", "안 들어온", "안들어온", "독촉", "미지급", "안받은"],
+    "인력": ["인력", "인원", "배정", "스태프", "직원", "부족", "필요",
+            "직무", "역할", "직군", "직급", "나간", "나갔", "투입", "파견",
+            "주차", "안내", "보안", "진행", "기술", "요원", "도우미",
+            "몇 번", "몇번", "많이", "가장", "순위", "통계"],
+    "고객": ["업체", "고객", "거래", "이탈", "재계약", "충성", "거래처", "회사"],
+    "일정": ["일정", "현장", "행사", "D-day", "디데이", "이번 주", "다음 주", "임박",
+            "이번주", "다음주", "예정", "스케줄", "언제"],
+    "리스크": ["리스크", "위험", "경고", "주의", "긴급", "문제", "이슈"],
+    "견적": ["견적", "단가", "추천가", "적정가", "가격", "비용"],
+    "비교": ["비교", "대비", "추이", "변화", "증감", "지난달", "전월", "전년",
+            "작년", "올해", "vs"],
 }
 
 
@@ -176,6 +183,30 @@ def _build_data_context(categories: List[str], data: Dict,
             context_parts.append(f"[인력 수요 예측: {demand_text}]")
         context_parts.append(f"[배정 건수: {len(df_dispatch)}건]")
 
+        # 직군별 배정 통계 (대시보드에서 쓰는 것과 동일)
+        try:
+            role_stats = ud.get_role_statistics(df_dispatch)
+            if not role_stats.empty:
+                role_lines = []
+                for _, row in role_stats.iterrows():
+                    line = f"{row['직군']}: {row['배정횟수']}회"
+                    if '총지급액' in row.index and row['총지급액'] > 0:
+                        line += f"(₩{int(row['총지급액']):,})"
+                    role_lines.append(line)
+                context_parts.append(f"[직군별 배정 통계(Top10): {', '.join(role_lines)}]")
+        except Exception:
+            pass
+
+        # 현장별 배정 현황
+        if not df_dispatch.empty:
+            for ecol in ['행사명', '현장명']:
+                if ecol in df_dispatch.columns:
+                    event_counts = df_dispatch[ecol].astype(str).str.strip().value_counts().head(5)
+                    if not event_counts.empty:
+                        ev_text = ", ".join(f"{n}: {c}명" for n, c in event_counts.items())
+                        context_parts.append(f"[현장별 배정 현황(Top5): {ev_text}]")
+                    break
+
     if "고객" in categories:
         retention = ai.analyze_customer_retention(df_inq)
         if retention['total_customers'] > 0:
@@ -215,6 +246,14 @@ def _build_data_context(categories: List[str], data: Dict,
             high = [r for r in risks if r['level'] == '높음']
             if high:
                 context_parts.append(f"[긴급 리스크: {high[0]['type']} - {high[0]['message']}]")
+        # 일반 질문에도 기본 직군 통계 포함
+        try:
+            role_stats = ud.get_role_statistics(df_dispatch)
+            if not role_stats.empty:
+                role_lines = [f"{row['직군']}: {row['배정횟수']}회" for _, row in role_stats.head(5).iterrows()]
+                context_parts.append(f"[직군별 배정 통계(Top5): {', '.join(role_lines)}]")
+        except Exception:
+            pass
 
     return "\n".join(context_parts)
 
