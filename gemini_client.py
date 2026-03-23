@@ -60,9 +60,17 @@ _MODEL_LITE = "gemini-2.5-flash-lite"
 def _get_api_key() -> Optional[str]:
     """secrets.toml 또는 st.secrets에서 API key 로드"""
     try:
-        # st.secrets는 AttrDict — .get()보다 직접 접근이 안전
+        # 최상위 레벨
         if "GEMINI_API_KEY" in st.secrets:
             return st.secrets["GEMINI_API_KEY"]
+    except Exception:
+        pass
+    try:
+        # [gcp_service_account] 섹션 아래에 넣은 경우
+        if hasattr(st.secrets, 'gcp_service_account'):
+            sa = st.secrets["gcp_service_account"]
+            if "GEMINI_API_KEY" in sa:
+                return sa["GEMINI_API_KEY"]
     except Exception:
         pass
     return None
