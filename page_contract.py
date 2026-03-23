@@ -282,6 +282,7 @@ def show(data):
         email = ""
         biz_contact = ""
         biz_content = ""
+        biz_address = ""
         biz_invoice_note = ""
     else:
         with col_form:
@@ -302,6 +303,9 @@ def show(data):
             default_contact = _safe_str(selected_project, '연락처')
             biz_contact = c5.text_input("연락처", value=default_contact, placeholder="010-0000-0000", key="biz_contact_input")
             biz_content = c6.text_input("내용(품목)", value=_safe_str(selected_project, '행사명'), placeholder="인력파견 등", key="biz_content_input")
+
+            default_address = st.session_state.get('_prev_biz_address', str(match_est.get('사업장주소', '')) if not match_est.empty else '')
+            biz_address = st.text_input("사업장주소", value=default_address, placeholder="서울시 강남구 역삼로 000", key="biz_address_input")
 
             biz_invoice_note = st.text_area("발행관련 요청사항", placeholder="계산서 발행일 지정, 분할 발행 등 요청사항을 입력하세요", key="invoice_note_input", height=80)
 
@@ -359,6 +363,7 @@ def show(data):
                     "이메일": email,
                     "연락처": biz_contact if not skip_biz else '',
                     "내용(품목)": biz_content if not skip_biz else _safe_str(selected_project, '행사명'),
+                    "사업장주소": biz_address if not skip_biz else '',
                     "발행요청사항": biz_invoice_note if not skip_biz else '',
                     "계약일": pd.Timestamp.now().strftime("%Y-%m-%d"),
                     "공급가액": safe_int(match_est.get('공급가액', 0)),
@@ -403,6 +408,7 @@ def show(data):
                                     '대표자명': biz_ceo,
                                     '세금계산서이메일': email,
                                     '담당자연락처': biz_contact,
+                                    '사업자주소': biz_address,
                                 }
                                 for _hdr, _val in _cust_map.items():
                                     if _hdr in _cust_headers and _val:
