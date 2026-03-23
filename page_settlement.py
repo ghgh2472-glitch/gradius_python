@@ -910,6 +910,7 @@ def show_settlement_detail(data):
         _card_rows = [_filtered_targets.iloc[i:i+_cols_per_row] for i in range(0, len(_filtered_targets), _cols_per_row)]
 
         _card_container = st.container(height=320) if _cnt_total > 8 else st.container()
+        _card_global_idx = 0
         with _card_container:
             for _cr in _card_rows:
                 _cols = st.columns(_cols_per_row)
@@ -963,10 +964,11 @@ def show_settlement_detail(data):
                             {'<div class="card-amount ' + _amt_cls + '">' + _amt_html + '</div>' if _amt_html else ''}
                         </div>
                         """, unsafe_allow_html=True)
-                        if st.button("선택", key=f"_settle_sel_{_ci}_{t_label[:20]}", use_container_width=True):
+                        if st.button("선택", key=f"_settle_sel_{_card_global_idx}_{t_label[:20]}", use_container_width=True):
                             st.session_state['_card_settle_selected'] = t_label
                             st.session_state['_settle_selected'] = t_label
                             st.rerun()
+                        _card_global_idx += 1
 
     # 기본 선택
     if '_settle_selected' not in st.session_state or st.session_state['_settle_selected'] not in targets['label'].values:
