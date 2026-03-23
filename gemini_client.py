@@ -3,7 +3,7 @@
 Gradius ERP AI 비서를 위한 Gemini API 클라이언트.
 핵심 원칙:
   1. 실제 데이터 테이블을 Gemini에 직접 전달 → 어떤 질문이든 답변 가능
-  2. 민감정보(주민번호, 계좌, 연락처) 자동 제거 후 전달
+  2. 민감정보(주민번호, 계좌) 자동 제거 후 전달 / 업체 연락처는 허용
   3. Gemini 100만 토큰 컨텍스트 활용 — 전체 ERP 데이터가 ~1% 미만
 """
 
@@ -46,20 +46,18 @@ def _safe_response_text(response) -> str:
 # ==============================================================================
 
 _SENSITIVE_COLUMNS = {
-    '주민등록번호', '주민번호', '계좌번호', '연락처', '전화번호', '휴대폰',
-    '이메일', '사업자등록증URL', '사업자등록증', '비밀번호', '암호',
-    '은행명', '계좌', '주소',
+    '주민등록번호', '주민번호', '계좌번호',
+    '사업자등록증URL', '사업자등록증', '비밀번호', '암호',
+    '은행명', '계좌',
 }
 
 def _sanitize_value(val: str) -> str:
-    """주민번호/전화번호/계좌번호 패턴 마스킹"""
+    """주민번호/계좌번호 패턴 마스킹 (전화번호는 허용)"""
     s = str(val)
     # 주민번호 패턴 (000000-0000000)
     s = re.sub(r'\d{6}-\d{7}', '******-*******', s)
-    # 전화번호 패턴
-    s = re.sub(r'01[016789]-?\d{3,4}-?\d{4}', '010-****-****', s)
-    # 계좌번호 (10~16자리 연속 숫자)
-    s = re.sub(r'\d{10,16}', '**********', s)
+    # 계좌번호 (10~16자리 연속 숫자, 전화번호 형태 제외)
+    s = re.sub(r'(?<!\d)\d{10,16}(?!\d)', '**********', s)
     return s
 
 
@@ -126,7 +124,9 @@ def is_available() -> bool:
 _SAFE_COLUMNS = {
     'inq': ['문의ID', '업체명', '행사명', '행사시작일', '행사종료일', '상태', '체결',
             '필요인력', '장소', '현장주소', '특이사항', '작성일', '담당자',
-            '행사유형', '복장', '식사', '주차'],
+            '연락처', '행사유형', '복장', '식사', '주차'],
+    'customer': ['업체명', '대표자명', '업태', '종목', '사업자주소',
+                 '담당계산서이메일', '담당자', '담당자연락처', '메모'],
     'settlement': ['문의ID', '현장명', '업체', '파견일자', '책임자', '현장주소',
                    '청구금액', '공급가액', '부가세', '받은금액', '잔액',
                    '진행상황', '입금여부', '세금계산서 발행여부',
@@ -136,9 +136,41 @@ _SAFE_COLUMNS = {
                  '팀코드', '결제대상'],
     'estimate': ['문의ID', '업체명', '행사명', '공급가액', '부가세', '합계금액',
                  '매입원가', '예상수익', '필요인력', '상태'],
-    'staff': ['이름', '직무', '경력', '평점', '가용상태', '선호지역', '메모'],
+    'staff': ['이름', '직무', '경력', '평점', '가용상태', '선호지역',
+              '연락처', '메모'],
     'payment': ['문의ID', '인력명', '직무', '지급액', '지급상태', '지급일'],
 }
+
+
+def _add_date_context(df: pd.DataFrame, date_col: str) -> pd.DataFrame:
+    """날짜 컨텍스트 추가: D-Day 라벨로 시간 맥락 부여"""
+    if date_col not in df.columns:
+        return df
+    df = df.copy()
+    today = pd.Timestamp.now().normalize()
+    try:
+        dates = pd.to_datetime(df[date_col], errors='coerce')
+        ddays = (dates - today).dt.days
+        labels = []
+        for d in ddays:
+            if pd.isna(d):
+                labels.append('')
+            elif d < -7:
+                labels.append(f'완료({abs(int(d))}일전)')
+            elif d < 0:
+                labels.append(f'지남(D+{abs(int(d))})')
+            elif d == 0:
+                labels.append('★오늘')
+            elif d <= 7:
+                labels.append(f'이번주(D-{int(d)})')
+            elif d <= 14:
+                labels.append(f'다음주(D-{int(d)})')
+            else:
+                labels.append(f'예정(D-{int(d)})')
+        df['일정상태'] = labels
+    except Exception:
+        pass
+    return df
 
 
 def _df_to_safe_text(df: pd.DataFrame, sheet_name: str, max_rows: int = 200) -> str:
@@ -146,12 +178,19 @@ def _df_to_safe_text(df: pd.DataFrame, sheet_name: str, max_rows: int = 200) -> 
     if df.empty:
         return f"[{sheet_name}] 데이터 없음 (0건)"
 
-    # 허용된 컬럼만 선택 (있는 것만)
+    # 날짜 컨텍스트 추가 (D-Day 라벨)
+    _date_col_map = {'inq': '행사시작일', 'dispatch': '파견일자', 'settlement': '파견일자'}
+    if sheet_name in _date_col_map:
+        df = _add_date_context(df, _date_col_map[sheet_name])
+
+    # 허용된 컨럼만 선택 (있는 것만)
     safe_cols = _SAFE_COLUMNS.get(sheet_name, [])
+    # 자동 추가된 '일정상태' 컨럼도 포함
+    if '일정상태' in df.columns and '일정상태' not in safe_cols:
+        safe_cols = list(safe_cols) + ['일정상태']
     if safe_cols:
         available = [c for c in safe_cols if c in df.columns]
         if not available:
-            # 허용 목록에 없으면 민감 컬럼 제외하고 전부
             available = [c for c in df.columns if c not in _SENSITIVE_COLUMNS]
         safe_df = df[available].head(max_rows)
     else:
@@ -181,7 +220,12 @@ def _build_full_context(data: Dict, df_dispatch: pd.DataFrame,
     df_inq = data.get('inq', pd.DataFrame())
     parts.append(_df_to_safe_text(df_inq, 'inq'))
 
-    # 2) 정산 데이터
+    # 2) 고객 데이터 (업체 연락처 포함)
+    df_customer = data.get('client', pd.DataFrame())
+    if not df_customer.empty:
+        parts.append(_df_to_safe_text(df_customer, 'customer'))
+
+    # 3) 정산 데이터
     parts.append(_df_to_safe_text(df_settlement, 'settlement'))
 
     # 3) 배정 데이터
@@ -251,6 +295,14 @@ _SYSTEM_PROMPT = """당신은 "Gradius ERP AI 비서"입니다.
 6. 데이터를 나열할 때는 표(마크다운 테이블) 형태로 정리하세요.
 7. 여러 테이블을 조합해서 분석할 수 있습니다 (문의ID 등으로 연결).
 
+★★★ 날짜/시간 규칙 (매우 중요) ★★★
+- 각 데이터에 '일정상태' 컬럼이 있습니다. 이것으로 과거/현재/미래를 판단하세요.
+- '★오늘' = 오늘 행사, '이번주(D-N)' = 이번 주 남은 행사, '다음주(D-N)' = 다음 주 행사
+- '지남(D+N)' = 이미 지난 행사 (최근 1주 이내), '완료(N일전)' = 오래 전 끝난 행사
+- '이번 주 할 일'을 물으면 일정상태가 '★오늘' 또는 '이번주'인 것만 답하세요.
+- '지남' 또는 '완료'인 행사는 과거 행사이므로, 미래 일정 질문에 절대 포함하지 마세요.
+- 영업 대상 = 상태가 '접수'/'견적'이면서 아직 '체결'이 아닌 건
+
 비즈니스 컨텍스트:
 - 업종: 인력파견 (행사/이벤트 스태프, 안내, 보안, 주차 등)
 - 워크플로: 문의접수 → 견적 → 계약체결 → 인력배정 → 행사진행 → 정산
@@ -258,11 +310,12 @@ _SYSTEM_PROMPT = """당신은 "Gradius ERP AI 비서"입니다.
 - 정산 시트의 '잔액'이 양수이면 미수금(아직 안 받은 금액)
 
 제공되는 데이터:
-- inq: 문의/계약 전체 목록
+- inq: 문의/계약 전체 목록 (담당자 연락처 포함)
+- customer: 고객/업체 정보 (담당자연락처 포함)
 - settlement: 정산 데이터 (매출, 입금, 미수금)
 - dispatch: 인력 배정 상세 (누가 어디로 갔는지)
 - estimate: 견적 데이터
-- staff: 인력 풀
+- staff: 인력 풀 (연락처 포함)
 - payment: 지급 내역
 - AI 분석 보강: 직군별 통계, 리스크, 고객 분석
 """
