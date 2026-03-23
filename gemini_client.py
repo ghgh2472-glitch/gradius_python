@@ -16,6 +16,31 @@ from typing import Dict, List, Optional
 import ai_helper as ai
 import utils_dashboard as ud
 
+
+def _safe_response_text(response) -> str:
+    """Gemini 응답에서 텍스트를 안전하게 추출 (불완전 응답도 처리)"""
+    # 1) .text 속성이 정상 작동하면 바로 반환
+    try:
+        text = response.text
+        if text:
+            return text
+    except Exception:
+        pass
+
+    # 2) candidates에서 직접 추출 (finish_reason이 STOP이 아닌 경우)
+    try:
+        for candidate in response.candidates:
+            parts_text = []
+            for part in candidate.content.parts:
+                if hasattr(part, 'text') and part.text:
+                    parts_text.append(part.text)
+            if parts_text:
+                return "\n".join(parts_text)
+    except Exception:
+        pass
+
+    return "⚠️ AI 응답을 받지 못했습니다. 잠시 후 다시 시도해주세요."
+
 # ==============================================================================
 # 1. 민감정보 마스킹
 # ==============================================================================
@@ -132,7 +157,8 @@ def _df_to_safe_text(df: pd.DataFrame, sheet_name: str, max_rows: int = 200) -> 
     else:
         safe_df = _sanitize_dataframe(df).head(max_rows)
 
-    # 값 마스킹
+    # 값 마스킹 (원본 보호를 위해 copy)
+    safe_df = safe_df.copy()
     for col in safe_df.columns:
         safe_df[col] = safe_df[col].astype(str).apply(_sanitize_value)
 
@@ -271,10 +297,10 @@ def ask(question: str, data: Dict, df_dispatch: pd.DataFrame,
             config={
                 "system_instruction": _SYSTEM_PROMPT,
                 "temperature": 0.3,
-                "max_output_tokens": 2048,
+                "max_output_tokens": 8192,
             }
         )
-        return response.text
+        return _safe_response_text(response)
     except Exception as e:
         error_msg = str(e)
         if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
@@ -286,10 +312,10 @@ def ask(question: str, data: Dict, df_dispatch: pd.DataFrame,
                         config={
                             "system_instruction": _SYSTEM_PROMPT,
                             "temperature": 0.3,
-                            "max_output_tokens": 2048,
+                            "max_output_tokens": 8192,
                         }
                     )
-                    return response.text
+                    return _safe_response_text(response)
                 except Exception:
                     pass
             return "⚠️ API 호출 한도에 도달했습니다. 잠시 후 다시 시도해주세요."
@@ -325,10 +351,10 @@ def generate_briefing(data: Dict, df_dispatch: pd.DataFrame,
             config={
                 "system_instruction": _SYSTEM_PROMPT,
                 "temperature": 0.4,
-                "max_output_tokens": 2048,
+                "max_output_tokens": 8192,
             }
         )
-        return response.text
+        return _safe_response_text(response)
     except Exception:
         try:
             response = client.models.generate_content(
@@ -337,9 +363,9 @@ def generate_briefing(data: Dict, df_dispatch: pd.DataFrame,
                 config={
                     "system_instruction": _SYSTEM_PROMPT,
                     "temperature": 0.4,
-                    "max_output_tokens": 2048,
+                    "max_output_tokens": 8192,
                 }
             )
-            return response.text
+            return _safe_response_text(response)
         except Exception:
             return None
