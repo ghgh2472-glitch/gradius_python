@@ -1,6 +1,7 @@
 # utils.py
 import re
 from datetime import datetime, timedelta
+from helpers import now_kst
 import base64
 import pandas as pd
 
@@ -186,7 +187,7 @@ def get_internal_report_html(df, client_name, t_sales, t_cost, n1, n2, n3, n4):
     t_sales = safe_int(t_sales); t_cost = safe_int(t_cost)
     profit = t_sales - t_cost
     margin = (profit / t_sales * 100) if t_sales > 0 else 0
-    today = datetime.now().strftime('%Y-%m-%d')
+    today = now_kst().strftime('%Y-%m-%d')
     
     rows = ""
     for _, r in df.iterrows():

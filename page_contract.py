@@ -6,6 +6,7 @@ import data_loader as db
 import status_config as sc
 import time
 import base64
+from helpers import now_kst
 import io
 try:
     from PIL import Image
@@ -365,7 +366,7 @@ def show(data):
                     "내용(품목)": biz_content if not skip_biz else _safe_str(selected_project, '행사명'),
                     "사업장주소": biz_address if not skip_biz else '',
                     "발행요청사항": biz_invoice_note if not skip_biz else '',
-                    "계약일": pd.Timestamp.now().strftime("%Y-%m-%d"),
+                    "계약일": now_kst().strftime("%Y-%m-%d"),
                     "공급가액": safe_int(match_est.get('공급가액', 0)),
                     "부가세": safe_int(match_est.get('부가세', 0)),
                     "합계금액": safe_int(match_est.get('합계금액', 0)),

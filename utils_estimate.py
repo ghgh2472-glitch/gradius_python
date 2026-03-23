@@ -2,6 +2,7 @@
 import pandas as pd
 import re
 from datetime import datetime, timedelta, time
+from helpers import now_kst
 
 # ==============================================================================
 # 1. EstimateBrain (기존 유지)
@@ -97,10 +98,10 @@ def smart_parse_date(date_str):
     - 다중 기간인 경우: 첫 시작일, 마지막 종료일, 합산 일수
     """
     txt = str(date_str).strip()
-    now = datetime.now().date()
+    now = now_kst().date()
     if not txt: return (now, now, 1)
     
-    y = datetime.now().year
+    y = now_kst().year
     def to_d(s):
         s = s.strip().replace('.', '-').replace('/', '-')
         if not s: return None
@@ -152,10 +153,10 @@ def smart_parse_dates_multi(date_str):
     반환: [(시작일1, 종료일1, 일수1), (시작일2, 종료일2, 일수2), ...]
     """
     txt = str(date_str).strip()
-    now = datetime.now().date()
+    now = now_kst().date()
     if not txt: return [(now, now, 1)]
     
-    y = datetime.now().year
+    y = now_kst().year
     def to_d(s):
         s = s.strip().replace('.', '-').replace('/', '-')
         if not s: return None

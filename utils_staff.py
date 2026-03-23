@@ -2,6 +2,7 @@
 import re
 import pandas as pd
 from datetime import datetime
+from helpers import now_kst
 
 def get_staff_price_level(recommendation):
     """
@@ -73,7 +74,7 @@ class StaffBrain:
             data[f'{c}_num'] = data[c].apply(parse_num)
             
         # 6. 스마트 나이 계산
-        current_year = datetime.now().year
+        current_year = now_kst().year
         def calculate_age_info(val):
             try:
                 n = parse_num(val)

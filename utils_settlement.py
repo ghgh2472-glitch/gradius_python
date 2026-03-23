@@ -2,6 +2,7 @@
 import pandas as pd
 import re
 from datetime import datetime
+from helpers import now_kst
 
 class SettlementBrain:
     def __init__(self, df_inq):
@@ -117,7 +118,7 @@ class SettlementBrain:
         거래명세서 HTML — items가 있으면 품목별 상세 표시
         items: list of dict [{'품목명': ..., '수량': ..., '단가': ..., '금액': ...}, ...]
         """
-        now = datetime.now().strftime("%Y-%m-%d")
+        now = now_kst().strftime("%Y-%m-%d")
         amount = int(amount) if amount else 0
         amount_vat = int(amount * 1.1)
         vat = amount_vat - amount

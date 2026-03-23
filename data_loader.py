@@ -8,7 +8,7 @@ import os
 from datetime import datetime
 from uuid import uuid4
 from utils import safe_int
-from helpers import get_logger
+from helpers import get_logger, now_kst
 
 logger = get_logger(__name__)
 
@@ -362,7 +362,7 @@ def get_data():
                 "roles": pd.DataFrame(), "factors": pd.DataFrame(), "guides": pd.DataFrame(),
                 "estimate": pd.DataFrame(), "dispatch": pd.DataFrame(), "settlement": pd.DataFrame(),
             }
-        st.session_state['_data_loaded_at'] = datetime.now().strftime("%H:%M:%S")
+        st.session_state['_data_loaded_at'] = now_kst().strftime("%H:%M:%S")
         print(f"[SESSION] Main data loaded at {st.session_state['_data_loaded_at']}")
     return st.session_state['_app_data']
 
@@ -741,7 +741,7 @@ def update_estimate_send_status(inquiry_id: str, send_method: str, send_memo: st
 
         # 4개 컬럼 일괄 업데이트
         from gspread.cell import Cell
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+        now_str = now_kst().strftime("%Y-%m-%d %H:%M")
         cells = [
             Cell(row=target_row, col=headers_clean.index("발송여부") + 1, value="발송완료"),
             Cell(row=target_row, col=headers_clean.index("발송일시") + 1, value=now_str),
@@ -980,9 +980,9 @@ def save_estimate_details(est_data, metadata=None):
                 # 기존 행이면 기존 견적ID 유지, 새 행이면 생성
                 if target_id in id_col_clean:
                     existing_row = wks.row_values(target_row)
-                    row_data[col_idx] = existing_row[0] if existing_row else f"EST-{datetime.now().strftime('%y%m%d')}-{str(uuid4())[:6]}"
+                    row_data[col_idx] = existing_row[0] if existing_row else f"EST-{now_kst().strftime('%y%m%d')}-{str(uuid4())[:6]}"
                 else:
-                    row_data[col_idx] = f"EST-{datetime.now().strftime('%y%m%d')}-{str(uuid4())[:6]}"
+                    row_data[col_idx] = f"EST-{now_kst().strftime('%y%m%d')}-{str(uuid4())[:6]}"
             elif header == "문의ID":
                 row_data[col_idx] = target_id
             elif header == "업체명":
@@ -1033,7 +1033,7 @@ def save_estimate_details(est_data, metadata=None):
             elif header == "부대비용":
                 row_data[col_idx] = int(est_data.get('부대비용', 0))
             elif header == "기록일시":
-                row_data[col_idx] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                row_data[col_idx] = now_kst().strftime("%Y-%m-%d %H:%M:%S")
             elif header in ["메모", "비고", "Notes", "Meta"]:
                 row_data[col_idx] = metadata_json
             elif header.startswith("발송"):
@@ -1385,9 +1385,9 @@ def save_candidates_batch(inquiry_id: str, event_name: str, candidates: list):
         
         # 배치 데이터 준비 (헤더 순서에 맞춰 배치)
         batch_rows = []
-        now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        now_str = now_kst().strftime('%Y-%m-%d %H:%M:%S')
         for c in candidates:
-            assign_id = f"A-{datetime.now().strftime('%y%m%d')}-{str(uuid4())[:6]}"
+            assign_id = f"A-{now_kst().strftime('%y%m%d')}-{str(uuid4())[:6]}"
             staff_name = str(c.get('인력명', '')).strip()
             staff_info = _lookup_staff_info(staff_name) if staff_name else None
             
@@ -1780,7 +1780,7 @@ def save_assignment_record(assignment):
         wks = sh.worksheet("배정기록")
 
         # 배정ID 생성
-        assign_id = f"A-{datetime.now().strftime('%y%m%d')}-{str(uuid4())[:6]}"
+        assign_id = f"A-{now_kst().strftime('%y%m%d')}-{str(uuid4())[:6]}"
 
         # STAFF에서 직원 정보 조회 (Auto-fill)
         staff_name = assignment.get('이름', '').strip()
@@ -1855,7 +1855,7 @@ def save_assignment_record(assignment):
             merged_assignment.get('근무일수', ''),  # Col 12: 근무일수
             merged_assignment.get('총지급액', ''),  # Col 13: 총지급액
             merged_assignment.get('지급상태', '배정중'),  # Col 14: 지급상태
-            merged_assignment.get('배정일시', datetime.now().strftime('%Y-%m-%d %H:%M:%S')),  # Col 15: 배정일시
+            merged_assignment.get('배정일시', now_kst().strftime('%Y-%m-%d %H:%M:%S')),  # Col 15: 배정일시
             merged_assignment.get('근무일자', ''),  # Col 16: 근무일자
         ]
 
@@ -2001,7 +2001,7 @@ def batch_save_attendance(records: list):
             att_date = str(rec.get('출석날짜', '')).strip()
             key = (bid, att_date)
             
-            record_id = f"R-{datetime.now().strftime('%y%m%d')}-{str(uuid4())[:6]}"
+            record_id = f"R-{now_kst().strftime('%y%m%d')}-{str(uuid4())[:6]}"
             row_values = [
                 record_id,
                 rec.get('배정ID', ''),
@@ -2015,7 +2015,7 @@ def batch_save_attendance(records: list):
                 rec.get('출석상태', ''),
                 rec.get('사유', ''),
                 rec.get('비고', ''),
-                rec.get('기록일시', datetime.now().strftime('%Y-%m-%d %H:%M:%S')),
+                rec.get('기록일시', now_kst().strftime('%Y-%m-%d %H:%M:%S')),
             ]
             
             if key in existing_map:
@@ -2374,7 +2374,7 @@ def save_attendance_record(attendance_dict):
         # Col 12: 비고
         # Col 13: 기록일시
         
-        record_id = f"R-{datetime.now().strftime('%y%m%d')}-{str(uuid4())[:6]}"
+        record_id = f"R-{now_kst().strftime('%y%m%d')}-{str(uuid4())[:6]}"
         
         row_values = [
             record_id,  # Col 1: 기록ID
@@ -2389,7 +2389,7 @@ def save_attendance_record(attendance_dict):
             attendance_dict.get('출석상태', ''),  # Col 10: 출석상태
             attendance_dict.get('사유', ''),  # Col 11: 사유
             attendance_dict.get('비고', ''),  # Col 12: 비고
-            attendance_dict.get('기록일시', datetime.now().strftime('%Y-%m-%d %H:%M:%S')),  # Col 13: 기록일시
+            attendance_dict.get('기록일시', now_kst().strftime('%Y-%m-%d %H:%M:%S')),  # Col 13: 기록일시
         ]
         
         wks.update(f'A{next_row}', [row_values], value_input_option='RAW')
@@ -2471,9 +2471,9 @@ def save_estimate_version(inquiry_id: str, version_name: str, items_df, metadata
         # 메타데이터 JSON
         meta_json = json.dumps(metadata, ensure_ascii=False, default=str) if metadata else ''
         
-        ver_id = f"V-{datetime.now().strftime('%y%m%d')}-{str(uuid4())[:4]}"
+        ver_id = f"V-{now_kst().strftime('%y%m%d')}-{str(uuid4())[:4]}"
         new_row = [ver_id, str(inquiry_id), version_name, json_str, supply, cost, 
-                   datetime.now().strftime("%Y-%m-%d %H:%M"), len(items_list), meta_json]
+                   now_kst().strftime("%Y-%m-%d %H:%M"), len(items_list), meta_json]
         
         rows_to_keep.append(new_row)
         wks.clear()
@@ -2603,7 +2603,7 @@ def save_estimate_items(inquiry_id: str, items_df, additional_costs_df=None):
         batch_rows = []
         # ── 인력 품목 ──
         for idx, item in items_df.iterrows():
-            item_id = f"I-{datetime.now().strftime('%y%m%d')}-{str(uuid4())[:4]}"
+            item_id = f"I-{now_kst().strftime('%y%m%d')}-{str(uuid4())[:4]}"
             role_name = str(item.get('품목', '')).replace('[팀장]', '').strip()
             # NaN 안전 변환
             row = [
@@ -2625,7 +2625,7 @@ def save_estimate_items(inquiry_id: str, items_df, additional_costs_df=None):
         # ── 부대비용 품목 ──
         if additional_costs_df is not None and not additional_costs_df.empty:
             for _, ac in additional_costs_df.iterrows():
-                ac_id = f"A-{datetime.now().strftime('%y%m%d')}-{str(uuid4())[:4]}"
+                ac_id = f"A-{now_kst().strftime('%y%m%d')}-{str(uuid4())[:4]}"
                 row = [
                     ac_id,
                     str(inquiry_id),
@@ -2736,7 +2736,7 @@ def save_evaluation(eval_dict: dict):
         sh = client.open_by_key(SHEET_ID)
         wks = sh.worksheet("평가표")
         
-        eval_id = f"E-{datetime.now().strftime('%y%m%d')}-{str(uuid4())[:6]}"
+        eval_id = f"E-{now_kst().strftime('%y%m%d')}-{str(uuid4())[:6]}"
         
         # 기존 평가 중복 체크 (배정ID 기준)
         all_vals = wks.get_all_values()
@@ -2771,7 +2771,7 @@ def save_evaluation(eval_dict: dict):
             eval_dict.get('총점', 0),
             eval_dict.get('평가등급', 'C'),
             eval_dict.get('평가자', ''),
-            eval_dict.get('평가일시', datetime.now().strftime('%Y-%m-%d %H:%M:%S')),
+            eval_dict.get('평가일시', now_kst().strftime('%Y-%m-%d %H:%M:%S')),
             eval_dict.get('강점', eval_dict.get('총평', '')),  # 강점 (구버전 호환: 총평)
             eval_dict.get('개선점', ''),
             eval_dict.get('재추천', 'No'),
@@ -2800,7 +2800,7 @@ def save_payment_record(payment_dict: dict):
         sh = client.open_by_key(SHEET_ID)
         wks = sh.worksheet("지급내역")
         
-        pay_id = f"P-{datetime.now().strftime('%y%m%d')}-{str(uuid4())[:6]}"
+        pay_id = f"P-{now_kst().strftime('%y%m%d')}-{str(uuid4())[:6]}"
         
         # 기존 지급 중복 체크 (배정ID 기준)
         all_vals = wks.get_all_values()
@@ -3005,7 +3005,7 @@ def batch_save_payment_records(records: list) -> dict:
                     failed += 1
                     continue
 
-                pay_id = f"P-{datetime.now().strftime('%y%m%d')}-{str(uuid4())[:6]}"
+                pay_id = f"P-{now_kst().strftime('%y%m%d')}-{str(uuid4())[:6]}"
                 row_values = [
                     '',  # placeholder for pay_id
                     pd_dict.get('배정ID', ''),

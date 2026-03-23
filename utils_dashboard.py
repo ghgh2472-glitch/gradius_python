@@ -2,6 +2,7 @@
 import pandas as pd
 import re
 from datetime import datetime, timedelta
+from helpers import now_kst, today_kst
 
 # ---------------------------------------------------------
 # 0. 스마트 컬럼 탐지기 (안전장치 강화)
@@ -515,7 +516,7 @@ def get_upcoming_events(df_inq, days=7):
     
     try:
         df = df_inq.copy()
-        today = datetime.now()
+        today = today_kst()
         def parse_dt(d):
             try: return datetime.strptime(str(d).split('~')[0].strip()[:10], "%Y-%m-%d")
             except: return None
@@ -618,7 +619,7 @@ def get_all_events_with_status(df_inq, df_dispatch):
     
     try:
         df = df_inq.copy()
-        today = datetime.now()
+        today = today_kst()
         
         def parse_dt(d):
             try: return datetime.strptime(str(d).split('~')[0].strip()[:10], "%Y-%m-%d")
@@ -777,7 +778,7 @@ def get_upcoming_dispatch_info(df_dispatch, df_inq, days=7):
     
     try:
         df = df_inq.copy()
-        today = datetime.now()
+        today = today_kst()
         
         def parse_dt(d):
             try: 
@@ -891,7 +892,7 @@ def get_stale_estimates(df_inq, days_threshold=7):
         df = df.dropna(subset=['_date'])
         if df.empty: return pd.DataFrame()
         
-        today = datetime.now()
+        today = today_kst()
         df['경과일'] = (today - df['_date']).dt.days
         df = df[df['경과일'] >= days_threshold]
         if df.empty: return pd.DataFrame()
@@ -1012,7 +1013,7 @@ def generate_daily_report(df_inq, df_dispatch, df_settlement):
     """일일 요약 리포트"""
     report = {
         "제목": "📅 일일 보고서",
-        "생성일": datetime.now().strftime("%Y년 %m월 %d일 %H:%M"),
+        "생성일": now_kst().strftime("%Y년 %m월 %d일 %H:%M"),
         "섹션": []
     }
     
@@ -1064,8 +1065,8 @@ def generate_weekly_report(df_inq, df_dispatch, df_settlement):
     """주간 성과 리포트"""
     report = {
         "제목": "📊 주간 성과 리포트",
-        "생성일": datetime.now().strftime("%Y년 %m월 %d일"),
-        "주간": f"{(datetime.now() - timedelta(days=6)).strftime('%m/%d')} ~ {datetime.now().strftime('%m/%d')}",
+        "생성일": now_kst().strftime("%Y년 %m월 %d일"),
+        "주간": f"{(now_kst() - timedelta(days=6)).strftime('%m/%d')} ~ {now_kst().strftime('%m/%d')}",
         "섹션": []
     }
     
@@ -1119,14 +1120,14 @@ def generate_monthly_report(df_inq, df_dispatch, df_settlement):
     """월간 분석 리포트"""
     report = {
         "제목": "📈 월간 분석 리포트",
-        "생성일": datetime.now().strftime("%Y년 %m월"),
+        "생성일": now_kst().strftime("%Y년 %m월"),
         "섹션": []
     }
     
     # 1. 월간 매출
     monthly = get_monthly_trend(df_inq)
-    current_month = datetime.now().strftime('%Y-%m')
-    previous_month = (datetime.now() - timedelta(days=30)).strftime('%Y-%m')
+    current_month = now_kst().strftime('%Y-%m')
+    previous_month = (now_kst() - timedelta(days=30)).strftime('%Y-%m')
     
     current_sales = 0
     previous_sales = 0

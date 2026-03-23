@@ -12,6 +12,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
+from helpers import now_kst, today_kst
 
 
 # ==============================================================================
@@ -156,7 +157,7 @@ def analyze_risks(df_inq: pd.DataFrame, df_dispatch: pd.DataFrame,
                     # D-7 이내 체결건 중 배정 안 된 건
                     try:
                         event_date = pd.to_datetime(date_str)
-                        d_day = (event_date - datetime.now()).days
+                        d_day = (event_date - now_kst()).days
                         if 0 <= d_day <= 7:
                             # 배정 인원 확인
                             assigned = 0
@@ -196,7 +197,7 @@ def analyze_risks(df_inq: pd.DataFrame, df_dispatch: pd.DataFrame,
             date_str = str(row.get('작성일', row.get('문의날짜', '')))
             try:
                 inq_date = pd.to_datetime(date_str)
-                days_old = (datetime.now() - inq_date).days
+                days_old = (now_kst() - inq_date).days
                 if days_old > 7:
                     old_inquiries.append(str(row.get('업체명', '미정')))
             except:
@@ -347,7 +348,7 @@ def analyze_customer_retention(df_inq: pd.DataFrame) -> Dict:
                 if not rows.empty:
                     try:
                         last_date = pd.to_datetime(rows[date_col].iloc[-1])
-                        days_since = (datetime.now() - last_date).days
+                        days_since = (now_kst() - last_date).days
                         if days_since > 90:
                             result["at_risk"].append({
                                 "company": company,
@@ -457,7 +458,7 @@ def predict_staff_demand(df_inq: pd.DataFrame, weeks_ahead: int = 4) -> List[Dic
         confirmed['_date'] = pd.to_datetime(confirmed[date_col], errors='coerce')
         confirmed = confirmed.dropna(subset=['_date'])
         
-        today = datetime.now()
+        today = now_kst()
         
         for w in range(weeks_ahead):
             week_start = today + timedelta(weeks=w)

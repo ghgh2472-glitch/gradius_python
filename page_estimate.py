@@ -14,6 +14,7 @@ import utils_estimate as ue
 import data_loader as db
 import status_config as sc
 from datetime import datetime, timedelta, date, time
+from helpers import now_kst
 import time as _time
 import base64
 import os
@@ -2042,7 +2043,7 @@ def show(data):
                 "ref": f_ref if f_ref else _safe_str(st.session_state.get('w_manager')),
                 "tel": f_tel if f_tel else _safe_str(st.session_state.get('w_contact')),
                 "addr": f_addr if f_addr else _safe_str(st.session_state.get('w_loc')),
-                "date_range": date_range_txt, "date": datetime.now().strftime("%Y-%m-%d")
+                "date_range": date_range_txt, "date": now_kst().strftime("%Y-%m-%d")
             }
             supplier_dict = {"reg_no": "429-88-01469", "name": "(주)가디어스", "ceo": "최규성", "tel": "1600-2944", "addr": "서울시 종로구 동망산1길 2, 1층"}
             html_quote = ue.get_customer_quote_html(_preview_df, client_dict, supplier_dict, final_supply, vat_yn, t_top, t_side, banner_b64, additional_costs_df, total_additional_v, discount_amt)

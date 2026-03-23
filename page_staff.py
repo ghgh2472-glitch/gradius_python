@@ -6,7 +6,7 @@ from smart_assignment import SmartAssignment, StaffFilter, RoleSkillMatcher
 from workflow_automation import auto_link_workflow
 from calculators import SalaryCalculator, ValidationEngine
 from datetime import datetime, timedelta
-from helpers import get_logger
+from helpers import get_logger, now_kst
 
 logger = get_logger(__name__)
 
@@ -122,10 +122,10 @@ def show_filter_panel(staff_df: pd.DataFrame) -> dict:
     col7, col8 = st.columns(2)
     
     with col7:
-        start_date = st.date_input("배정 시작일", datetime.now())
+        start_date = st.date_input("배정 시작일", now_kst())
     
     with col8:
-        end_date = st.date_input("배정 종료일", datetime.now() + timedelta(days=7))
+        end_date = st.date_input("배정 종료일", now_kst() + timedelta(days=7))
     
     # 필터 딕셔너리 구성
     filters = {
@@ -268,7 +268,7 @@ def show_assignment_form(selected_candidate: pd.Series, inquiry_id: str):
                 '단가': int(hourly_rate),
                 '총지급액': total_pay,
                 '상태': '배정중',
-                '배정일시': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                '배정일시': now_kst().strftime('%Y-%m-%d %H:%M:%S'),
                 '비고': notes,
             }
             

@@ -7,6 +7,7 @@ import data_loader as db
 import utils_dashboard as ud
 import time
 from datetime import datetime
+from helpers import now_kst
 
 
 # ==============================================================================
@@ -774,7 +775,7 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
                 st.download_button(
                     f"📥 이체 엑셀 ({len(_venue_transfer)}명)",
                     data=_vbuf.getvalue(),
-                    file_name=f"이체_{venue}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                    file_name=f"이체_{venue}_{now_kst().strftime('%Y%m%d')}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True,
                     key=f"ceo_dl_venue_{inq_id}",
@@ -785,7 +786,7 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
         if len(venue_pending) > 1:
             if st.button(f"💰 {venue} 전체 {len(venue_pending)}명 일괄 입금완료",
                          key=f"ceo_bulk_{inq_id}", type="primary"):
-                _now = datetime.now().strftime('%Y-%m-%d')
+                _now = now_kst().strftime('%Y-%m-%d')
                 updates = []
                 for cr in venue_pending:
                     if cr['배정ID']:
@@ -926,7 +927,7 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
                 if leader_cr['지급상태'] == '대기':
                     if st.button("💰 입금완료", key=f"ceo_team_{tc}_{inq_id}", type="primary",
                                  use_container_width=True):
-                        _now = datetime.now().strftime('%Y-%m-%d')
+                        _now = now_kst().strftime('%Y-%m-%d')
                         team_updates = []
                         if leader_cr['배정ID']:
                             team_updates.append({'배정ID': leader_cr['배정ID'], '지급상태': '완료', '지급일': _now})
@@ -996,7 +997,7 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
                     if pst == '대기' and aid:
                         if st.button("💰 입금완료", key=f"ceo_ind_{aid}_{inq_id}", type="primary",
                                      use_container_width=True):
-                            _now = datetime.now().strftime('%Y-%m-%d')
+                            _now = now_kst().strftime('%Y-%m-%d')
                             db.update_payment_status(aid, '완료', _now)
                             db.invalidate_payment_cache()
                             db.invalidate_dispatch_only()

@@ -7,6 +7,7 @@ import utils_dashboard as ud
 import data_loader as db
 from streamlit_calendar import calendar
 from datetime import datetime, timedelta
+from helpers import now_kst, today_kst
 import status_config as sc
 
 # ==============================================================================
@@ -602,7 +603,7 @@ def show(data):
             st.markdown('<div class="section-title">📈 월별 매출 추이</div>', unsafe_allow_html=True)
             
             # 연도 선택기
-            current_year = datetime.now().year
+            current_year = now_kst().year
             year_options = ["전체"] + [str(y) for y in range(current_year, current_year - 5, -1)]
             sel_year_str = st.selectbox("📅 연도 필터", year_options, key="trend_year_filter")
             sel_year = int(sel_year_str) if sel_year_str != "전체" else None
@@ -1424,7 +1425,7 @@ def show(data):
                 st.download_button(
                     label="📥 텍스트로 다운로드",
                     data=report_text.encode('utf-8'),
-                    file_name=f"일일보고서_{datetime.now().strftime('%Y%m%d')}.txt",
+                    file_name=f"일일보고서_{now_kst().strftime('%Y%m%d')}.txt",
                     mime="text/plain"
                 )
         
@@ -1455,7 +1456,7 @@ def show(data):
                 st.download_button(
                     label="📥 텍스트로 다운로드",
                     data=report_text.encode('utf-8'),
-                    file_name=f"주간리포트_{datetime.now().strftime('%Y%m%d')}.txt",
+                    file_name=f"주간리포트_{now_kst().strftime('%Y%m%d')}.txt",
                     mime="text/plain"
                 )
         
@@ -1486,7 +1487,7 @@ def show(data):
                 st.download_button(
                     label="📥 텍스트로 다운로드",
                     data=report_text.encode('utf-8'),
-                    file_name=f"월간분석_{datetime.now().strftime('%Y%m')}.txt",
+                    file_name=f"월간분석_{now_kst().strftime('%Y%m')}.txt",
                     mime="text/plain"
                 )
 

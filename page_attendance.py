@@ -11,6 +11,7 @@ import pandas as pd
 import data_loader as db
 import status_config as sc
 from datetime import datetime, timedelta, date as dt_date, time as dt_time
+from helpers import now_kst, today_kst
 import io
 
 
@@ -81,7 +82,7 @@ def _generate_dates(start_str, end_str):
             dates.append(cur.strftime("%Y-%m-%d"))
             cur += timedelta(days=1)
     except Exception:
-        today = datetime.now()
+        today = now_kst()
         for i in range(3):
             dates.append((today + timedelta(days=i)).strftime("%Y-%m-%d"))
     return dates
@@ -328,7 +329,7 @@ def _generate_schedule_image(event_name, date_list, staff_schedule,
     # 푸터
     fy = img_h - footer_h + 10
     draw.text((padding, fy),
-              f"(주)가디어스 Gradius ERP | 출력: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+              f"(주)가디어스 Gradius ERP | 출력: {now_kst().strftime('%Y-%m-%d %H:%M')}",
               fill='#94A3B8', font=font_legend)
 
     return img
@@ -341,7 +342,7 @@ def _generate_schedule_image(event_name, date_list, staff_schedule,
 def generate_printable_attendance_html(event_name, company, location,
                                         date_range, staff_list, dates,
                                         attendance_records):
-    today = datetime.now().strftime('%Y-%m-%d')
+    today = now_kst().strftime('%Y-%m-%d')
 
     date_headers = ""
     for d in dates:
@@ -451,7 +452,7 @@ def generate_printable_attendance_html(event_name, company, location,
 
 def generate_certificate_html(staff_name, inquiry_name, total_days, attended_days):
     rate = (attended_days / total_days * 100) if total_days > 0 else 0
-    today_str = datetime.now().strftime('%Y년 %m월 %d일')
+    today_str = now_kst().strftime('%Y년 %m월 %d일')
     return f"""<html><head><meta charset="UTF-8">
 <style>
     body {{ font-family: 'Malgun Gothic', sans-serif; margin: 40px; }}
@@ -584,7 +585,7 @@ def _tab_schedule(data):
         st.image(pil_img, caption=f"{event_name} 스케줄표", use_container_width=True)
         st.download_button(
             "📥 PNG 다운로드", data=buf.getvalue(),
-            file_name=f"스케줄표_{event_name}_{datetime.now().strftime('%Y%m%d')}.png",
+            file_name=f"스케줄표_{event_name}_{now_kst().strftime('%Y%m%d')}.png",
             mime="image/png", use_container_width=True)
 
 
@@ -635,7 +636,7 @@ def _tab_attendance_input(data):
     st.divider()
 
     # ── 날짜 선택 ──
-    today = datetime.now().date()
+    today = now_kst().date()
     if start_date and end_date:
         default_date = max(start_date, min(today, end_date))
         att_date = st.date_input("출석 날짜", value=default_date,
@@ -718,7 +719,7 @@ def _tab_attendance_input(data):
             '근무시간': worked_hours, '일급여': daily_wage,
             '출석상태': status, '사유': reason,
             '비고': f'구분:{category} 직무:{role}',
-            '기록일시': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            '기록일시': now_kst().strftime('%Y-%m-%d %H:%M:%S'),
         })
 
     # ── 저장 ──
@@ -776,10 +777,10 @@ def _tab_printable(data):
     cd1, cd2 = st.columns(2)
     with cd1:
         print_start = st.date_input("시작일",
-                                     value=start_date or datetime.now().date(), key="pr_s")
+                                     value=start_date or now_kst().date(), key="pr_s")
     with cd2:
         print_end = st.date_input("종료일",
-                                   value=end_date or (datetime.now() + timedelta(days=3)).date(),
+                                   value=end_date or (now_kst() + timedelta(days=3)).date(),
                                    key="pr_e")
 
     dates = _generate_dates(print_start.strftime("%Y-%m-%d"), print_end.strftime("%Y-%m-%d"))
@@ -862,7 +863,7 @@ def _tab_certificate(data):
         st.components.v1.html(cert_html, height=700, scrolling=True)
         st.download_button(
             "📥 증명서 다운로드 (HTML)", data=cert_html,
-            file_name=f"{staff_name}_출석증명_{datetime.now().strftime('%Y%m%d')}.html",
+            file_name=f"{staff_name}_출석증명_{now_kst().strftime('%Y%m%d')}.html",
             mime="text/html")
 
 

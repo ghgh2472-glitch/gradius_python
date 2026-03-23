@@ -7,6 +7,7 @@ import status_config as sc
 from utils_settlement import SettlementBrain
 import time
 from datetime import datetime
+from helpers import now_kst, today_kst
 from PIL import Image
 
 # ... (스타일링 함수 기존 동일) ...
@@ -84,7 +85,7 @@ def _auto_check_event_completion(settlement_df):
     if '문의ID' not in settlement_df.columns:
         return 0
     
-    today = datetime.now().date()
+    today = today_kst().date()
     updated = 0
     
     for _, row in settlement_df.iterrows():
@@ -1990,7 +1991,7 @@ def show_settlement_detail(data):
                     st.download_button(
                         "📥 이체용 엑셀 다운로드",
                         data=buf.getvalue(),
-                        file_name=f"이체_{row['행사명']}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                        file_name=f"이체_{row['행사명']}_{now_kst().strftime('%Y%m%d')}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         use_container_width=True,
                         key=f"dl_excel_{inq_id}",
@@ -2114,13 +2115,13 @@ def show_settlement_detail(data):
                         st.success("확인", icon="🏢")
                     elif _a_status == '대기' and not _a_is_hq and _a_aid:
                         if st.button("💰 입금완료", key=f"_ap_pay_{_a_aid}", use_container_width=True):
-                            db.update_payment_status(_a_aid, '완료', datetime.now().strftime('%Y-%m-%d'))
+                            db.update_payment_status(_a_aid, '완료', now_kst().strftime('%Y-%m-%d'))
                             db.invalidate_payment_cache()
                             db.invalidate_dispatch_only()
                             st.rerun()
                     elif _a_status == '대기' and _a_is_hq and _a_aid:
                         if st.button("🏢 확인", key=f"_ap_hq_{_a_aid}", use_container_width=True):
-                            db.update_payment_status(_a_aid, '확인완료', datetime.now().strftime('%Y-%m-%d'))
+                            db.update_payment_status(_a_aid, '확인완료', now_kst().strftime('%Y-%m-%d'))
                             db.invalidate_payment_cache()
                             db.invalidate_dispatch_only()
                             st.rerun()
@@ -2135,7 +2136,7 @@ def show_settlement_detail(data):
             if len(_bulk_confirm_list) >= 2:
                 st.markdown("---")
                 if st.button(f"💰 외부인력 전원 입금완료 ({len(_bulk_confirm_list)}명)", key=f"_bulk_confirm_{inq_id}", type="primary"):
-                    _now_str = datetime.now().strftime('%Y-%m-%d')
+                    _now_str = now_kst().strftime('%Y-%m-%d')
                     _bulk_updates = [{'배정ID': _bid, '지급상태': '완료', '지급일': _now_str} for _bid in _bulk_confirm_list]
                     db.batch_update_payment_status(_bulk_updates)
                     db.invalidate_payment_cache()
@@ -2304,7 +2305,7 @@ def show_settlement_detail(data):
                                         st.rerun()
                             elif _t_pay_status == '대기':
                                 if st.button("💰 팀 입금완료", key=f"pay_team_{_tc}", type="primary", use_container_width=True):
-                                    _now_str = datetime.now().strftime('%Y-%m-%d')
+                                    _now_str = now_kst().strftime('%Y-%m-%d')
                                     _team_updates = []
                                     if _t_aid:
                                         _team_updates.append({'배정ID': _t_aid, '지급상태': '완료', '지급일': _now_str})
@@ -2439,7 +2440,7 @@ def show_settlement_detail(data):
                                 # 대기/미저장 모두 본사확인 버튼 표시
                                 _hq_btn_label = "🏢 본사 확인" if _ind_pay_status == '대기' else "🏢 본사 확인 (자동저장)"
                                 if st.button(_hq_btn_label, key=f"confirm_hq_{_ind_aid}", type="primary", use_container_width=True):
-                                    _now_str = datetime.now().strftime('%Y-%m-%d')
+                                    _now_str = now_kst().strftime('%Y-%m-%d')
                                     if _ind_pay_status in ('-', ''):
                                         # 지급기록이 없으면 자동 생성 (확인완료 상태로 직접 저장)
                                         _hq_payment = {
@@ -2497,7 +2498,7 @@ def show_settlement_detail(data):
                                         st.rerun()
                             elif _ind_pay_status == '대기':
                                 if st.button("💰 입금완료", key=f"confirm_pay_{_ind_aid}", type="primary", use_container_width=True):
-                                    db.update_payment_status(_ind_aid, '완료', datetime.now().strftime('%Y-%m-%d'))
+                                    db.update_payment_status(_ind_aid, '완료', now_kst().strftime('%Y-%m-%d'))
                                     db.invalidate_payment_cache()
                                     db.invalidate_dispatch_only()
                                     st.rerun()

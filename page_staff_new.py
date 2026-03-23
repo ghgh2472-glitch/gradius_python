@@ -14,6 +14,7 @@ import streamlit as st
 import pandas as pd
 import re
 from datetime import datetime, timedelta, date as dt_date
+from helpers import now_kst, today_kst
 from uuid import uuid4
 import data_loader as db
 import status_config as sc
@@ -117,14 +118,14 @@ def _parse_date_safe(date_str):
         try:
             d = datetime.strptime(str(date_str).strip(), fmt)
             if d.year < 2000:
-                d = d.replace(year=datetime.now().year)
+                d = d.replace(year=now_kst().year)
             return d.date()
         except ValueError:
             continue
     m = re.search(r'(\d{1,2})[.\-/](\d{1,2})', str(date_str))
     if m:
         try:
-            return dt_date(datetime.now().year, int(m.group(1)), int(m.group(2)))
+            return dt_date(now_kst().year, int(m.group(1)), int(m.group(2)))
         except ValueError:
             pass
     return None
@@ -802,7 +803,7 @@ def _render_team_assignment_ui(df_staff, role_status):
             st.error("팀장을 선택해주세요.")
         else:
             from uuid import uuid4
-            team_code = f"T-{datetime.now().strftime('%y%m%d')}-{str(uuid4())[:4]}"
+            team_code = f"T-{now_kst().strftime('%y%m%d')}-{str(uuid4())[:4]}"
             leader_name = selected_leader.get('이름', '')
 
             # 팀장 추가 (결제대상 = Y, 현장참여는 체크박스 반영)
@@ -1914,7 +1915,7 @@ def tab_attendance(data):
         st.divider()
 
     # ── 출석 날짜 ──
-    today = datetime.now().date()
+    today = now_kst().date()
     if start_date and end_date:
         default_date = max(start_date, min(today, end_date))
         att_date = st.date_input("출석 날짜", value=default_date,
@@ -1973,7 +1974,7 @@ def tab_attendance(data):
             '근무시간': worked_hours, '일급여': daily_wage,
             '출석상태': status, '사유': reason,
             '비고': f'구분:{category}',
-            '기록일시': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            '기록일시': now_kst().strftime('%Y-%m-%d %H:%M:%S'),
         })
 
     if st.button("✅ 출석 일괄 저장", type="primary", use_container_width=True, key="save_att_batch"):
@@ -2231,7 +2232,7 @@ def tab_evaluation(data):
             '현장명': sel.get('행사명', ''),
             '근태': s1, '수행': s2, '외모': s3, '팀워크': s4,
             '총점': total, '평가등급': grade,
-            '평가자': '', '평가일시': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            '평가자': '', '평가일시': now_kst().strftime('%Y-%m-%d %H:%M:%S'),
             '강점': total_comment,
             '재추천': 'Yes' if recommend else 'No', '비고': '',
         }

@@ -3,6 +3,7 @@ import streamlit as st
 import pandas as pd
 import data_loader as db
 from datetime import datetime, timedelta
+from helpers import now_kst, today_kst
 from io import BytesIO
 
 # ==============================================================================
@@ -85,7 +86,7 @@ def to_excel(df, sheet_name="조회결과"):
 def parse_month_year(text):
     """텍스트에서 년/월 추출. 없으면 현재 년월 반환."""
     import re
-    now = datetime.now()
+    now = now_kst()
     # 2026년 2월, 2026-02, 26년2월...
     m = re.search(r'(\d{4})\s*[년\-/\.]\s*(\d{1,2})', text)
     if m:
@@ -573,7 +574,7 @@ def render_result(summary):
                 st.download_button(
                     f"📥 {label} 엑셀 다운로드",
                     data=to_excel(df, label),
-                    file_name=f"{label}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                    file_name=f"{label}_{now_kst().strftime('%Y%m%d')}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     key=f"dl_{label}_{id(df)}",
                 )
@@ -590,7 +591,7 @@ def render_result(summary):
         st.download_button(
             "📥 엑셀 다운로드",
             data=to_excel(summary["table"], excel_name),
-            file_name=f"{excel_name}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+            file_name=f"{excel_name}_{now_kst().strftime('%Y%m%d')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
@@ -666,7 +667,7 @@ def show(data):
     # ──────────────────────────────────────────
     # 검색 실행
     # ──────────────────────────────────────────
-    now = datetime.now()
+    now = now_kst()
     result = None
     error = None
 

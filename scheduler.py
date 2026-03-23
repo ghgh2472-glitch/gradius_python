@@ -6,7 +6,7 @@
 from apscheduler.schedulers.background import BackgroundScheduler
 from datetime import datetime, timedelta
 import pandas as pd
-from helpers import get_logger
+from helpers import get_logger, now_kst, today_kst
 
 logger = get_logger(__name__)
 
@@ -102,7 +102,7 @@ def daily_attendance_reminder(data: dict):
             logger.warning("No dispatch data")
             return
         
-        today = datetime.now().strftime('%Y-%m-%d')
+        today = now_kst().strftime('%Y-%m-%d')
         
         # 오늘 배정된 직원 찾기
         if '배정일시' in dispatch_df.columns:
@@ -170,7 +170,7 @@ def monthly_settlement_generation(data: dict, year: int = None, month: int = Non
         from data_loader import save_settlement_record
         
         if year is None:
-            today = datetime.now()
+            today = now_kst()
             year, month = today.year, today.month
         
         logger.info(f"💰 Monthly settlement generation for {year}-{month:02d}...")
@@ -207,7 +207,7 @@ def monthly_report_generation(data: dict, year: int = None, month: int = None):
         from notifications import notify_batch
         
         if year is None:
-            today = datetime.now()
+            today = now_kst()
             year, month = today.year, today.month
         
         logger.info(f"📈 Monthly report generation for {year}-{month:02d}...")

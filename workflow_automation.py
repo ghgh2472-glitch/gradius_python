@@ -6,7 +6,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from data_loader import save_assignment_record, ensure_attendance_sheet
 from calculators import SalaryCalculator
-from helpers import get_logger
+from helpers import get_logger, now_kst
 import gspread
 
 logger = get_logger(__name__)
@@ -44,7 +44,7 @@ def create_attendance_records(assignment: Dict, sheet_client: gspread.Spreadshee
         days = int(assignment.get('일수', 1))
         
         # 배정 시작일 파싱
-        assign_date_str = assignment.get('배정일시', datetime.now().strftime('%Y-%m-%d'))
+        assign_date_str = assignment.get('배정일시', now_kst().strftime('%Y-%m-%d'))
         assign_date = datetime.strptime(assign_date_str.split(' ')[0], '%Y-%m-%d')
         
         # 각 일자별 출석 기록 생성
@@ -60,7 +60,7 @@ def create_attendance_records(assignment: Dict, sheet_client: gspread.Spreadshee
                 '미기록',                               # 상태 (미기록/출석/결근)
                 '',                                     # 비고
                 '',                                     # 기록자
-                datetime.now().strftime('%H:%M:%S'),   # 기록시간
+                now_kst().strftime('%H:%M:%S'),   # 기록시간
             ]
             rows_to_add.append(row)
         
@@ -132,7 +132,7 @@ def create_payroll_record(assignment: Dict, sheet_client: gspread.Spreadsheet) -
             str(hourly_rate),
             str(total_pay),
             '미지급',
-            datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            now_kst().strftime('%Y-%m-%d %H:%M:%S'),
         ]
         
         wks.update(f'A{last_row + 1}', [row], value_input_option='RAW')

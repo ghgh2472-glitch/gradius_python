@@ -15,6 +15,7 @@ from typing import Dict, List, Optional
 
 import ai_helper as ai
 import utils_dashboard as ud
+from helpers import now_kst, today_kst
 
 
 def _safe_response_text(response) -> str:
@@ -147,7 +148,7 @@ def _add_date_context(df: pd.DataFrame, date_col: str) -> pd.DataFrame:
     if date_col not in df.columns:
         return df
     df = df.copy()
-    today = pd.Timestamp.now().normalize()
+    today = pd.Timestamp(today_kst())
     try:
         dates = pd.to_datetime(df[date_col], errors='coerce')
         ddays = (dates - today).dt.days
@@ -213,7 +214,7 @@ def _build_full_context(data: Dict, df_dispatch: pd.DataFrame,
                         df_settlement: pd.DataFrame) -> str:
     """모든 ERP 데이터를 안전하게 텍스트로 변환"""
     parts = []
-    today = datetime.now().strftime('%Y-%m-%d (%A)')
+    today = now_kst().strftime('%Y-%m-%d (%A)')
     parts.append(f"=== Gradius ERP 전체 데이터 ({today}) ===\n")
 
     # 1) 문의 데이터

@@ -10,6 +10,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+from helpers import now_kst, today_kst
 from io import BytesIO
 
 import data_loader as db
@@ -233,7 +234,7 @@ def _render_briefing_tab(data, df_inq, df_dispatch, df_settlement, gemini_ok):
         need_refresh = (
             cached is None or
             cached_time is None or
-            (datetime.now() - cached_time).total_seconds() > 300
+            (now_kst() - cached_time).total_seconds() > 300
         )
 
         col_b1, col_b2 = st.columns([4, 1])
@@ -246,7 +247,7 @@ def _render_briefing_tab(data, df_inq, df_dispatch, df_settlement, gemini_ok):
                 briefing = gc.generate_briefing(data, df_dispatch, df_settlement)
                 if briefing:
                     st.session_state[cache_key] = briefing
-                    st.session_state[cache_time_key] = datetime.now()
+                    st.session_state[cache_time_key] = now_kst()
                 else:
                     briefing = "브리핑 생성에 실패했습니다. 잠시 후 다시 시도해주세요."
                     st.session_state[cache_key] = briefing
@@ -354,7 +355,7 @@ def _render_report_tab(df_inq, df_settlement, df_dispatch, df_payment):
 
     # 필터 영역
     fc1, fc2, fc3 = st.columns(3)
-    current_year = datetime.now().year
+    current_year = now_kst().year
     with fc1:
         year = st.selectbox("연도", range(current_year, current_year - 5, -1),
                             key="report_year")

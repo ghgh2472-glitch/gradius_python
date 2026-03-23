@@ -1,6 +1,20 @@
 import logging
 import time
+from datetime import datetime, timezone, timedelta
 from functools import wraps
+
+# 한국 표준시 (UTC+9)
+_KST = timezone(timedelta(hours=9))
+
+
+def now_kst() -> datetime:
+    """현재 한국 시간 반환 (timezone-aware)"""
+    return datetime.now(_KST)
+
+
+def today_kst() -> datetime:
+    """오늘 한국 날짜 자정 (timezone-naive, 날짜 비교용)"""
+    return now_kst().replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
 
 
 def get_logger(name=__name__):

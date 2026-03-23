@@ -1,7 +1,8 @@
 # utils_inquiry.py
 import re
 from datetime import datetime
-from dateutil.parser import parse # 설치한 모듈 사용
+from dateutil.parser import parse
+from helpers import now_kst # 설치한 모듈 사용
 
 class InquiryParser:
     def __init__(self):
@@ -17,7 +18,7 @@ class InquiryParser:
             clean_str = date_str.replace(" ", "").replace("월", "-").replace("일", "")
             
             # 2. 현재 년도 기준 파싱
-            now = datetime.now()
+            now = now_kst()
             dt = parse(clean_str, default=datetime(now.year, 1, 1))
             
             # 3. 만약 파싱된 날짜가 과거라면 내년으로 간주 (선택사항)

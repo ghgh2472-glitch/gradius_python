@@ -4,6 +4,7 @@ import pandas as pd
 import data_loader as db
 import status_config as sc
 from datetime import datetime
+from helpers import now_kst
 import uuid
 from utils_inquiry import InquiryParser
 
@@ -50,7 +51,7 @@ def save_inquiry():
         return
 
     # 3. 데이터 준비
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now_str = now_kst().strftime("%Y-%m-%d %H:%M:%S")
     new_id = str(uuid.uuid4())[:8]
 
     # 복장/식사/주차를 개별 컬럼에 저장 (24~26번)
