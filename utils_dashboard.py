@@ -473,38 +473,110 @@ def generate_ai_insight(kpi, unpaid_cnt, pending_cnt):
     return "  |  ".join(insights)
 
 def generate_smart_briefing(df_inq, df_dispatch, df_settlement):
-    """AI 스마트 브리핑: 오늘 확인해야 할 것"""
+    """
+    AI 스마트 브리핑: 오늘 확인해야 할 것
+    반환: list of dict — {type, title, html, detail_rows}
+      - type: 'unpaid' | 'upcoming' | 'pending' | 'stale' | 'profit' | 'team' | 'ok'
+      - title: 카드 제목 (짧은 텍스트)
+      - html: 기존 호환 HTML 문자열
+      - detail_rows: 요약카드에 표시할 행 리스트 (각 행은 dict)
+    """
     briefing_items = []
     
     # 1️⃣ 미수금 업체
-    unpaid = get_unpaid_companies(df_settlement, top_n=3)
+    unpaid = get_unpaid_companies(df_settlement, top_n=5)
     if not unpaid.empty:
         companies = ", ".join(unpaid['업체'].tolist())
         amount = unpaid['미수금액'].sum()
-        briefing_items.append(f"💸 <b>미수금 수금 필요</b><br/>아직 돈을 받지 못한 업체: <b>{companies}</b> (총 {amount:,}원)")
+        detail_rows = []
+        for _, r in unpaid.iterrows():
+            detail_rows.append({
+                '업체': r['업체'],
+                '미수금액': f"₩{int(r['미수금액']):,}",
+                '건수': f"{int(r['건수'])}건",
+            })
+        briefing_items.append({
+            'type': 'unpaid',
+            'title': '💸 미수금 수금 필요',
+            'html': f"💸 <b>미수금 수금 필요</b><br/>아직 돈을 받지 못한 업체: <b>{companies}</b> (총 {amount:,}원)",
+            'detail_rows': detail_rows,
+        })
     
-    # 2️⃣ 곧 나갈 현장 (D-3)
+    # 2️⃣ 곧 나갈 현장 (D-3) — 체결 이후만
     upcoming = get_upcoming_dispatch_info(df_dispatch, df_inq, days=3)
     if not upcoming.empty:
-        for idx, row in upcoming.head(2).iterrows():
+        detail_rows = []
+        for _, row in upcoming.iterrows():
             d_day = int(row['D-Day'])
-            location = row['장소'] if pd.notna(row['장소']) and str(row['장소']).strip() else "장소미기입"
-            staff_count = int(row['배정인원'])
-            briefing_items.append(
-                f"🔥 <b>곧 나갈 현장 (D-{d_day})</b><br/>"
-                f"행사: <b>{row['행사명']}</b><br/>"
-                f"장소: {location} | 배정인원: {staff_count}명"
-            )
+            location = row.get('장소', '')
+            if pd.isna(location) or not str(location).strip(): location = '장소미기입'
+            need = int(row.get('필요인원', 0))
+            assigned = int(row.get('배정인원', 0))
+            status = str(row.get('상태', ''))
+            if need > 0 and assigned >= need:
+                assign_label = f"✅ {assigned}/{need}명"
+            elif need > 0:
+                assign_label = f"⚠️ {assigned}/{need}명"
+            elif assigned > 0:
+                assign_label = f"{assigned}명"
+            else:
+                assign_label = '미배정'
+            detail_rows.append({
+                '업체': row.get('업체', ''),
+                '행사명': row.get('행사명', ''),
+                'D-Day': f"D-{d_day}" if d_day > 0 else '★오늘',
+                '장소': location,
+                '배정': assign_label,
+                '상태': status,
+            })
+        # 요약 텍스트
+        top = upcoming.head(2)
+        summary_parts = []
+        for _, r in top.iterrows():
+            summary_parts.append(f"{r['행사명']} (D-{int(r['D-Day'])})")
+        briefing_items.append({
+            'type': 'upcoming',
+            'title': f"🔥 곧 나갈 현장 {len(upcoming)}건",
+            'html': f"🔥 <b>곧 나갈 현장 {len(upcoming)}건 (D-3 이내)</b><br/>" + " / ".join(summary_parts),
+            'detail_rows': detail_rows,
+        })
     
     # 3️⃣ 계약 완료 대기
     if not df_inq.empty:
         col_status = find_col(df_inq, ["체결", "상태"])
+        col_client = find_col(df_inq, ["업체명"])
+        col_event = find_col(df_inq, ["행사명"])
+        col_date = find_col(df_inq, ["작성일", "문의날짜", "날짜"])
         if col_status:
-            pending_count = len(df_inq[df_inq[col_status].astype(str).str.contains('미정|견적|상담', na=False)])
-            if pending_count > 0:
-                briefing_items.append(f"📋 <b>계약 완료 대기</b><br/>{pending_count}건의 문의가 진행 중입니다")
+            pending = df_inq[df_inq[col_status].astype(str).str.contains('미정|견적|상담', na=False)]
+            if not pending.empty:
+                detail_rows = []
+                for _, r in pending.head(10).iterrows():
+                    client = str(r.get(col_client, '')).strip() if col_client else ''
+                    event = str(r.get(col_event, '')).strip() if col_event else ''
+                    status = str(r.get(col_status, '')).strip()
+                    date_val = str(r.get(col_date, '')).strip() if col_date else ''
+                    detail_rows.append({
+                        '업체': client,
+                        '행사명': event,
+                        '상태': status,
+                        '문의일': date_val[:10] if date_val else '',
+                    })
+                briefing_items.append({
+                    'type': 'pending',
+                    'title': f"📋 계약 완료 대기 {len(pending)}건",
+                    'html': f"📋 <b>계약 완료 대기</b><br/>{len(pending)}건의 문의가 진행 중입니다",
+                    'detail_rows': detail_rows,
+                })
     
-    return briefing_items if briefing_items else ["✅ 오늘은 특별히 확인할 사항이 없습니다"]
+    if not briefing_items:
+        briefing_items.append({
+            'type': 'ok',
+            'title': '✅ 확인사항 없음',
+            'html': '✅ 오늘은 특별히 확인할 사항이 없습니다',
+            'detail_rows': [],
+        })
+    return briefing_items
 
 def get_upcoming_events(df_inq, days=7):
     if df_inq.empty: return pd.DataFrame()
@@ -766,19 +838,27 @@ def get_unpaid_companies(df_settlement, top_n=5):
         return pd.DataFrame()
 
 def get_upcoming_dispatch_info(df_dispatch, df_inq, days=7):
-    """곧 나갈 현장 정보 (인원/장소/일정 포함)"""
+    """곧 나갈 현장 정보 (인원/장소/일정 포함) — 체결 이후 상태만"""
     if df_inq.empty: return pd.DataFrame()
     
     col_date = find_col(df_inq, ["행사시작일", "시작일", "행사일시", "일시"])
     col_client = find_col(df_inq, ["업체명"])
     col_event = find_col(df_inq, ["행사명"])
     col_location = find_col(df_inq, ["장소", "현장"])
+    col_status = find_col(df_inq, ["체결", "상태"])
+    col_need = find_col(df_inq, ["필요인원", "인원수", "인원"])
     
     if not col_date: return pd.DataFrame()
     
     try:
         df = df_inq.copy()
         today = today_kst()
+        
+        # ★ 체결 이후 상태만 필터링 (미정/견적/상담/미체결/보류/취소 제외)
+        if col_status:
+            _confirmed = ['체결', '배정완료', '진행중', '완료', '행사종료', '정산완료']
+            df = df[df[col_status].astype(str).str.strip().isin(_confirmed)]
+        if df.empty: return pd.DataFrame()
         
         def parse_dt(d):
             try: 
@@ -794,24 +874,40 @@ def get_upcoming_dispatch_info(df_dispatch, df_inq, days=7):
         
         df['D-Day'] = df['evt_dt'].apply(lambda x: (x-today).days)
         
-        # 배정기록에서 각 행사의 인원 수 집계
+        # 필요인원
+        if col_need and col_need in df.columns:
+            df['필요인원'] = df[col_need].apply(lambda x: safe_int(x) if x else 0)
+        else:
+            df['필요인원'] = 0
+        
+        # 배정기록에서 각 행사의 인원 수 집계 (후보·취소 제외)
         if not df_dispatch.empty:
             col_dispatch_event = find_col(df_dispatch, ["행사명", "이벤트"])
-            if col_dispatch_event and col_dispatch_event in df_dispatch.columns:
-                dispatch_count = df_dispatch[col_dispatch_event].value_counts().to_dict()
+            col_dispatch_status = find_col(df_dispatch, ["지급상태", "배정상태"])
+            _disp = df_dispatch.copy()
+            if col_dispatch_status and col_dispatch_status in _disp.columns:
+                _disp = _disp[~_disp[col_dispatch_status].astype(str).str.strip().isin({'후보', '취소'})]
+            if col_dispatch_event and col_dispatch_event in _disp.columns:
+                dispatch_count = _disp[col_dispatch_event].value_counts().to_dict()
                 df['배정인원'] = df[col_event].map(dispatch_count).fillna(0).astype(int)
             else:
                 df['배정인원'] = 0
         else:
             df['배정인원'] = 0
         
+        # 상태 컬럼 보존
+        if col_status and col_status in df.columns:
+            df['상태'] = df[col_status].astype(str).str.strip()
+        else:
+            df['상태'] = ''
+        
         df.sort_values('D-Day', inplace=True)
         
-        cols = [col_client, col_event, col_location, col_date, '배정인원', 'D-Day']
+        cols = [col_client, col_event, col_location, col_date, '필요인원', '배정인원', '상태', 'D-Day']
         valid_cols = [c for c in cols if c and c in df.columns]
         res = df[valid_cols].copy()
         
-        res.columns = ['업체', '행사명', '장소', '일정', '배정인원', 'D-Day']
+        res.columns = ['업체', '행사명', '장소', '일정', '필요인원', '배정인원', '상태', 'D-Day'][:len(valid_cols)]
         return res.head(10)
     except Exception as e:
         print(f"Upcoming dispatch error: {e}")

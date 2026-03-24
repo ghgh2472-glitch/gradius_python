@@ -124,62 +124,110 @@ def show(data):
     if not stale_estimates.empty:
         count = len(stale_estimates)
         top_names = ", ".join(stale_estimates['업체명'].head(3).tolist()) if '업체명' in stale_estimates.columns else ""
-        smart_briefing.append(
-            f"🧮 <b>견적 후 미체결 {count}건 확인 필요</b><br/>"
-            f"견적 발송 후 7일 이상 체결되지 않은 건이 있습니다"
-            + (f": <b>{top_names}</b>" if top_names else "")
-        )
+        detail_rows = []
+        for _, r in stale_estimates.head(10).iterrows():
+            detail_rows.append({
+                '업체명': r.get('업체명', ''),
+                '행사명': r.get('행사명', ''),
+                '경과일': f"{int(r.get('경과일', 0))}일",
+            })
+        smart_briefing.append({
+            'type': 'stale',
+            'title': f'🧮 견적 미체결 {count}건',
+            'html': f"🧮 <b>견적 후 미체결 {count}건 확인 필요</b><br/>"
+                    f"견적 발송 후 7일 이상 체결되지 않은 건이 있습니다"
+                    + (f": <b>{top_names}</b>" if top_names else ""),
+            'detail_rows': detail_rows,
+        })
     
     # 영업이익 알림
     if operating_profit['공급가액'] > 0:
         if operating_profit['이익률'] < 15:
-            smart_briefing.append(
-                f"📉 <b>이익률 주의 ({operating_profit['이익률']}%)</b><br/>"
-                f"공급가액 {operating_profit['공급가액']:,}원 대비 지급액 {operating_profit['지급액']:,}원 → 이익률이 낮습니다"
-            )
+            smart_briefing.append({
+                'type': 'profit',
+                'title': f"📉 이익률 주의 ({operating_profit['이익률']}%)",
+                'html': f"📉 <b>이익률 주의 ({operating_profit['이익률']}%)</b><br/>"
+                        f"공급가액 {operating_profit['공급가액']:,}원 대비 지급액 {operating_profit['지급액']:,}원 → 이익률이 낮습니다",
+                'detail_rows': [],
+            })
     
     # 팀 배정 현황 요약
     if team_stats['팀배정건수'] > 0:
-        smart_briefing.append(
-            f"👥 <b>팀 배정 현황</b><br/>"
-            f"현재 {team_stats['팀수']}개 팀, 팀장 {team_stats.get('팀장수', 0)}명 + 팀원 {team_stats.get('팀원수', 0)}명 투입 중"
-        )
+        smart_briefing.append({
+            'type': 'team',
+            'title': '👥 팀 배정 현황',
+            'html': f"👥 <b>팀 배정 현황</b><br/>"
+                    f"현재 {team_stats['팀수']}개 팀, 팀장 {team_stats.get('팀장수', 0)}명 + 팀원 {team_stats.get('팀원수', 0)}명 투입 중",
+            'detail_rows': [],
+        })
     
-    # 브리핑 내용 → 연결 페이지 매핑
-    def _get_nav_target(text):
-        if "미수금" in text: return "정산"
-        if "이익률" in text: return "정산"
-        if "곧 나갈 현장" in text: return "인원"
-        if "팀 배정" in text: return "인원"
-        if "미체결" in text: return "견적"
-        if "계약 완료 대기" in text: return "문의"
-        return None
+    # ── 확인사항 렌더링 (요약카드 방식) ──
+    _type_nav_map = {
+        'unpaid': '대표님',
+        'upcoming': '인원',
+        'pending': '견적',
+        'stale': '견적',
+        'profit': '정산',
+        'team': '인원',
+    }
     
     for idx, item in enumerate(smart_briefing):
         color_idx = idx % len(briefing_colors)
-        nav_target = _get_nav_target(item)
+        bg_color = briefing_colors[color_idx]
+        border_color = briefing_borders[color_idx]
         
-        if nav_target:
-            bcol_left, bcol_right = st.columns([6, 1])
-            with bcol_left:
-                st.markdown(f"""
-                <div style="background-color: {briefing_colors[color_idx]}; border-left: 4px solid {briefing_borders[color_idx]}; 
-                            padding: 12px 15px; margin-bottom: 10px; border-radius: 6px; font-size: 13px; line-height: 1.6;">
-                    {item}
-                </div>
-                """, unsafe_allow_html=True)
-            with bcol_right:
-                st.markdown("<div style='height: 8px'></div>", unsafe_allow_html=True)
-                if st.button("바로가기 →", key=f"_brief_nav_{idx}", use_container_width=True):
-                    st.session_state['_nav_target'] = nav_target
-                    st.rerun()
+        # 구조화된 dict인지 확인 (하위 호환)
+        if isinstance(item, dict):
+            html = item.get('html', '')
+            detail_rows = item.get('detail_rows', [])
+            item_type = item.get('type', '')
+            nav_target = _type_nav_map.get(item_type)
         else:
-            st.markdown(f"""
-            <div style="background-color: {briefing_colors[color_idx]}; border-left: 4px solid {briefing_borders[color_idx]}; 
-                        padding: 12px 15px; margin-bottom: 10px; border-radius: 6px; font-size: 13px; line-height: 1.6;">
-                {item}
-            </div>
-            """, unsafe_allow_html=True)
+            html = item
+            detail_rows = []
+            item_type = ''
+            nav_target = None
+        
+        # 요약 바
+        st.markdown(f"""
+        <div style="background-color: {bg_color}; border-left: 4px solid {border_color}; 
+                    padding: 12px 15px; margin-bottom: 4px; border-radius: 6px; font-size: 13px; line-height: 1.6;">
+            {html}
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # 상세 카드 (접이식)
+        if detail_rows:
+            with st.expander("📋 상세보기", expanded=False):
+                # 테이블 헤더 구성
+                cols = list(detail_rows[0].keys())
+                header_html = "".join(f"<th style='padding:8px 12px; background:#f1f5f9; font-size:12px; font-weight:700; border-bottom:2px solid #e2e8f0;'>{c}</th>" for c in cols)
+                rows_html = ""
+                for r in detail_rows:
+                    cells = "".join(f"<td style='padding:7px 12px; font-size:12px; border-bottom:1px solid #f1f5f9;'>{r.get(c, '')}</td>" for c in cols)
+                    rows_html += f"<tr>{cells}</tr>"
+                
+                st.markdown(f"""
+                <table style="width:100%; border-collapse:collapse; margin:4px 0;">
+                    <thead><tr>{header_html}</tr></thead>
+                    <tbody>{rows_html}</tbody>
+                </table>
+                """, unsafe_allow_html=True)
+                
+                # 해당 페이지로 이동 버튼
+                if nav_target:
+                    _nav_labels = {
+                        'unpaid': '💰 업체 입금관리로 이동',
+                        'upcoming': '👥 인력배정 현황으로 이동',
+                        'pending': '📝 견적통합관리로 이동',
+                        'stale': '📝 견적통합관리로 이동',
+                        'profit': '🧾 정산관리로 이동',
+                        'team': '👥 인력배정으로 이동',
+                    }
+                    btn_label = _nav_labels.get(item_type, f'{nav_target} 페이지로 이동')
+                    if st.button(btn_label, key=f"_brief_nav_{idx}", use_container_width=True):
+                        st.session_state['_nav_target'] = nav_target
+                        st.rerun()
     
     st.markdown("---")
     
