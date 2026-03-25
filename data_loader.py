@@ -867,6 +867,65 @@ def update_settlement_progress(inquiry_id, progress):
     return update_cell("계약건은청구금액적기", inquiry_id, "진행상황", progress)
 
 
+def batch_update_settlement_progress(updates):
+    """계약건은청구금액적기 시트의 '진행상황'을 일괄 업데이트 (배치 1회)
+
+    Args:
+        updates: list of (inquiry_id, progress_value) tuples
+    Returns:
+        int: 성공 건수
+    """
+    if not updates:
+        return 0
+
+    client = get_connection()
+    if not client:
+        return 0
+
+    try:
+        sh = client.open_by_key(SHEET_ID)
+        wks = sh.worksheet("계약건은청구금액적기")
+
+        headers = wks.row_values(1)
+        headers_clean = [str(h).strip() for h in headers]
+
+        if "진행상황" not in headers_clean:
+            logger.error("❌ batch_update: '진행상황' 컬럼 없음")
+            return 0
+
+        col_idx = headers_clean.index("진행상황") + 1
+
+        id_col = wks.col_values(1)
+        id_col_clean = [str(x).strip() for x in id_col]
+
+        # 문의ID → 행번호 매핑
+        id_row_map = {}
+        for i, cid in enumerate(id_col_clean):
+            if cid:
+                id_row_map[cid] = i + 1
+
+        import gspread
+        cells_to_update = []
+        for inq_id, progress in updates:
+            inq_id = str(inq_id).strip()
+            row_num = id_row_map.get(inq_id)
+            if row_num:
+                cells_to_update.append(
+                    gspread.Cell(row=row_num, col=col_idx, value=str(progress))
+                )
+
+        if not cells_to_update:
+            return 0
+
+        wks.update_cells(cells_to_update, value_input_option="RAW")
+        logger.info(f"✅ batch_update_settlement_progress: {len(cells_to_update)}건 일괄 업데이트")
+        return len(cells_to_update)
+
+    except Exception as e:
+        logger.error(f"❌ batch_update_settlement_progress 오류: {e}")
+        return 0
+
+
 def save_estimate_details(est_data, metadata=None):
     """
     견적상세 시트에 견적 정보를 저장합니다.

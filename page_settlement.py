@@ -75,7 +75,7 @@ def show(data):
 
 
 def _auto_check_event_completion(settlement_df):
-    """파견일자가 지난 '행사준비' 건 → '행사종료'로 자동 전환
+    """파견일자가 지난 '행사준비' 건 → '행사종료'로 자동 전환 (배치)
     
     Returns:
         int: 자동 전환된 건수
@@ -86,8 +86,10 @@ def _auto_check_event_completion(settlement_df):
         return 0
     
     today = today_kst().date()
-    updated = 0
+    import re
     
+    # 대상 건 수집 (API 호출 없이 DataFrame만 순회)
+    targets = []
     for _, row in settlement_df.iterrows():
         progress = str(row.get('진행상황', '')).strip()
         if progress != '행사준비':
@@ -99,7 +101,6 @@ def _auto_check_event_completion(settlement_df):
         
         # 파견일자 파싱 (다양한 형식 지원)
         event_date = None
-        import re
         # "2026-02-20 ~ 2026-02-22" 같은 범위에선 마지막 날짜 사용
         range_match = re.search(r'(\d{4}[-./]\d{1,2}[-./]\d{1,2})\s*[~\-]\s*(\d{4}[-./]\d{1,2}[-./]\d{1,2})', date_str)
         if range_match:
@@ -114,10 +115,14 @@ def _auto_check_event_completion(settlement_df):
         
         if event_date and event_date < today:
             inq_id = str(row.get('문의ID', '')).strip()
-            if inq_id and db.update_settlement_progress(inq_id, '행사종료'):
-                updated += 1
+            if inq_id:
+                targets.append((inq_id, '행사종료'))
     
-    return updated
+    if not targets:
+        return 0
+    
+    # 배치 1회로 일괄 업데이트
+    return db.batch_update_settlement_progress(targets)
 
 
 def show_settlement_overview():
