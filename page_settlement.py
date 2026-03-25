@@ -784,24 +784,30 @@ def update_payment_and_profit(inquiry_id, total_payment, supply_amount=None):
             except:
                 supply_amount = 0
         
+        # 배치 업데이트 준비 (update_cells 1회로 처리)
+        from gspread.cell import Cell
+        cells_to_update = []
+        
         # 지급액 업데이트
         if '지급액' in col_map:
-            wks.update_cell(target_row, col_map['지급액'], int(total_payment))
+            cells_to_update.append(Cell(row=target_row, col=col_map['지급액'], value=int(total_payment)))
         
         # 이익 자동 계산 (공급가액 - 지급액)
         if '이익' in col_map and supply_amount is not None:
             profit = int(supply_amount) - int(total_payment)
-            wks.update_cell(target_row, col_map['이익'], profit)
+            cells_to_update.append(Cell(row=target_row, col=col_map['이익'], value=profit))
         
         # ✅ 정산완료 자동 전환: 지급 완료 + 입금완료 → 정산완료
         if current_record and int(total_payment) > 0:
             deposit_status = str(current_record.get('입금여부', '')).strip()
             if deposit_status == '입금완료':
-                # 진행상황 컬럼 찾기
                 for i, h in enumerate(headers, 1):
                     if str(h).strip() == '진행상황':
-                        wks.update_cell(target_row, i, '정산완료')
+                        cells_to_update.append(Cell(row=target_row, col=i, value='정산완료'))
                         break
+        
+        if cells_to_update:
+            wks.update_cells(cells_to_update, value_input_option='RAW')
         
         return True
     except Exception as e:
