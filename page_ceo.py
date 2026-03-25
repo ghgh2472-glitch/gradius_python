@@ -741,7 +741,7 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
                         pass
 
     _today = today_kst()
-    _DEADLINE_DAYS = 14  # 행사종료 후 2주 이내 입금
+    _DEADLINE_DAYS = 13  # 행사종료 후 13일 이내 입금
 
     # 각 venue에 마감일 정보 부여
     for vd in venue_data_list:
@@ -776,7 +776,7 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
         return
 
     st.markdown(f"**미지급 합계: ₩{total_unpaid_amt:,}** ({len(all_unpaid)}명)")
-    st.caption("💡 행사종료 후 2주 이내 입금 기준 | 마감 임박순 정렬")
+    st.caption("💡 행사종료 후 13일 이내 입금 기준 | 마감 임박순 정렬")
     st.markdown("")
 
     # ── 현장별 렌더링 ──
