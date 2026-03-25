@@ -6,8 +6,8 @@ import pandas as pd
 import data_loader as db
 import utils_dashboard as ud
 import time
-from datetime import datetime
-from helpers import now_kst
+from datetime import datetime, timedelta
+from helpers import now_kst, today_kst
 
 
 # ==============================================================================
@@ -502,7 +502,8 @@ def show(data):
                                 tax_issued, tax_not_issued)
 
     with tab_pay:
-        _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_amt, dispatch_df)
+        df_inq = data.get('inq', pd.DataFrame())
+        _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_amt, dispatch_df, df_inq)
 
     with tab_deposit:
         _render_deposit_tab(settlement_df, settlement_overview)
@@ -707,7 +708,7 @@ def _render_tax_invoice_tab(settlement_df, not_issued_df, col_tax, col_company, 
 # ==============================================================================
 # 7. 인력비 지급 탭 — 팀 결제 명세서 + 개별 급여명세서
 # ==============================================================================
-def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_amt, dispatch_df):
+def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_amt, dispatch_df, df_inq=None):
     st.markdown('<div class="ceo-section">💸 인력비 지급 현황</div>', unsafe_allow_html=True)
 
     if not venue_data_list:
@@ -717,6 +718,47 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
             st.success("🎉 모든 인력 급여가 지급 완료되었습니다!")
             _show_done_summary(staff_done, staff_total)
         return
+
+    # ── 행사종료일 → 입금마감일 맵 구성 ──
+    _end_date_map = {}  # inq_id → 행사종료일 datetime
+    if df_inq is not None and not df_inq.empty:
+        _col_inq_id = _find_col(df_inq, ['문의ID', 'ID'])
+        _col_end = _find_col(df_inq, ['행사종료일', '종료일'])
+        if not _col_end:
+            _col_end = _find_col(df_inq, ['행사시작일', '시작일', '행사일시'])
+        if _col_inq_id and _col_end:
+            for _, _r in df_inq.iterrows():
+                _iid = str(_r.get(_col_inq_id, '')).strip()
+                _dval = str(_r.get(_col_end, '')).strip()
+                if _iid and _dval:
+                    try:
+                        # '~' 구분 날짜는 뒷부분(종료일) 사용
+                        if '~' in _dval:
+                            _dval = _dval.split('~')[-1].strip()
+                        _end_dt = datetime.strptime(_dval[:10], '%Y-%m-%d')
+                        _end_date_map[_iid] = _end_dt
+                    except:
+                        pass
+
+    _today = today_kst()
+    _DEADLINE_DAYS = 14  # 행사종료 후 2주 이내 입금
+
+    # 각 venue에 마감일 정보 부여
+    for vd in venue_data_list:
+        _end_dt = _end_date_map.get(vd['inq_id'])
+        if _end_dt:
+            _deadline = _end_dt + timedelta(days=_DEADLINE_DAYS)
+            _dday = (_deadline - _today).days
+            vd['_end_date'] = _end_dt
+            vd['_deadline'] = _deadline
+            vd['_dday'] = _dday
+        else:
+            vd['_end_date'] = None
+            vd['_deadline'] = None
+            vd['_dday'] = 9999  # 날짜 없으면 맨 뒤로
+
+    # ★ 입금마감일 가까운 순으로 정렬
+    venue_data_list = sorted(venue_data_list, key=lambda v: v['_dday'])
 
     # 전체 미지급 건 수
     all_unpaid = []
@@ -734,6 +776,7 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
         return
 
     st.markdown(f"**미지급 합계: ₩{total_unpaid_amt:,}** ({len(all_unpaid)}명)")
+    st.caption("💡 행사종료 후 2주 이내 입금 기준 | 마감 임박순 정렬")
     st.markdown("")
 
     # ── 현장별 렌더링 ──
@@ -751,10 +794,46 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
 
         venue_total = sum(cr['실수령'] for cr in venue_unpaid)
 
+        # ── 마감일 D-Day 라벨 ──
+        _vd_dday = vd.get('_dday', 9999)
+        _vd_deadline = vd.get('_deadline')
+        if _vd_deadline and _vd_dday != 9999:
+            _dl_str = _vd_deadline.strftime('%m/%d')
+            if _vd_dday < 0:
+                _dday_badge = f'🔴 마감 {abs(_vd_dday)}일 초과!'
+                _dday_color = '#DC2626'
+            elif _vd_dday == 0:
+                _dday_badge = '🔴 오늘 마감!'
+                _dday_color = '#DC2626'
+            elif _vd_dday <= 3:
+                _dday_badge = f'🟠 D-{_vd_dday} ({_dl_str}까지)'
+                _dday_color = '#EA580C'
+            elif _vd_dday <= 7:
+                _dday_badge = f'🟡 D-{_vd_dday} ({_dl_str}까지)'
+                _dday_color = '#D97706'
+            elif _vd_dday <= 14:
+                _dday_badge = f'🟢 D-{_vd_dday} ({_dl_str}까지)'
+                _dday_color = '#059669'
+            else:
+                _dday_badge = f'D-{_vd_dday} ({_dl_str}까지)'
+                _dday_color = '#6B7280'
+        else:
+            _dday_badge = ''
+            _dday_color = '#6B7280'
+
         # 현장 제목 + 이체 엑셀 다운로드 (미지급만)
         _venue_title_col, _venue_dl_col = st.columns([3, 1])
         with _venue_title_col:
-            st.markdown(f"#### 📍 {venue} ({len(venue_unpaid)}명 · ₩{venue_total:,})")
+            if _dday_badge:
+                st.markdown(
+                    f"#### 📍 {venue} ({len(venue_unpaid)}명 · ₩{venue_total:,})"
+                    f"  \n"
+                    f"<span style='font-size:13px;font-weight:700;color:{_dday_color};'>"
+                    f"📅 {_dday_badge}</span>",
+                    unsafe_allow_html=True
+                )
+            else:
+                st.markdown(f"#### 📍 {venue} ({len(venue_unpaid)}명 · ₩{venue_total:,})")
         with _venue_dl_col:
             import io as _io
             _venue_transfer = []
@@ -1016,13 +1095,30 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
             unpaid = [cr for cr in vd['calc_rows']
                       if cr['지급상태'] not in ('완료', '확인완료') and not cr['본사']]
             if unpaid:
+                _dl = vd.get('_deadline')
+                _dd = vd.get('_dday', 9999)
+                if _dl and _dd != 9999:
+                    if _dd < 0:
+                        _dl_label = f"🔴 {abs(_dd)}일 초과"
+                    elif _dd <= 3:
+                        _dl_label = f"🟠 D-{_dd}"
+                    elif _dd <= 7:
+                        _dl_label = f"🟡 D-{_dd}"
+                    else:
+                        _dl_label = f"🟢 D-{_dd}"
+                    _dl_date = _dl.strftime('%m/%d')
+                else:
+                    _dl_label = '-'
+                    _dl_date = '-'
                 summary_rows.append({
                     '현장명': vd['venue'],
+                    '입금마감': _dl_date,
+                    'D-Day': _dl_label,
                     '인원': len(unpaid),
                     '미지급합계': sum(cr['실수령'] for cr in unpaid),
                 })
         if summary_rows:
-            sdf = pd.DataFrame(summary_rows).sort_values('미지급합계', ascending=False).reset_index(drop=True)
+            sdf = pd.DataFrame(summary_rows).reset_index(drop=True)
             st.dataframe(sdf, use_container_width=True, hide_index=True,
                          column_config={"미지급합계": st.column_config.NumberColumn("💰 미지급합계", format="%d원")})
 
