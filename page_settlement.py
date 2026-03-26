@@ -132,6 +132,7 @@ def show_settlement_overview():
     try:
         dispatch_data = db.get_dispatch()
         settlement_df = dispatch_data.get('settlement', pd.DataFrame())
+        dispatch_df = dispatch_data.get('dispatch', pd.DataFrame())
     except Exception as e:
         st.error(f"정산 데이터 로드 실패: {e}")
         return
@@ -149,6 +150,25 @@ def show_settlement_overview():
     
     # 데이터 정리
     settlement_df = settlement_df.fillna('').copy()
+
+    # 배정인원 수 맵 (문의ID → 배정인원 수)
+    _assign_count_map = {}
+    if not dispatch_df.empty:
+        _d_inq_col = None
+        for _c in ['문의ID']:
+            if _c in dispatch_df.columns:
+                _d_inq_col = _c
+                break
+        if _d_inq_col:
+            _d_status_col = None
+            for _c in ['지급상태', '상태']:
+                if _c in dispatch_df.columns:
+                    _d_status_col = _c
+                    break
+            _d_filtered = dispatch_df.copy()
+            if _d_status_col:
+                _d_filtered = _d_filtered[~_d_filtered[_d_status_col].astype(str).str.strip().isin(['취소', '후보'])]
+            _assign_count_map = _d_filtered.groupby(_d_filtered[_d_inq_col].astype(str).str.strip()).size().to_dict()
     
     # 통계 계산
     has_supply = '공급가액' in settlement_df.columns
@@ -261,6 +281,11 @@ def show_settlement_overview():
                         _o_company = str(_or.get('업체', '')).strip()
                         _o_site = str(_or.get('현장명', '')).strip()
                         _o_status = str(_or.get('진행상황', '')).strip() if '진행상황' in _or.index else ''
+                        _o_date = str(_or.get('파견일자', '')).strip() if '파견일자' in _or.index else ''
+                        if _o_date in ('nan', 'None', ''):
+                            _o_date = ''
+                        _o_inq_id = str(_or.get('문의ID', '')).strip() if '문의ID' in _or.index else ''
+                        _o_assign_cnt = _assign_count_map.get(_o_inq_id, 0)
 
                         # 색상 결정
                         if _o_bal > 0 and _o_inv > 0 and _o_bal > _o_inv * 0.5:
@@ -288,6 +313,7 @@ def show_settlement_overview():
                         <div class="stl-card {_o_cls}{_sel_cls}">
                             <div class="card-client">{_o_company}</div>
                             <div class="card-event">{_o_site}</div>
+                            <div style="font-size:10px;color:#6b7280;margin-bottom:3px;">{('📅' + _o_date + '  ') if _o_date else ''}{'👥' + str(_o_assign_cnt) + '명' if _o_assign_cnt > 0 else ''}</div>
                             <span class="card-badge" style="background:{_o_badge_bg};">{_o_status if _o_status else '진행중'}</span>
                             <div class="card-amount {_o_amt_cls}">{_o_amt_txt}</div>
                         </div>
