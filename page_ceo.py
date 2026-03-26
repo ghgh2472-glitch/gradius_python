@@ -499,7 +499,7 @@ def show(data):
 
     with tab_tax:
         _render_tax_invoice_tab(settlement_df, not_issued_df, col_tax, col_company, col_inq_id,
-                                tax_issued, tax_not_issued)
+                                tax_issued, tax_not_issued, dispatch_df)
 
     with tab_pay:
         df_inq = data.get('inq', pd.DataFrame())
@@ -516,7 +516,7 @@ def show(data):
 # 6. 세금계산서 탭 상세
 # ==============================================================================
 def _render_tax_invoice_tab(settlement_df, not_issued_df, col_tax, col_company, col_inq_id,
-                            tax_issued, tax_not_issued):
+                            tax_issued, tax_not_issued, dispatch_df=None):
     st.markdown('<div class="ceo-section">📄 세금계산서 발행 현황</div>', unsafe_allow_html=True)
 
     if settlement_df.empty:
@@ -525,6 +525,105 @@ def _render_tax_invoice_tab(settlement_df, not_issued_df, col_tax, col_company, 
     if not col_tax or not col_company:
         st.warning("⚠️ 세금계산서 발행여부 또는 업체 컬럼을 찾을 수 없습니다.")
         return
+
+    # ── 배정기록에서 문의ID별 투입인력 요약 맵 구성 ──
+    _staff_summary_map = {}  # 문의ID → "행사스탭 5명 3일, 안내원 2명 2일"
+    if dispatch_df is not None and not dispatch_df.empty:
+        _d_inq = _find_col(dispatch_df, ['문의ID'])
+        _d_job = _find_col(dispatch_df, ['직무', '역할'])
+        _d_days = _find_col(dispatch_df, ['근무일수', '일수'])
+        _d_status = _find_col(dispatch_df, ['지급상태', '상태'])
+        if _d_inq and _d_job:
+            _d_active = dispatch_df.copy()
+            if _d_status:
+                _d_active = _d_active[~_d_active[_d_status].astype(str).str.strip().isin(['취소', '후보'])]
+            for _inq_id, _grp in _d_active.groupby(_d_active[_d_inq].astype(str).str.strip()):
+                if not _inq_id or _inq_id in ('nan', 'None', ''):
+                    continue
+                _job_summary = []
+                for _job, _jgrp in _grp.groupby(_grp[_d_job].astype(str).str.strip()):
+                    if not _job or _job in ('nan', 'None', ''):
+                        _job = '기타'
+                    _cnt = len(_jgrp)
+                    _days_val = ''
+                    if _d_days:
+                        _days_vals = _jgrp[_d_days].dropna().astype(str).str.strip()
+                        _days_vals = _days_vals[_days_vals != ''].unique()
+                        if len(_days_vals) > 0:
+                            try:
+                                _d = int(float(_days_vals[0]))
+                                if _d > 0:
+                                    _days_val = f' {_d}일'
+                            except:
+                                pass
+                    _job_summary.append(f"{_job} {_cnt}명{_days_val}")
+                _staff_summary_map[_inq_id] = ', '.join(_job_summary)
+
+    # ── 발행완료 이력 (상단 배치) ──
+    issued_df = settlement_df[
+        settlement_df[col_tax].astype(str).str.contains('발행|완료|O|yes', na=False, case=False)
+    ] if col_tax else pd.DataFrame()
+    if not issued_df.empty:
+        with st.expander(f"✅ 발행완료 이력 ({len(issued_df)}건)", expanded=False):
+            _styled_rows = []
+            for _, _ir in issued_df.iterrows():
+                _c = str(_ir.get(col_company, '')).strip() if col_company else ''
+                _s = str(_ir.get('현장명', '')).strip()
+                _d = str(_ir.get('파견일자', '')).strip()
+                _d = _d if _d not in ('nan', 'None', '') else ''
+                _sup = pd.to_numeric(_ir.get('공급가액', 0), errors='coerce')
+                _sup = 0 if pd.isna(_sup) else int(_sup)
+                _vat = pd.to_numeric(_ir.get('부가세', 0), errors='coerce')
+                _vat = 0 if pd.isna(_vat) else int(_vat)
+                _total = _sup + _vat
+                _biz = str(_ir.get('사업자번호', '')).strip()
+                _biz = _biz if _biz not in ('nan', 'None', '') else '-'
+                _styled_rows.append(
+                    f'<tr>'
+                    f'<td style="font-weight:700;">{_c}</td>'
+                    f'<td>{_s}</td>'
+                    f'<td>{_d}</td>'
+                    f'<td style="text-align:right;font-weight:600;">₩{_total:,}</td>'
+                    f'<td>{_biz}</td>'
+                    f'<td><span style="background:#D1FAE5;color:#065F46;padding:2px 8px;'
+                    f'border-radius:10px;font-size:12px;font-weight:600;">✅ 발행완료</span></td>'
+                    f'</tr>'
+                )
+            st.markdown(
+                f'<div style="overflow-x:auto;">'
+                f'<table style="width:100%;border-collapse:collapse;font-size:13px;">'
+                f'<thead><tr style="background:#F9FAFB;border-bottom:2px solid #E5E7EB;">'
+                f'<th style="padding:10px 8px;text-align:left;">업체명</th>'
+                f'<th style="padding:10px 8px;text-align:left;">현장명</th>'
+                f'<th style="padding:10px 8px;text-align:left;">파견일자</th>'
+                f'<th style="padding:10px 8px;text-align:right;">청구금액</th>'
+                f'<th style="padding:10px 8px;text-align:left;">사업자번호</th>'
+                f'<th style="padding:10px 8px;text-align:left;">상태</th>'
+                f'</tr></thead><tbody>'
+                + ''.join(
+                    f'<tr style="border-bottom:1px solid #F3F4F6;{"background:#F9FAFB;" if i % 2 == 1 else ""}">'
+                    + r[4:]  # strip the existing <tr>
+                    for i, r in enumerate(_styled_rows)
+                )
+                + f'</tbody></table></div>',
+                unsafe_allow_html=True,
+            )
+            import io as _io_tax
+            _tax_buf = _io_tax.BytesIO()
+            export_cols = [c for c in [col_inq_id, col_company, '현장명', '파견일자', '청구금액',
+                                        '공급가액', '부가세', '사업자번호', '대표자', '이메일',
+                                        '법인명', '사업장주소', col_tax]
+                           if c and c in issued_df.columns]
+            issued_df[export_cols].to_excel(_tax_buf, index=False, sheet_name='발행완료')
+            _tax_buf.seek(0)
+            st.download_button(
+                f"📥 발행완료 엑셀 다운로드 ({len(issued_df)}건)",
+                data=_tax_buf.getvalue(),
+                file_name=f"세금계산서_발행완료_{now_kst().strftime('%Y%m%d')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                key="ceo_tax_history_dl",
+            )
 
     st.link_button(
         "🏛️ 홈택스 세금계산서 발행 바로가기",
@@ -619,6 +718,20 @@ def _render_tax_invoice_tab(settlement_df, not_issued_df, col_tax, col_company, 
         # 받은금액 포맷
         paid_str = _fmt(paid_val)
 
+        # 잔액 계산
+        try:
+            _inv_num = int(float(str(row.get('청구금액', 0)).replace(',', '').strip()) or 0)
+            _paid_num = int(float(str(paid_val).replace(',', '').strip()) or 0) if paid_val and paid_val not in ('nan', 'None', '') else 0
+            _balance_num = max(0, _inv_num - _paid_num)
+            balance_str = f"₩{_balance_num:,}" if _balance_num > 0 else ''
+        except Exception:
+            _balance_num = 0
+            balance_str = ''
+
+        # 투입인력 요약
+        _inq_id_val = str(row.get('문의ID', '')).strip() if '문의ID' in row.index else ''
+        staff_summary = _staff_summary_map.get(_inq_id_val, '')
+
         col_left, col_right = st.columns([4, 1])
         with col_left:
             biz_lines = []
@@ -651,6 +764,8 @@ def _render_tax_invoice_tab(settlement_df, not_issued_df, col_tax, col_company, 
                 money_parts.append(f"💰 청구금액(합계): <b>{amount_str}</b>")
             if paid_str:
                 money_parts.append(f"✅ 받은금액: <b>{paid_str}</b>")
+            if balance_str:
+                money_parts.append(f"🔴 잔액: <b style='color:#DC2626;'>{balance_str}</b>")
 
             missing = []
             if not biz_num or biz_num in ('nan', 'None', ''):
@@ -674,6 +789,8 @@ def _render_tax_invoice_tab(settlement_df, not_issued_df, col_tax, col_company, 
                 event_lines.append(f"📅 파견일자: <b>{event_date_val}</b>")
             if venue_addr_val:
                 event_lines.append(f"📍 현장주소: <b>{venue_addr_val}</b>")
+            if staff_summary:
+                event_lines.append(f"👥 투입인력: <b>{staff_summary}</b>")
             event_block = "<br/>".join(event_lines) if event_lines else ""
 
             title = f"<b style='font-size:18px;'>{company}</b>"
@@ -721,41 +838,76 @@ def _render_tax_invoice_tab(settlement_df, not_issued_df, col_tax, col_company, 
                 use_container_width=True,
             )
 
-    # ── 발행완료 이력 + 엑셀 다운로드 ──
-    issued_df = settlement_df[
-        settlement_df[col_tax].astype(str).str.contains('발행|완료|O|yes', na=False, case=False)
-    ] if col_tax else pd.DataFrame()
-    if not issued_df.empty:
-        st.markdown("---")
-        with st.expander(f"✅ 발행완료 이력 ({len(issued_df)}건)", expanded=False):
-            display_cols = [c for c in [col_inq_id, col_company, '현장명', '파견일자', '청구금액',
-                                         '공급가액', '부가세', col_tax, '사업자번호', '이메일']
-                            if c and c in issued_df.columns]
-            if display_cols:
-                st.dataframe(issued_df[display_cols], use_container_width=True, hide_index=True)
-            import io as _io_tax
-            _tax_buf = _io_tax.BytesIO()
-            export_cols = [c for c in [col_inq_id, col_company, '현장명', '파견일자', '청구금액',
-                                        '공급가액', '부가세', '사업자번호', '대표자', '이메일',
-                                        '법인명', '사업장주소', col_tax]
-                           if c and c in issued_df.columns]
-            issued_df[export_cols].to_excel(_tax_buf, index=False, sheet_name='발행완료')
-            _tax_buf.seek(0)
-            st.download_button(
-                f"📥 발행완료 목록 엑셀 다운로드 ({len(issued_df)}건)",
-                data=_tax_buf.getvalue(),
-                file_name=f"세금계산서_발행완료_{now_kst().strftime('%Y%m%d')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-                key="ceo_tax_history_dl",
-            )
-
 
 # ==============================================================================
 # 7. 인력비 지급 탭 — 팀 결제 명세서 + 개별 급여명세서
 # ==============================================================================
 def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_amt, dispatch_df, df_inq=None):
     st.markdown('<div class="ceo-section">💸 인력비 지급 현황</div>', unsafe_allow_html=True)
+
+    # ── 지급완료 이력 (상단 배치) ──
+    all_done_for_history = []
+    for vd in venue_data_list:
+        for cr in vd['calc_rows']:
+            if cr['지급상태'] in ('완료', '확인완료') and not cr['본사']:
+                all_done_for_history.append({
+                    '현장명': vd['venue'],
+                    '이름': cr['이름'],
+                    '직무': cr['직무'],
+                    '총액': cr['총액'],
+                    '공제': cr['공제'],
+                    '실수령': cr['실수령'],
+                    '은행': cr.get('은행', ''),
+                    '계좌': cr.get('계좌', ''),
+                    '공제율': cr.get('공제율', ''),
+                })
+    if all_done_for_history:
+        with st.expander(f"✅ 지급완료 이력 ({len(all_done_for_history)}명)", expanded=False):
+            _pay_rows_html = []
+            for i, _dr in enumerate(all_done_for_history):
+                _bg = 'background:#F9FAFB;' if i % 2 == 1 else ''
+                _pay_rows_html.append(
+                    f'<tr style="border-bottom:1px solid #F3F4F6;{_bg}">'
+                    f'<td style="padding:8px;font-weight:600;">{_dr["현장명"]}</td>'
+                    f'<td style="padding:8px;">{_dr["이름"]}</td>'
+                    f'<td style="padding:8px;">{_dr["직무"]}</td>'
+                    f'<td style="padding:8px;text-align:right;">₩{_dr["총액"]:,}</td>'
+                    f'<td style="padding:8px;text-align:right;color:#DC2626;">-₩{_dr["공제"]:,}</td>'
+                    f'<td style="padding:8px;text-align:right;font-weight:700;color:#059669;">₩{_dr["실수령"]:,}</td>'
+                    f'<td style="padding:8px;">{_dr["은행"]} {_dr["계좌"]}</td>'
+                    f'<td style="padding:8px;"><span style="background:#D1FAE5;color:#065F46;padding:2px 8px;'
+                    f'border-radius:10px;font-size:12px;font-weight:600;">✅ 완료</span></td>'
+                    f'</tr>'
+                )
+            st.markdown(
+                f'<div style="overflow-x:auto;">'
+                f'<table style="width:100%;border-collapse:collapse;font-size:13px;">'
+                f'<thead><tr style="background:#F9FAFB;border-bottom:2px solid #E5E7EB;">'
+                f'<th style="padding:8px;text-align:left;">현장명</th>'
+                f'<th style="padding:8px;text-align:left;">이름</th>'
+                f'<th style="padding:8px;text-align:left;">직무</th>'
+                f'<th style="padding:8px;text-align:right;">총액</th>'
+                f'<th style="padding:8px;text-align:right;">공제</th>'
+                f'<th style="padding:8px;text-align:right;">실수령</th>'
+                f'<th style="padding:8px;text-align:left;">계좌</th>'
+                f'<th style="padding:8px;text-align:left;">상태</th>'
+                f'</tr></thead><tbody>'
+                + ''.join(_pay_rows_html)
+                + f'</tbody></table></div>',
+                unsafe_allow_html=True,
+            )
+            import io as _io_pay
+            _pay_buf = _io_pay.BytesIO()
+            pd.DataFrame(all_done_for_history).to_excel(_pay_buf, index=False, sheet_name='지급완료')
+            _pay_buf.seek(0)
+            st.download_button(
+                f"📥 지급완료 엑셀 다운로드 ({len(all_done_for_history)}명)",
+                data=_pay_buf.getvalue(),
+                file_name=f"인력비_지급완료_{now_kst().strftime('%Y%m%d')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                key="ceo_pay_history_dl",
+            )
 
     if not venue_data_list:
         if dispatch_df.empty:
@@ -1168,45 +1320,6 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
             st.dataframe(sdf, use_container_width=True, hide_index=True,
                          column_config={"미지급합계": st.column_config.NumberColumn("💰 미지급합계", format="%d원")})
 
-    # ── 지급완료 이력 + 엑셀 다운로드 ──
-    all_done = []
-    for vd in venue_data_list:
-        for cr in vd['calc_rows']:
-            if cr['지급상태'] in ('완료', '확인완료') and not cr['본사']:
-                all_done.append({
-                    '현장명': vd['venue'],
-                    '이름': cr['이름'],
-                    '직무': cr['직무'],
-                    '총액': cr['총액'],
-                    '공제': cr['공제'],
-                    '실수령': cr['실수령'],
-                    '은행': cr.get('은행', ''),
-                    '계좌': cr.get('계좌', ''),
-                    '공제율': cr.get('공제율', ''),
-                })
-    if all_done:
-        st.markdown("---")
-        with st.expander(f"✅ 지급완료 이력 ({len(all_done)}명)", expanded=False):
-            done_df = pd.DataFrame(all_done)
-            st.dataframe(done_df, use_container_width=True, hide_index=True,
-                         column_config={
-                             '총액': st.column_config.NumberColumn('총액', format="₩%d"),
-                             '실수령': st.column_config.NumberColumn('실수령', format="₩%d"),
-                             '공제': st.column_config.NumberColumn('공제', format="₩%d"),
-                         })
-            import io as _io_pay
-            _pay_buf = _io_pay.BytesIO()
-            done_df.to_excel(_pay_buf, index=False, sheet_name='지급완료')
-            _pay_buf.seek(0)
-            st.download_button(
-                f"📥 지급완료 목록 엑셀 다운로드 ({len(all_done)}명)",
-                data=_pay_buf.getvalue(),
-                file_name=f"인력비_지급완료_{now_kst().strftime('%Y%m%d')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-                key="ceo_pay_history_dl",
-            )
-
 
 def _find_member_aid(dispatch_df, inq_id, member_name):
     """배정기록에서 팀원의 배정ID 찾기"""
@@ -1299,6 +1412,67 @@ def _render_deposit_tab(settlement_df, overview):
             col_tax_issued = col
             break
 
+    # ── 입금완료 이력 (상단 배치) ──
+    df_completed = df[(df['_balance'] <= 0) & (df['_paid'] > 0)]
+    if not df_completed.empty:
+        with st.expander(f"✅ 입금완료 이력 ({len(df_completed)}건)", expanded=False):
+            _dep_rows_html = []
+            for i, (_, _dr) in enumerate(df_completed.iterrows()):
+                _dc = str(_dr.get(col_company, '')).strip() if col_company else ''
+                _ds = str(_dr.get(col_site, '')).strip() if col_site else ''
+                _dd = str(_dr.get(col_date, '')).strip() if col_date else ''
+                _dd = _dd if _dd not in ('nan', 'None', '') else ''
+                _dinv = int(_dr['_invoice'])
+                _dpaid = int(_dr['_paid'])
+                _dprog = str(_dr.get('_progress', '')).strip()
+                _bg = 'background:#F9FAFB;' if i % 2 == 1 else ''
+                _dep_rows_html.append(
+                    f'<tr style="border-bottom:1px solid #F3F4F6;{_bg}">'
+                    f'<td style="padding:8px;font-weight:600;">{_dc}</td>'
+                    f'<td style="padding:8px;">{_ds}</td>'
+                    f'<td style="padding:8px;">{_dd}</td>'
+                    f'<td style="padding:8px;text-align:right;">₩{_dinv:,}</td>'
+                    f'<td style="padding:8px;text-align:right;font-weight:700;color:#059669;">₩{_dpaid:,}</td>'
+                    f'<td style="padding:8px;">{_dprog}</td>'
+                    f'<td style="padding:8px;"><span style="background:#D1FAE5;color:#065F46;padding:2px 8px;'
+                    f'border-radius:10px;font-size:12px;font-weight:600;">✅ 완납</span></td>'
+                    f'</tr>'
+                )
+            st.markdown(
+                f'<div style="overflow-x:auto;">'
+                f'<table style="width:100%;border-collapse:collapse;font-size:13px;">'
+                f'<thead><tr style="background:#F9FAFB;border-bottom:2px solid #E5E7EB;">'
+                f'<th style="padding:8px;text-align:left;">업체명</th>'
+                f'<th style="padding:8px;text-align:left;">현장명</th>'
+                f'<th style="padding:8px;text-align:left;">파견일자</th>'
+                f'<th style="padding:8px;text-align:right;">청구금액</th>'
+                f'<th style="padding:8px;text-align:right;">받은금액</th>'
+                f'<th style="padding:8px;text-align:left;">진행상황</th>'
+                f'<th style="padding:8px;text-align:left;">상태</th>'
+                f'</tr></thead><tbody>'
+                + ''.join(_dep_rows_html)
+                + f'</tbody></table></div>',
+                unsafe_allow_html=True,
+            )
+            import io as _io_dep
+            _dep_buf = _io_dep.BytesIO()
+            export_cols = [c for c in [col_inq, col_company, col_site, col_date,
+                                        col_supply, col_tax, col_paid_c, col_progress]
+                           if c and c in df_completed.columns]
+            if export_cols:
+                df_completed[export_cols].to_excel(_dep_buf, index=False, sheet_name='입금완료')
+            else:
+                df_completed.to_excel(_dep_buf, index=False, sheet_name='입금완료')
+            _dep_buf.seek(0)
+            st.download_button(
+                f"📥 입금완료 엑셀 다운로드 ({len(df_completed)}건)",
+                data=_dep_buf.getvalue(),
+                file_name=f"업체입금_완료_{now_kst().strftime('%Y%m%d')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                key="ceo_deposit_history_dl",
+            )
+
     # ── 필터 ──
     filter_col, _ = st.columns([4, 6])
     with filter_col:
@@ -1371,9 +1545,9 @@ def _render_deposit_tab(settlement_df, overview):
         if col_tax_issued:
             _tax_val = str(row.get(col_tax_issued, '')).strip()
             if _tax_val and any(k in _tax_val for k in ('발행', '완료', 'O', 'Yes', 'yes')):
-                _detail_parts.append("📨계산서발행")
+                _detail_parts.append("✅계산서 발행완료")
             else:
-                _detail_parts.append("⚠️계산서미발행")
+                _detail_parts.append("⚠️계산서 미발행")
         _expander_title = f"{' '.join(_title_parts)}  |  {'  |  '.join(_detail_parts)}"
 
         with st.expander(_expander_title):
@@ -1456,32 +1630,6 @@ def _render_deposit_tab(settlement_df, overview):
                             st.rerun()
                     else:
                         st.warning("입금 금액을 입력하세요.")
-
-    # ── 입금완료 이력 엑셀 다운로드 ──
-    df_completed = df[(df['_balance'] <= 0) & (df['_paid'] > 0)]
-    if not df_completed.empty:
-        st.markdown("---")
-        with st.expander(f"✅ 입금완료 이력 ({len(df_completed)}건)", expanded=False):
-            export_cols = [c for c in [col_inq, col_company, col_site, col_date,
-                                        col_supply, col_tax, col_paid_c, col_progress]
-                           if c and c in df_completed.columns]
-            if export_cols:
-                st.dataframe(df_completed[export_cols], use_container_width=True, hide_index=True)
-            import io as _io_dep
-            _dep_buf = _io_dep.BytesIO()
-            if export_cols:
-                df_completed[export_cols].to_excel(_dep_buf, index=False, sheet_name='입금완료')
-            else:
-                df_completed.to_excel(_dep_buf, index=False, sheet_name='입금완료')
-            _dep_buf.seek(0)
-            st.download_button(
-                f"📥 입금완료 목록 엑셀 다운로드 ({len(df_completed)}건)",
-                data=_dep_buf.getvalue(),
-                file_name=f"업체입금_완료_{now_kst().strftime('%Y%m%d')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-                key="ceo_deposit_history_dl",
-            )
 
 
 # ==============================================================================
