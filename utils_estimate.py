@@ -268,13 +268,13 @@ def get_customer_quote_html(df, client_info, supplier_info, supply_amt, vat_yn, 
             _display_name = _item_name.replace('[지원]', '').strip()
             support_rows += f"""
         <tr style="background:#f0fdf4;">
-            <td style="text-align:center; padding:4px 6px; white-space:pre-line; color:#15803d;">★ {_display_name}</td>
+            <td style="text-align:center; padding:4px 6px; white-space:pre-line; color:#15803d;">{_display_name}</td>
             <td style="text-align:center; color:#555; font-size:12px;">{spec}</td>
             <td style="text-align:center;">{qty}</td>
             <td style="text-align:center;">{days}</td>
             <td style="text-align:right; padding-right:10px; color:#15803d;">{_price_html}</td>
             <td style="text-align:right; padding-right:10px; color:#15803d;">{_amt_html}</td>
-            <td style="text-align:center; padding:4px 5px; font-size:11px; color:#15803d;">무료 지원</td>
+            <td style="text-align:center; padding:4px 5px; font-size:10px; color:#15803d; font-weight:bold;">본사 지원</td>
         </tr>
         """
         else:
