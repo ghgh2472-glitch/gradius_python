@@ -310,7 +310,7 @@ def get_customer_quote_html(df, client_info, supplier_info, supply_amt, vat_yn, 
                 _note_disp = _meal_note.replace('\n', '<br>')
                 client_provided_rows += f"""
         <tr style="background:#eff6ff;">
-            <td style="text-align:center; padding:4px 6px; color:#1e40af;">📋 {item}</td>
+            <td style="text-align:center; padding:4px 6px; color:#1e40af;">{item}</td>
             <td style="text-align:center; color:#1e40af; font-size:12px;">{_spec_disp}</td>
             <td style="text-align:center;">{_meal_info}</td>
             <td style="text-align:center;">{_c_days}</td>
