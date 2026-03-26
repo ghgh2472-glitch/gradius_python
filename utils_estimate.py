@@ -238,9 +238,10 @@ def get_customer_quote_html(df, client_info, supplier_info, supply_amt, vat_yn, 
     vat = int(total_after_discount * 0.1) if vat_yn else 0
     grand_total = total_after_discount + vat
         
-    rows = ""
+    # ── 인력 품목 / [지원] 품목 분리 ──
+    labor_rows = ""
+    support_rows = ""
     for _, r in df.iterrows():
-        # 빈 행 자동 스킵 (품목명이 없으면 표시 안 함)
         _item_name = str(r.get('품목', '')).strip()
         if not _item_name or _item_name in ('nan', 'None'):
             continue
@@ -250,9 +251,7 @@ def get_customer_quote_html(df, client_info, supplier_info, supply_amt, vat_yn, 
         amt = safe_int(r.get('매출합계', 0))
         spec = r.get('규격', '')
         note = r.get('비고', '')
-        # 품목별 할인액 표시 (단가 기준 할인)
         _disc_amt = safe_int(r.get('할인액', r.get('할인율', 0)))
-        # 할인 시 단가에 빗금 + 할인된 단가 표시
         if _disc_amt > 0 and price > 0:
             _discounted_price = max(0, price - _disc_amt)
             _price_html = f'<del style="color:#999;font-size:11px;">{price:,}</del><br><span style="color:#c2410c;font-weight:bold;">{_discounted_price:,}</span>'
@@ -264,7 +263,22 @@ def get_customer_quote_html(df, client_info, supplier_info, supply_amt, vat_yn, 
             _price_html = f'{price:,}'
             _amt_html = f'{amt:,}'
 
-        rows += f"""
+        _is_support = _item_name.startswith('[지원]')
+        if _is_support:
+            _display_name = _item_name.replace('[지원]', '').strip()
+            support_rows += f"""
+        <tr style="background:#f0fdf4;">
+            <td style="text-align:center; padding:4px 6px; white-space:pre-line; color:#15803d;">★ {_display_name}</td>
+            <td style="text-align:center; color:#555; font-size:12px;">{spec}</td>
+            <td style="text-align:center;">{qty}</td>
+            <td style="text-align:center;">{days}</td>
+            <td style="text-align:right; padding-right:10px; color:#15803d;">{_price_html}</td>
+            <td style="text-align:right; padding-right:10px; color:#15803d;">{_amt_html}</td>
+            <td style="text-align:center; padding:4px 5px; font-size:11px; color:#15803d;">무료 지원</td>
+        </tr>
+        """
+        else:
+            labor_rows += f"""
         <tr>
             <td style="text-align:center; padding:4px 6px; white-space:pre-line;">{_item_name.replace(chr(10), '<br>')}</td>
             <td style="text-align:center; color:#555; font-size:12px;">{spec}</td>
@@ -276,8 +290,9 @@ def get_customer_quote_html(df, client_info, supplier_info, supply_amt, vat_yn, 
         </tr>
         """
     
-    # 부대비용 행 추가 (품목과 동일한 컬럼 구조로 표시)
+    # ── 부대비용 행 (의뢰사제공 / 일반 구분) ──
     additional_rows = ""
+    client_provided_rows = ""
     if additional_costs_df is not None and not additional_costs_df.empty:
         for _, r in additional_costs_df.iterrows():
             item = r.get('항목', '')
@@ -287,44 +302,45 @@ def get_customer_quote_html(df, client_info, supplier_info, supply_amt, vat_yn, 
             _c_days = safe_int(r.get('일수', 1))
             _c_unit = safe_int(r.get('단가', 0))
             _spec_disp = ''
-            # 의뢰사제공 특수 표시 (비고에 '의뢰사제공|1인 N식|안내문구' 형식)
             if '의뢰사제공' in note:
                 _parts = note.split('|')
                 _meal_info = _parts[1] if len(_parts) > 1 else '1인 1식'
                 _meal_note = _parts[2] if len(_parts) > 2 else '미제공시 1식당\n1만원 추가청구'
                 _spec_disp = '의뢰사제공'
-                _qty_disp = _meal_info
-                _days_disp = str(_c_days)
-                _unit_disp = '-'
-                _cost_disp = '-'
                 _note_disp = _meal_note.replace('\n', '<br>')
-            elif _c_unit == 0:
-                _qty_disp = str(_c_qty)
-                _days_disp = str(_c_days)
-                _unit_disp = '무료'
-                _cost_disp = '무료'
-                _note_disp = note
+                client_provided_rows += f"""
+        <tr style="background:#eff6ff;">
+            <td style="text-align:center; padding:4px 6px; color:#1e40af;">📋 {item}</td>
+            <td style="text-align:center; color:#1e40af; font-size:12px;">{_spec_disp}</td>
+            <td style="text-align:center;">{_meal_info}</td>
+            <td style="text-align:center;">{_c_days}</td>
+            <td style="text-align:right; padding-right:10px;">-</td>
+            <td style="text-align:right; padding-right:10px; font-weight:bold;">-</td>
+            <td style="text-align:center; padding:4px 5px; font-size:11px;">{_note_disp}</td>
+        </tr>
+        """
             else:
-                _qty_disp = str(_c_qty)
-                _days_disp = str(_c_days)
-                _unit_disp = f'{_c_unit:,}'
-                _cost_disp = f'{cost:,}'
-                _note_disp = note
-            additional_rows += f"""
+                if _c_unit == 0:
+                    _unit_disp = '무료'
+                    _cost_disp = '무료'
+                else:
+                    _unit_disp = f'{_c_unit:,}'
+                    _cost_disp = f'{cost:,}'
+                additional_rows += f"""
         <tr style="background:#fef3c7;">
-            <td style="text-align:center; padding:4px 6px;">[부대] {item}</td>
+            <td style="text-align:center; padding:4px 6px;">{item}</td>
             <td style="text-align:center; color:#555; font-size:12px;">{_spec_disp}</td>
-            <td style="text-align:center;">{_qty_disp}</td>
-            <td style="text-align:center;">{_days_disp}</td>
+            <td style="text-align:center;">{_c_qty}</td>
+            <td style="text-align:center;">{_c_days}</td>
             <td style="text-align:right; padding-right:10px;">{_unit_disp}</td>
             <td style="text-align:right; padding-right:10px; font-weight:bold;">{_cost_disp}</td>
             <td style="text-align:center; padding:4px 5px; font-size:11px;">{note}</td>
         </tr>
         """
     
-    # 빈 행 패딩 제거 — 실제 품목만 표시
+    # ── 조립: 인력 → 지원 → 소계 → 부대품목 → 의뢰사제공 → 부대합계 → 할인 → 총합계 ──
+    rows = labor_rows + support_rows
     
-    # 행 합계
     rows += f"""
     <tr style="background:#f3f4f6; font-weight:bold;">
         <td colspan="5" style="text-align:right; padding-right:10px;">소계:</td>
@@ -333,22 +349,33 @@ def get_customer_quote_html(df, client_info, supplier_info, supply_amt, vat_yn, 
     </tr>
     """
     
-    # 부대비용이 있으면 추가
-    if additional_total > 0:
-        rows += f"""
+    if additional_total > 0 or additional_rows or client_provided_rows:
+        rows += additional_rows + client_provided_rows
+        if additional_total > 0:
+            rows += f"""
     <tr style="background:#fef3c7; font-weight:bold;">
         <td colspan="5" style="text-align:right; padding-right:10px;">부대비용 합계:</td>
         <td style="text-align:right; padding-right:10px; color:#c2410c;">{additional_total:,}</td>
         <td></td>
     </tr>
-    <tr style="background:#f0f0f0; font-weight:bold;">
-        <td colspan="5" style="text-align:right; padding-right:10px;">합계 (소계+부대):</td>
-        <td style="text-align:right; padding-right:10px;">{total_with_additional:,}</td>
+    """
+    
+    if discount > 0:
+        rows += f"""
+    <tr style="background:#fff5f5; font-weight:bold;">
+        <td colspan="5" style="text-align:right; padding-right:10px; color:#dc2626;">할인:</td>
+        <td style="text-align:right; padding-right:10px; color:#dc2626;">-{discount:,}</td>
         <td></td>
     </tr>
     """
     
-    rows += additional_rows
+    rows += f"""
+    <tr style="background:#e5e7eb; font-weight:bold; font-size:13px;">
+        <td colspan="5" style="text-align:right; padding-right:10px;">총 합계:</td>
+        <td style="text-align:right; padding-right:10px;">{total_with_additional - discount:,}</td>
+        <td></td>
+    </tr>
+    """
 
     footer_img_tag = ""
     if footer_img_base64:
