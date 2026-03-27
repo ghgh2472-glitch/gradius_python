@@ -1026,7 +1026,7 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
                 st.markdown(
                     f"#### 📍 {venue} ({len(venue_unpaid)}명 · ₩{venue_total:,})"
                     f"  \n"
-                    f"<span style='font-size:13px;font-weight:700;color:{_dday_color};'>"
+                    f"<span style='font-size:16px;font-weight:700;color:{_dday_color};'>"
                     f"📅 {_dday_badge}</span>",
                     unsafe_allow_html=True
                 )
@@ -1223,7 +1223,7 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
                         time.sleep(1)
                         st.rerun()
                 elif leader_cr['지급상태'] == '미저장':
-                    st.caption("📝 인사담당자의 컨펌이 필요합니다")
+                    st.markdown("<span style='font-size:15px; font-weight:700; color:#b45309;'>📝 인사담당자의 컨펌이 필요합니다</span>", unsafe_allow_html=True)
 
         # ── 개별 급여명세서 (팀장 이외) ──
         individual = [cr for cr in venue_unpaid if not cr['팀코드']]
@@ -1282,7 +1282,7 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
                             time.sleep(1)
                             st.rerun()
                     elif pst == '미저장':
-                        st.caption("📝 인사담당자의 컨펌이 필요합니다")
+                        st.markdown("<span style='font-size:15px; font-weight:700; color:#b45309;'>📝 인사담당자의 컨펌이 필요합니다</span>", unsafe_allow_html=True)
 
         st.markdown("---")
 
