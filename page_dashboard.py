@@ -165,8 +165,8 @@ def show(data):
     _type_nav_map = {
         'unpaid': '대표님',
         'upcoming': '인원',
-        'pending': '견적',
-        'stale': '견적',
+        'pending': '계약',
+        'stale': '계약',
         'profit': '정산',
         'team': '인원',
     }
@@ -219,8 +219,8 @@ def show(data):
                     _nav_labels = {
                         'unpaid': '💰 업체 입금관리로 이동',
                         'upcoming': '👥 인력배정 현황으로 이동',
-                        'pending': '📝 견적통합관리로 이동',
-                        'stale': '📝 견적통합관리로 이동',
+                        'pending': '� 계약 관리 및 승인으로 이동',
+                        'stale': '📋 계약 관리 및 승인으로 이동',
                         'profit': '🧾 정산관리로 이동',
                         'team': '👥 인력배정으로 이동',
                     }

@@ -502,8 +502,8 @@ def generate_smart_briefing(df_inq, df_dispatch, df_settlement):
             'detail_rows': detail_rows,
         })
     
-    # 2️⃣ 곧 나갈 현장 (D-3) — 체결 이후만
-    upcoming = get_upcoming_dispatch_info(df_dispatch, df_inq, days=3)
+    # 2️⃣ 곧 나갈 현장 (D-10) — 체결 이후만
+    upcoming = get_upcoming_dispatch_info(df_dispatch, df_inq, days=10)
     if not upcoming.empty:
         detail_rows = []
         for _, row in upcoming.iterrows():
@@ -537,7 +537,7 @@ def generate_smart_briefing(df_inq, df_dispatch, df_settlement):
         briefing_items.append({
             'type': 'upcoming',
             'title': f"🔥 곧 나갈 현장 {len(upcoming)}건",
-            'html': f"🔥 <b>곧 나갈 현장 {len(upcoming)}건 (D-3 이내)</b><br/>" + " / ".join(summary_parts),
+            'html': f"🔥 <b>곧 나갈 현장 {len(upcoming)}건 (D-10 이내)</b><br/>" + " / ".join(summary_parts),
             'detail_rows': detail_rows,
         })
     
