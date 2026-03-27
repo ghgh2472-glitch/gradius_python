@@ -1667,8 +1667,10 @@ def _render_profit_tab(settlement_df, payment_df):
 
     # ── payment_df에서 문의ID별 소계 합산 (본사인원 자동 제외) ──
     _hq_names_profit = [s['이름'] for s in db.HQ_STAFF] if hasattr(db, 'HQ_STAFF') else []
-    cost_map = {}  # 문의ID → 소계합산
-    staff_map = {}  # 문의ID → [{이름, 소계}, ...]
+    cost_map = {}  # 문의ID → 소계합산 (본사 제외)
+    staff_map = {}  # 문의ID → [{이름, 소계}, ...]  (외부만)
+    hq_staff_map = {}  # 문의ID → [{이름, 소계, 직무}, ...]  (본사만)
+    _hq_role_map = {s['이름']: s.get('직무', '') for s in db.HQ_STAFF} if hasattr(db, 'HQ_STAFF') else {}
     if not payment_df.empty:
         p_inq = _find_col(payment_df, ['문의ID'])
         p_subtotal = _find_col(payment_df, ['소계'])
@@ -1679,14 +1681,17 @@ def _render_profit_tab(settlement_df, payment_df):
                 if not inq_id or inq_id in ('nan', 'None', ''):
                     continue
                 name = str(pr.get(p_name, '')).strip() if p_name else ''
-                # 본사인원은 비용에서 제외
-                if name in _hq_names_profit:
-                    continue
                 sub = int(pd.to_numeric(pr.get(p_subtotal, 0), errors='coerce') or 0)
-                cost_map[inq_id] = cost_map.get(inq_id, 0) + sub
-                if inq_id not in staff_map:
-                    staff_map[inq_id] = []
-                staff_map[inq_id].append({'이름': name, '소계': sub})
+                if name in _hq_names_profit:
+                    # 본사인원: 비용 제외, 별도 리스트에 수집
+                    if inq_id not in hq_staff_map:
+                        hq_staff_map[inq_id] = []
+                    hq_staff_map[inq_id].append({'이름': name, '소계': sub, '직무': _hq_role_map.get(name, '')})
+                else:
+                    cost_map[inq_id] = cost_map.get(inq_id, 0) + sub
+                    if inq_id not in staff_map:
+                        staff_map[inq_id] = []
+                    staff_map[inq_id].append({'이름': name, '소계': sub})
 
     # ── 프로젝트별 수익 계산 ──
     profit_rows = []
@@ -1707,6 +1712,7 @@ def _render_profit_tab(settlement_df, payment_df):
             'profit': profit,
             'margin': margin,
             'staffs': staff_map.get(inq_id, []),
+            'hq_staffs': hq_staff_map.get(inq_id, []),
         })
 
     # 수익 내림차순 정렬
@@ -1833,6 +1839,7 @@ def _render_profit_tab(settlement_df, payment_df):
 
             # 인력별 지급 내역
             staffs = p['staffs']
+            hq_staffs = p.get('hq_staffs', [])
             if staffs:
                 st.markdown("---")
                 st.markdown(f"**👥 인력별 지급 내역** ({len(staffs)}명)")
@@ -1847,5 +1854,30 @@ def _render_profit_tab(settlement_df, payment_df):
                     use_container_width=True,
                     hide_index=True,
                 )
-            else:
+            elif not hq_staffs:
                 st.caption("💡 지급내역 데이터가 아직 없습니다.")
+            # 본사인원 별도 표시
+            if hq_staffs:
+                st.markdown("---")
+                _hq_total = sum(h['소계'] for h in hq_staffs)
+                _hq_rows_html = ""
+                for h in hq_staffs:
+                    _role = f" ({h['직무']})".rstrip() if h.get('직무') else ''
+                    _amt_disp = f"₩{h['소계']:,}" if h['소계'] > 0 else '₩0'
+                    _hq_rows_html += (
+                        f"<tr>"
+                        f"<td style='padding:6px 12px;font-size:14px;color:#6B7280;'>🏢 {h['이름']}{_role}</td>"
+                        f"<td style='padding:6px 12px;font-size:14px;color:#9CA3AF;text-decoration:line-through;text-align:right;'>{_amt_disp}</td>"
+                        f"<td style='padding:6px 12px;font-size:12px;color:#059669;font-weight:600;'>지급원가 제외</td>"
+                        f"</tr>"
+                    )
+                st.markdown(
+                    f"<div style='background:#F0FDF4;border:1px solid #BBF7D0;border-radius:8px;padding:10px 14px;margin-top:8px;'>"
+                    f"<div style='font-size:14px;font-weight:700;color:#065F46;margin-bottom:6px;'>"
+                    f"🏢 본사인원 {len(hq_staffs)}명 투입"
+                    f"<span style='font-size:12px;font-weight:400;color:#6B7280;margin-left:8px;'>"
+                    f"(지급원가에서 자동 제외됨)</span></div>"
+                    f"<table style='width:100%;border-collapse:collapse;'>{_hq_rows_html}</table>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
