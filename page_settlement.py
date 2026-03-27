@@ -1955,10 +1955,36 @@ def show_settlement_detail(data):
                         })
                     if _batch_records:
                         _result = db.batch_save_payment_records(_batch_records)
+                        # 본사인원 별도정산 자동 확인완료 처리
+                        _auto_hq_count = 0
+                        for cr in calc_rows:
+                            if cr['별도'] and cr['구분'] == '본사':
+                                _hq_aid = cr.get('_배정ID', '')
+                                if _hq_aid and cr.get('_지급상태') not in ('완료', '확인완료'):
+                                    _now_str = now_kst().strftime('%Y-%m-%d')
+                                    # 지급기록이 없으면 0원으로 생성
+                                    _hq_record = {
+                                        '배정ID': _hq_aid, '문의ID': inq_id,
+                                        '인력명': cr['이름'], '현장명': row['행사명'],
+                                        '파견기간': str(row.get('행사시작일', '')),
+                                        '파견일수': cr['일수'],
+                                        '기본급': 0, '야근비': 0, '식사비': 0,
+                                        '교통비': 0, '보너스': 0, '소계': 0,
+                                        '세금공제': 0, '최종지급액': 0,
+                                        '지급상태': '확인완료',
+                                        '지급일': _now_str,
+                                        '지급담당자': '',
+                                        '은행명': '', '계좌번호': '',
+                                        '주민등록번호': '',
+                                        '비고': '[본사인원] 자동확인완료',
+                                    }
+                                    db.batch_save_payment_records([_hq_record])
+                                    _auto_hq_count += 1
                         parts = []
                         if _result['saved'] > 0: parts.append(f"{_result['saved']}명 신규저장")
                         if _result['updated'] > 0: parts.append(f"{_result['updated']}명 업데이트")
-                        if sep_count > 0: parts.append(f"{sep_count}명 별도정산 제외")
+                        if sep_count > 0: parts.append(f"{sep_count}명 본사인원 자동완료")
+                        if _auto_hq_count > 0: parts.append(f"{_auto_hq_count}명 본사 확인완료")
                         if skip_count > 0: parts.append(f"{skip_count}명 배정ID없어 건너뜀")
                         if _result['failed'] > 0: parts.append(f"{_result['failed']}명 실패")
                         _total_saved = _result['saved'] + _result['updated']

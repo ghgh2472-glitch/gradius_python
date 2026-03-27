@@ -1665,7 +1665,8 @@ def _render_profit_tab(settlement_df, payment_df):
 
     df_done['_supply'] = pd.to_numeric(df_done[col_supply], errors='coerce').fillna(0).astype(int)
 
-    # ── payment_df에서 문의ID별 소계 합산 ──
+    # ── payment_df에서 문의ID별 소계 합산 (본사인원 자동 제외) ──
+    _hq_names_profit = [s['이름'] for s in db.HQ_STAFF] if hasattr(db, 'HQ_STAFF') else []
     cost_map = {}  # 문의ID → 소계합산
     staff_map = {}  # 문의ID → [{이름, 소계}, ...]
     if not payment_df.empty:
@@ -1677,9 +1678,12 @@ def _render_profit_tab(settlement_df, payment_df):
                 inq_id = str(pr.get(p_inq, '')).strip()
                 if not inq_id or inq_id in ('nan', 'None', ''):
                     continue
+                name = str(pr.get(p_name, '')).strip() if p_name else ''
+                # 본사인원은 비용에서 제외
+                if name in _hq_names_profit:
+                    continue
                 sub = int(pd.to_numeric(pr.get(p_subtotal, 0), errors='coerce') or 0)
                 cost_map[inq_id] = cost_map.get(inq_id, 0) + sub
-                name = str(pr.get(p_name, '')) if p_name else ''
                 if inq_id not in staff_map:
                     staff_map[inq_id] = []
                 staff_map[inq_id].append({'이름': name, '소계': sub})

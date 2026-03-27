@@ -956,9 +956,16 @@ def get_payment_status_breakdown(df_settlement):
 
 
 def get_operating_profit(df_settlement, df_dispatch, df_payment=None):
-    """영업이익 계산: 공급가액 합계 - 총지급액 합계 (지급내역 우선 사용)"""
+    """영업이익 계산: 공급가액 합계 - 총지급액 합계 (본사인원 자동 제외, 지급내역 우선 사용)"""
     total_supply = 0
     total_payment = 0
+    
+    # 본사인원 이름 리스트
+    try:
+        from data_loader import HQ_STAFF
+        _hq_names = [s['이름'] for s in HQ_STAFF]
+    except Exception:
+        _hq_names = []
     
     # 1) 정산 시트에서 공급가액 합계
     if not df_settlement.empty:
@@ -969,19 +976,29 @@ def get_operating_profit(df_settlement, df_dispatch, df_payment=None):
         if col_payment_s:
             total_payment = df_settlement[col_payment_s].apply(safe_int).sum()
     
-    # 2) 지급내역 시트에서 실제 최종지급액 합산 (가장 정확한 데이터)
+    # 2) 지급내역 시트에서 실제 최종지급액 합산 (본사인원 제외)
     if df_payment is not None and not df_payment.empty:
         col_final_pay = find_col(df_payment, ["최종지급액", "실지급액"])
+        col_pay_name = find_col(df_payment, ["인력명", "이름"])
         if col_final_pay:
-            actual_payment = df_payment[col_final_pay].apply(safe_int).sum()
+            if col_pay_name and _hq_names:
+                _ext_mask = ~df_payment[col_pay_name].astype(str).str.strip().isin(_hq_names)
+                actual_payment = df_payment.loc[_ext_mask, col_final_pay].apply(safe_int).sum()
+            else:
+                actual_payment = df_payment[col_final_pay].apply(safe_int).sum()
             if actual_payment > 0:
                 total_payment = actual_payment
     
-    # 3) 지급액이 아직 0이면 배정기록에서 총지급액 합산 (예상치 fallback)
+    # 3) 지급액이 아직 0이면 배정기록에서 총지급액 합산 (본사인원 제외)
     if total_payment == 0 and not df_dispatch.empty:
         col_total_pay = find_col(df_dispatch, ["총지급액", "지급액"])
+        col_disp_name = find_col(df_dispatch, ["인력명", "이름"])
         if col_total_pay:
-            total_payment = df_dispatch[col_total_pay].apply(safe_int).sum()
+            if col_disp_name and _hq_names:
+                _ext_mask_d = ~df_dispatch[col_disp_name].astype(str).str.strip().isin(_hq_names)
+                total_payment = df_dispatch.loc[_ext_mask_d, col_total_pay].apply(safe_int).sum()
+            else:
+                total_payment = df_dispatch[col_total_pay].apply(safe_int).sum()
     
     profit = total_supply - total_payment
     margin_rate = round(profit / total_supply * 100, 1) if total_supply > 0 else 0
