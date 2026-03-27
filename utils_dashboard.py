@@ -547,6 +547,7 @@ def generate_smart_briefing(df_inq, df_dispatch, df_settlement):
         col_client = find_col(df_inq, ["업체명"])
         col_event = find_col(df_inq, ["행사명"])
         col_date = find_col(df_inq, ["작성일", "문의날짜", "날짜"])
+        col_phone_p = find_col(df_inq, ["연락처", "전화번호"])
         if col_status:
             pending = df_inq[df_inq[col_status].astype(str).str.contains('미정|견적|상담', na=False)]
             if not pending.empty:
@@ -556,9 +557,12 @@ def generate_smart_briefing(df_inq, df_dispatch, df_settlement):
                     event = str(r.get(col_event, '')).strip() if col_event else ''
                     status = str(r.get(col_status, '')).strip()
                     date_val = str(r.get(col_date, '')).strip() if col_date else ''
+                    phone = str(r.get(col_phone_p, '')).strip() if col_phone_p else ''
+                    if phone in ('nan', 'None'): phone = ''
                     detail_rows.append({
                         '업체': client,
                         '행사명': event,
+                        '연락처': phone or '-',
                         '상태': status,
                         '문의일': date_val[:10] if date_val else '',
                     })
@@ -977,6 +981,7 @@ def get_stale_estimates(df_inq, days_threshold=7):
     col_client = find_col(df_inq, ["업체명", "고객명"])
     col_event = find_col(df_inq, ["행사명"])
     col_id = find_col(df_inq, ["문의ID", "ID", "관리번호"])
+    col_phone = find_col(df_inq, ["연락처", "전화번호"])
     
     if not col_status or not col_date: return pd.DataFrame()
     
@@ -999,6 +1004,7 @@ def get_stale_estimates(df_inq, days_threshold=7):
         if col_id: result_cols['문의ID'] = col_id
         if col_client: result_cols['업체명'] = col_client
         if col_event: result_cols['행사명'] = col_event
+        if col_phone: result_cols['연락처'] = col_phone
         result_cols['경과일'] = '경과일'
         
         res = df[list(result_cols.values())].copy()

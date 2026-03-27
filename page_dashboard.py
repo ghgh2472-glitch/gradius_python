@@ -124,11 +124,27 @@ def show(data):
     if not stale_estimates.empty:
         count = len(stale_estimates)
         top_names = ", ".join(stale_estimates['업체명'].head(3).tolist()) if '업체명' in stale_estimates.columns else ""
+        # 견적 데이터에서 문의ID별 공급가액 매핑
+        _est_amt_map = {}
+        _df_est = data.get('estimate', pd.DataFrame())
+        if not _df_est.empty:
+            _eid_col = ud.find_col(_df_est, ['문의ID', 'ID'])
+            _amt_col = ud.find_col(_df_est, ['공급가액', '합계금액'])
+            if _eid_col and _amt_col:
+                for _, _er in _df_est.iterrows():
+                    _eid = str(_er.get(_eid_col, '')).strip()
+                    _amt = ud.safe_int(_er.get(_amt_col, 0))
+                    if _eid and _amt > 0:
+                        _est_amt_map[_eid] = _amt
         detail_rows = []
         for _, r in stale_estimates.head(10).iterrows():
+            _inq_id = str(r.get('문의ID', '')).strip()
+            _amt_val = _est_amt_map.get(_inq_id, 0)
             detail_rows.append({
                 '업체명': r.get('업체명', ''),
                 '행사명': r.get('행사명', ''),
+                '연락처': r.get('연락처', '-') if '연락처' in stale_estimates.columns else '-',
+                '견적금액': f'₩{_amt_val:,}' if _amt_val > 0 else '-',
                 '경과일': f"{int(r.get('경과일', 0))}일",
             })
         smart_briefing.append({
@@ -201,14 +217,21 @@ def show(data):
             with st.expander("📋 상세보기", expanded=False):
                 # 테이블 헤더 구성
                 cols = list(detail_rows[0].keys())
-                header_html = "".join(f"<th style='padding:8px 12px; background:#f1f5f9; font-size:12px; font-weight:700; border-bottom:2px solid #e2e8f0;'>{c}</th>" for c in cols)
+                header_html = "".join(
+                    f"<th style='padding:10px 14px; background:#e2e8f0; font-size:14px; font-weight:700; "
+                    f"border-bottom:2px solid #cbd5e1; color:#1e293b;'>{c}</th>" for c in cols
+                )
                 rows_html = ""
-                for r in detail_rows:
-                    cells = "".join(f"<td style='padding:7px 12px; font-size:12px; border-bottom:1px solid #f1f5f9;'>{r.get(c, '')}</td>" for c in cols)
-                    rows_html += f"<tr>{cells}</tr>"
+                for ri, r in enumerate(detail_rows):
+                    _bg = '#f8fafc' if ri % 2 == 0 else '#ffffff'
+                    cells = "".join(
+                        f"<td style='padding:9px 14px; font-size:14px; border-bottom:1px solid #e2e8f0; "
+                        f"color:#334155;'>{r.get(c, '')}</td>" for c in cols
+                    )
+                    rows_html += f"<tr style='background:{_bg};'>{cells}</tr>"
                 
                 st.markdown(f"""
-                <table style="width:100%; border-collapse:collapse; margin:4px 0;">
+                <table style="width:100%; border-collapse:collapse; margin:6px 0; border-radius:8px; overflow:hidden; border:1px solid #e2e8f0;">
                     <thead><tr>{header_html}</tr></thead>
                     <tbody>{rows_html}</tbody>
                 </table>
