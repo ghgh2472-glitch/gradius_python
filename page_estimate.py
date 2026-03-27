@@ -2070,30 +2070,33 @@ def show(data):
                 })
 
     # ==================================================================
-    # TAB 3: 히스토리 & 리포트 (통합)
+    # TAB 3: 히스토리 & 리포트 (서브탭 분리)
     # ==================================================================
     if _active_est == _est_tabs[2]:
-        # ── 📬 견적서 발송 현황 (최상단) ──
-        _show_send_status_section(df_est, df_inq)
+        _sub_tab_names = ["📊 수익 리포트", "📬 발송 현황", "📋 히스토리 & 비교"]
+        _default_sub = st.session_state.get('_est_sub_tab', 0)
+        _sub_tabs = st.tabs(_sub_tab_names)
 
-        st.markdown("---")
-
-        _show_history_tab(df_est, df_inq, st.session_state.get('w_client', ''))
-
-        st.markdown("---")
-
-        # ── 상세 수익 리포트 ──
-        with st.expander("📊 상세 수익 리포트 & 결재 메모", expanded=False):
+        with _sub_tabs[0]:
+            # ── 상세 수익 리포트 & 결재 메모 ──
             c1, c2 = st.columns([1, 2.5])
             with c1:
                 st.info("📝 결재 메모 작성")
-                n1 = st.text_area("1. 전략", height=80)
-                n2 = st.text_area("2. 인력", height=80)
-                n3 = st.text_area("3. 리스크", height=80)
-                n4 = st.text_area("4. 결론", height=80)
+                n1 = st.text_area("1. 전략", height=80, key="report_n1")
+                n2 = st.text_area("2. 인력", height=80, key="report_n2")
+                n3 = st.text_area("3. 리스크", height=80, key="report_n3")
+                n4 = st.text_area("4. 결론", height=80, key="report_n4")
             with c2:
                 html_rep = ue.get_detailed_report_html(st.session_state['est_items'], st.session_state.get('w_client', ''), [n1, n2, n3, n4])
                 st.components.v1.html(html_rep, height=1000, scrolling=True)
+
+        with _sub_tabs[1]:
+            # ── 견적서 발송 현황 ──
+            _show_send_status_section(df_est, df_inq)
+
+        with _sub_tabs[2]:
+            # ── 히스토리 & 비교 ──
+            _show_history_tab(df_est, df_inq, st.session_state.get('w_client', ''))
 
 
 # ==============================================================================

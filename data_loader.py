@@ -1203,6 +1203,7 @@ def save_settlement_record(settlement_data, site_info=None):
             "내용(품목)":         lambda: settlement_data.get('내용(품목)', settlement_data.get('내용', settlement_data.get('품목', ''))),
             "연락처":             lambda: settlement_data.get('연락처', ''),
             "발행요청사항":        lambda: settlement_data.get('발행요청사항', ''),
+            "사업장주소":          lambda: settlement_data.get('사업장주소', ''),
             "사업자등록증URL":     lambda: settlement_data.get('사업자등록증URL', ''),
             "사업자등록증데이터":    lambda: settlement_data.get('사업자등록증데이터', ''),
         }

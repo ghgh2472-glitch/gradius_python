@@ -29,18 +29,8 @@ def save_inquiry():
     저장 버튼을 눌렀을 때 실행되는 함수입니다.
     여기서는 위젯 렌더링과 상관없이 세션 상태를 자유롭게 조작할 수 있습니다.
     """
-    # 1. 업체명 결정 로직
-    sel_client = st.session_state.get('form_client_select')
-    new_client = st.session_state.get('form_new_client_name', '').strip()
-    
-    final_client_name = ""
-    is_new_client = False
-    
-    if sel_client == "(신규 입력)":
-        final_client_name = new_client
-        is_new_client = True
-    elif sel_client:
-        final_client_name = str(sel_client).strip()
+    # 1. 업체명 결정 로직 (항상 직접 입력)
+    final_client_name = st.session_state.get('form_client_name', '').strip()
     
     # 2. 필수값 유효성 검사
     if not final_client_name or final_client_name in ('None', 'nan', ''):
@@ -110,7 +100,16 @@ def save_inquiry():
     ]
 
     # 4. 신규 업체면 고객 DB에 추가
-    if is_new_client:
+    # 4. 고객 DB 중복 체크 후 신규만 추가
+    _existing_clients = []
+    try:
+        _df_client = db.load_all_data().get('client', pd.DataFrame())
+        if not _df_client.empty and '업체명' in _df_client.columns:
+            _existing_clients = _df_client['업체명'].astype(str).str.strip().tolist()
+    except:
+        pass
+    
+    if final_client_name not in _existing_clients:
         # 헤더: 업체명, 대표자명, 사업자번호, 업태, 종목, 주소, 이메일, 담당자, 연락처, 메모
         c_row = [
             final_client_name, "", "", "", "", "", "", 
@@ -128,7 +127,7 @@ def save_inquiry():
         keys_to_clear = [
             'form_evt_name', 'form_evt_place', 'form_date_start', 'form_date_end', 
             'form_evt_time', 'form_service', 'form_headcount', 'form_pay',
-            'form_contact', 'form_manager', 'form_note', 'form_new_client_name',
+            'form_contact', 'form_manager', 'form_note', 'form_client_name',
             'form_dress', 'form_meal', 'form_parking'
         ]
         for k in keys_to_clear:
@@ -161,12 +160,6 @@ def show(data):
         st.session_state['_save_error'] = None
     
     parser = InquiryParser()
-    
-    # 고객 리스트 로드
-    df_client = data.get('client', pd.DataFrame())
-    client_list = []
-    if not df_client.empty and '업체명' in df_client.columns:
-        client_list = df_client['업체명'].unique().tolist()
 
     # --------------------------------------------------------------------------
     # 카톡 자동 분석 섹션
@@ -197,18 +190,9 @@ def show(data):
                     st.session_state['form_meal'] = parsed.get('meal', '')
                     st.session_state['form_parking'] = parsed.get('parking', '')
                     
-                    # 업체명 매칭 로직
+                    # 업체명 직접 채움
                     p_client = parsed.get('client_name', '')
-                    if p_client in client_list:
-                        # 리스트에 있으면 해당 인덱스 선택
-                        try:
-                            st.session_state['client_idx'] = client_list.index(p_client) + 1
-                        except:
-                            st.session_state['client_idx'] = 0
-                    else:
-                        # 없으면 신규 입력
-                        st.session_state['client_idx'] = 0
-                        st.session_state['form_new_client_name'] = p_client
+                    st.session_state['form_client_name'] = p_client
                         
                     st.toast("자동 분석 완료! 내용을 확인하세요.", icon="✅")
                     st.rerun() # 화면 갱신
@@ -223,12 +207,11 @@ def show(data):
     form_keys = [
         'form_evt_name', 'form_evt_place', 'form_date_start', 'form_date_end', 
         'form_evt_time', 'form_service', 'form_headcount', 'form_pay',
-        'form_contact', 'form_manager', 'form_note', 'form_new_client_name',
+        'form_contact', 'form_manager', 'form_note', 'form_client_name',
         'form_dress', 'form_meal', 'form_parking'
     ]
     for k in form_keys:
         if k not in st.session_state: st.session_state[k] = ""
-    if 'client_idx' not in st.session_state: st.session_state['client_idx'] = 0
 
     with st.container():
         st.markdown('<div class="form-box">', unsafe_allow_html=True)
@@ -238,40 +221,7 @@ def show(data):
         c1, c2, c3 = st.columns([1.5, 1, 1])
         
         with c1:
-            # 업체명 선택 (key='form_client_select'로 지정하여 저장 함수에서 참조)
-            client_name = st.selectbox(
-                "업체명", 
-                ["(신규 입력)"] + client_list, 
-                index=st.session_state['client_idx'],
-                key="form_client_select"
-            )
-            
-            # 신규 입력창
-            if client_name == "(신규 입력)":
-                st.text_input("업체명 직접 입력", key="form_new_client_name")
-                is_new = True
-            else:
-                is_new = False
-                
-            # 기존 정보 자동 채우기 (화면 표시용)
-            if not is_new and not df_client.empty:
-                try:
-                    c_info = df_client[df_client['업체명'] == client_name].iloc[0]
-                    # 값이 비어있을 때만 DB 값으로 덮어쓰기 (분석값 유지)
-                    if not st.session_state['form_manager']: st.session_state['form_manager'] = str(c_info.get('담당자명', ''))
-                    if not st.session_state['form_contact']: st.session_state['form_contact'] = str(c_info.get('담당자연락처', ''))
-                except: pass
-                # 서비스종류 자동채움: 해당 업체의 최근 문의에서 가져오기
-                if not st.session_state.get('form_service'):
-                    try:
-                        df_inq = data.get('inq', pd.DataFrame())
-                        if not df_inq.empty and '업체명' in df_inq.columns and '서비스종류' in df_inq.columns:
-                            past = df_inq[df_inq['업체명'].astype(str).str.strip() == str(client_name).strip()]
-                            past_svc = past['서비스종류'].astype(str).str.strip()
-                            past_svc = past_svc[~past_svc.isin(['', 'nan', 'None'])]
-                            if not past_svc.empty:
-                                st.session_state['form_service'] = past_svc.iloc[-1]
-                    except: pass
+            st.text_input("업체명", key="form_client_name", placeholder="업체명을 입력하세요")
 
         with c2: st.text_input("담당자", key="form_manager")
         with c3: st.text_input("연락처", key="form_contact")

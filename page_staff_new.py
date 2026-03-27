@@ -416,6 +416,30 @@ def tab_assignment(data):
     ci[2].metric("장소", sel.get('장소', '-'))
     ci[3].metric("상태", sel.get('상태', ''))
 
+    # ── 현장 운영 참고사항 ──
+    _note = str(sel.get('특이사항', '')).strip()
+    _dress = str(sel.get('복장', '')).strip()
+    _meal = str(sel.get('식사', '')).strip()
+    _parking = str(sel.get('주차', '')).strip()
+    _has_info = any([_note and _note not in ('nan', 'None', ''),
+                     _dress and _dress not in ('nan', 'None', ''),
+                     _meal and _meal not in ('nan', 'None', ''),
+                     _parking and _parking not in ('nan', 'None', '')])
+    if _has_info:
+        _info_parts = []
+        if _note and _note not in ('nan', 'None', ''):
+            _info_parts.append(f"📌 **특이사항**: {_note}")
+        _tags = []
+        if _dress and _dress not in ('nan', 'None', ''):
+            _tags.append(f"👔 {_dress}")
+        if _meal and _meal not in ('nan', 'None', ''):
+            _tags.append(f"🍽️ {_meal}")
+        if _parking and _parking not in ('nan', 'None', ''):
+            _tags.append(f"🅿️ {_parking}")
+        if _tags:
+            _info_parts.append(" &nbsp;|&nbsp; ".join(_tags))
+        st.info("\n\n".join(_info_parts))
+
     # ── 장기건 감지 ──
     raw_start = str(sel.get('행사시작일', '')).strip()
     raw_end = str(sel.get('행사종료일', '')).strip()

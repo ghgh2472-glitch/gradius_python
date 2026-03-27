@@ -207,12 +207,13 @@ def show(data):
     with col_form:
         # ── 이전 업체 사업자정보 검색/재사용 ──
         with st.expander("🔍 이전 업체 사업자정보 검색 (기존 데이터 재사용)", expanded=False):
-            df_settlement_all = pd.DataFrame()
-            try:
-                _dispatch_data = db.get_dispatch()
-                df_settlement_all = _dispatch_data.get('settlement', pd.DataFrame())
-            except Exception:
-                pass
+            df_settlement_all = data.get('settlement', pd.DataFrame())
+            if df_settlement_all.empty:
+                try:
+                    _dispatch_data = db.get_dispatch()
+                    df_settlement_all = _dispatch_data.get('settlement', pd.DataFrame())
+                except Exception:
+                    pass
             # 정산 데이터에서 이전 사업자번호 보유 업체 추출
             _prev_biz = pd.DataFrame()
             if not df_settlement_all.empty:
@@ -229,8 +230,8 @@ def show(data):
                 if _biz_col and _comp_col:
                     _prev_biz = df_settlement_all[df_settlement_all[_biz_col].astype(str).str.strip() != ''][[_comp_col, _biz_col]].drop_duplicates()
                     _prev_biz = _prev_biz.rename(columns={_comp_col: '업체명', _biz_col: '사업자번호'})
-                    # 대표자/이메일 추가
-                    for _extra in ['대표자', '이메일']:
+                    # 대표자/이메일/사업장주소 추가
+                    for _extra in ['대표자', '이메일', '사업장주소']:
                         if _extra in df_settlement_all.columns:
                             _prev_biz[_extra] = df_settlement_all.loc[_prev_biz.index, _extra].values
             
@@ -265,6 +266,7 @@ def show(data):
                         st.session_state['_prev_biz_ceo'] = str(_sel_row.get('대표자', '')).strip() if '대표자' in _sel_row.index else ''
                         st.session_state['_prev_biz_company'] = str(_sel_row.get('업체명', '')).strip()
                         st.session_state['_prev_biz_email'] = str(_sel_row.get('이메일', '')).strip() if '이메일' in _sel_row.index else ''
+                        st.session_state['_prev_biz_address'] = str(_sel_row.get('사업장주소', '')).strip() if '사업장주소' in _sel_row.index else ''
                         st.success(f"✅ {_sel_biz}의 사업자정보가 적용되었습니다.")
                         st.rerun()
                 else:
