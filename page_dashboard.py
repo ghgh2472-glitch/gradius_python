@@ -120,22 +120,22 @@ def show(data):
     briefing_colors = ["#FEF2F2", "#FFF7ED", "#F0FDF4", "#EFF6FF", "#FDF4FF"]
     briefing_borders = ["#EF4444", "#F97316", "#10B981", "#3B82F6", "#A855F7"]
     
-    # 견적 미체결 경과일 알림 추가
+    # 견적 미체결 경과일 알림 추가 + 계약대기 청구예정액 매핑용 견적금액 조회
+    _est_amt_map = {}
+    _df_est = data.get('estimate', pd.DataFrame())
+    if not _df_est.empty:
+        _eid_col = ud.find_col(_df_est, ['문의ID', 'ID'])
+        _amt_col = ud.find_col(_df_est, ['합계금액', '공급가액'])
+        if _eid_col and _amt_col:
+            for _, _er in _df_est.iterrows():
+                _eid = str(_er.get(_eid_col, '')).strip()
+                _amt = ud.safe_int(_er.get(_amt_col, 0))
+                if _eid and _amt > 0:
+                    _est_amt_map[_eid] = _amt
+
     if not stale_estimates.empty:
         count = len(stale_estimates)
         top_names = ", ".join(stale_estimates['업체명'].head(3).tolist()) if '업체명' in stale_estimates.columns else ""
-        # 견적 데이터에서 문의ID별 공급가액 매핑
-        _est_amt_map = {}
-        _df_est = data.get('estimate', pd.DataFrame())
-        if not _df_est.empty:
-            _eid_col = ud.find_col(_df_est, ['문의ID', 'ID'])
-            _amt_col = ud.find_col(_df_est, ['공급가액', '합계금액'])
-            if _eid_col and _amt_col:
-                for _, _er in _df_est.iterrows():
-                    _eid = str(_er.get(_eid_col, '')).strip()
-                    _amt = ud.safe_int(_er.get(_amt_col, 0))
-                    if _eid and _amt > 0:
-                        _est_amt_map[_eid] = _amt
         detail_rows = []
         for _, r in stale_estimates.head(10).iterrows():
             _inq_id = str(r.get('문의ID', '')).strip()
@@ -144,7 +144,7 @@ def show(data):
                 '업체명': r.get('업체명', ''),
                 '행사명': r.get('행사명', ''),
                 '연락처': r.get('연락처', '-') if '연락처' in stale_estimates.columns else '-',
-                '견적금액': f'₩{_amt_val:,}' if _amt_val > 0 else '-',
+                '청구예정액': f'₩{_amt_val:,}' if _amt_val > 0 else '-',
                 '경과일': f"{int(r.get('경과일', 0))}일",
             })
         smart_briefing.append({
@@ -214,9 +214,28 @@ def show(data):
         
         # 상세 카드 (접이식)
         if detail_rows:
+            # pending 타입: 청구예정액 채우기 + D-Day 색상
+            if item_type == 'pending':
+                for _pr in detail_rows:
+                    _pid = _pr.pop('_inq_id', '')
+                    _pamt = _est_amt_map.get(_pid, 0)
+                    _pr['청구예정액'] = f'₩{_pamt:,}' if _pamt > 0 else '-'
+                    # D-Day 색상
+                    _dd = _pr.get('D-Day', '-')
+                    if _dd == '★오늘' or _dd.startswith('D+'):
+                        _pr['D-Day'] = f"<span style='color:#DC2626;font-weight:700;'>{_dd}</span>"
+                    elif _dd.startswith('D-'):
+                        _dd_num = int(_dd.replace('D-', ''))
+                        if _dd_num <= 7:
+                            _pr['D-Day'] = f"<span style='color:#DC2626;font-weight:700;'>{_dd}</span>"
+                        elif _dd_num <= 14:
+                            _pr['D-Day'] = f"<span style='color:#EA580C;font-weight:700;'>{_dd}</span>"
+                        else:
+                            _pr['D-Day'] = f"<span style='color:#059669;'>{_dd}</span>"
+
             with st.expander("📋 상세보기", expanded=False):
-                # 테이블 헤더 구성
-                cols = list(detail_rows[0].keys())
+                # 테이블 헤더 구성 (_로 시작하는 내부 키 제외)
+                cols = [c for c in detail_rows[0].keys() if not c.startswith('_')]
                 header_html = "".join(
                     f"<th style='padding:10px 14px; background:#e2e8f0; font-size:14px; font-weight:700; "
                     f"border-bottom:2px solid #cbd5e1; color:#1e293b;'>{c}</th>" for c in cols

@@ -548,23 +548,45 @@ def generate_smart_briefing(df_inq, df_dispatch, df_settlement):
         col_event = find_col(df_inq, ["행사명"])
         col_date = find_col(df_inq, ["작성일", "문의날짜", "날짜"])
         col_phone_p = find_col(df_inq, ["연락처", "전화번호"])
+        col_start_p = find_col(df_inq, ["행사시작일", "시작일", "행사일시", "일시"])
+        col_inq_id_p = find_col(df_inq, ["문의ID", "ID", "관리번호"])
         if col_status:
-            pending = df_inq[df_inq[col_status].astype(str).str.contains('미정|견적|상담', na=False)]
+            pending = df_inq[df_inq[col_status].astype(str).str.contains('미정|견적|상담', na=False)].copy()
             if not pending.empty:
+                # 행사시작일 기준 정렬 (가까운 순)
+                if col_start_p:
+                    pending['_start'] = pd.to_datetime(pending[col_start_p], errors='coerce')
+                    pending = pending.sort_values('_start', ascending=True, na_position='last')
                 detail_rows = []
+                _today_p = today_kst()
                 for _, r in pending.head(10).iterrows():
                     client = str(r.get(col_client, '')).strip() if col_client else ''
                     event = str(r.get(col_event, '')).strip() if col_event else ''
                     status = str(r.get(col_status, '')).strip()
-                    date_val = str(r.get(col_date, '')).strip() if col_date else ''
                     phone = str(r.get(col_phone_p, '')).strip() if col_phone_p else ''
                     if phone in ('nan', 'None'): phone = ''
+                    # D-Day 계산
+                    _dday_str = '-'
+                    if col_start_p:
+                        _s = pd.to_datetime(r.get(col_start_p, ''), errors='coerce')
+                        if pd.notna(_s):
+                            _days_left = (_s - _today_p).days
+                            if _days_left < 0:
+                                _dday_str = f'D+{abs(_days_left)}'
+                            elif _days_left == 0:
+                                _dday_str = '★오늘'
+                            else:
+                                _dday_str = f'D-{_days_left}'
+                    # 문의ID (견적금액 매핑용)
+                    _p_inq_id = str(r.get(col_inq_id_p, '')).strip() if col_inq_id_p else ''
                     detail_rows.append({
                         '업체': client,
                         '행사명': event,
                         '연락처': phone or '-',
+                        '청구예정액': '',  # page_dashboard에서 채움
+                        'D-Day': _dday_str,
                         '상태': status,
-                        '문의일': date_val[:10] if date_val else '',
+                        '_inq_id': _p_inq_id,  # 내부용 (표시 X)
                     })
                 briefing_items.append({
                     'type': 'pending',
