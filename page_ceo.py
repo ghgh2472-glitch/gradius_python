@@ -1110,7 +1110,7 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
 
             onsite_tag = "" if leader_onsite else " 🚫불참"
             status_badge = "⏳" if leader_cr['지급상태'] == '대기' else "📝"
-            status_txt = " [대기]" if leader_cr['지급상태'] == '대기' else " [미저장]"
+            status_txt = " [대기]" if leader_cr['지급상태'] == '대기' else " [인사컨펌필요]"
             leader_tax_label = leader_cr.get('공제율', '3.3%')
             bank_info = (f"💳 {leader_cr['은행']} {leader_cr['계좌']}"
                          if leader_cr['은행'] and leader_cr['은행'] not in ('nan', 'None', '')
@@ -1223,7 +1223,7 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
                         time.sleep(1)
                         st.rerun()
                 elif leader_cr['지급상태'] == '미저장':
-                    st.caption("📝 미저장")
+                    st.caption("📝 인사담당자의 컨펌이 필요합니다")
 
         # ── 개별 급여명세서 (팀장 이외) ──
         individual = [cr for cr in venue_unpaid if not cr['팀코드']]
@@ -1240,7 +1240,7 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
                                 if bank and bank not in ('nan', 'None', '')
                                 else "❗ 계좌 미등록")
                 status_badge = "⏳" if pst == '대기' else "📝"
-                status_txt = " [대기]" if pst == '대기' else " [미저장]"
+                status_txt = " [대기]" if pst == '대기' else " [인사컨펌필요]"
 
                 # ── 개별 카드: 외부 버튼 + expander ──
                 _ind_exp_col, _ind_btn_col = st.columns([8, 2])
@@ -1282,7 +1282,7 @@ def _render_payment_tab(venue_data_list, staff_done, staff_total, total_unpaid_a
                             time.sleep(1)
                             st.rerun()
                     elif pst == '미저장':
-                        st.caption("📝 미저장")
+                        st.caption("📝 인사담당자의 컨펌이 필요합니다")
 
         st.markdown("---")
 
