@@ -533,9 +533,9 @@ def show(data):
                 'vat_yn': _est_meta_detail.get('vat_yn', True) if 'vat_yn' in _est_meta_detail else True,
             })
 
-            # ▶ 수정/체결수정 시 기존 견적상세에서 프로젝트 정보 덮어쓰기
+            # ▶ 수정/체결수정/완료 시 기존 견적상세에서 프로젝트 정보 덮어쓰기
             #   (사용자가 이전 저장 시 최종확인에서 수정한 값 복원)
-            if (sel_p.startswith("[수정]") or sel_p.startswith("[체결수정]")) and _est_meta:
+            if (sel_p.startswith("[수정]") or sel_p.startswith("[체결수정]") or sel_p.startswith("[완료]")) and _est_meta:
                 def _pick_proj(est_key, ss_key):
                     v = str(_est_meta.get(est_key, '')).strip()
                     if v and v not in ('nan', 'None', ''):
@@ -554,8 +554,8 @@ def show(data):
                         if _edv and _edv not in ('nan', 'None', ''):
                             st.session_state[_esk] = _safe_str(_edv)
 
-            # ▶ 견적수정/체결수정 시 기존 품목 로드
-            if sel_p.startswith("[수정]") or sel_p.startswith("[체결수정]"):
+            # ▶ 견적수정/체결수정/완료 시 기존 품목 로드
+            if sel_p.startswith("[수정]") or sel_p.startswith("[체결수정]") or sel_p.startswith("[완료]"):
                 st.session_state['est_items'] = _load_existing_items(target_id)
             else:
                 st.session_state['est_items'] = pd.DataFrame(columns=['품목','규격','수량','일수','매출단가','매입단가','할인액','매출합계','매입합계','비고'])
