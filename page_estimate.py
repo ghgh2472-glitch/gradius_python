@@ -44,10 +44,12 @@ def apply_styles():
         .proj-card.status-new { border-left-color: #22c55e; }
         .proj-card.status-edit { border-left-color: #3b82f6; }
         .proj-card.status-contracted { border-left-color: #f59e0b; }
+        .proj-card.status-completed { border-left-color: #6b7280; background: #f9fafb; }
         .proj-card .card-status { font-size: 11px; font-weight: 700; margin-bottom: 4px; }
         .proj-card .card-status.new { color: #16a34a; }
         .proj-card .card-status.edit { color: #2563eb; }
         .proj-card .card-status.contracted { color: #d97706; }
+        .proj-card .card-status.completed { color: #6b7280; }
         .proj-card .card-client { font-size: 14px; font-weight: 700; color: #1e293b; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .proj-card .card-event { font-size: 12px; color: #475569; margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .proj-card .card-meta { font-size: 11px; color: #94a3b8; line-height: 1.5; }
@@ -193,12 +195,16 @@ def show(data):
     pending_new = pd.DataFrame()
     pending_edit = pd.DataFrame()
     pending_contracted = pd.DataFrame()
+    pending_completed = pd.DataFrame()
     if not df_inq.empty and '상태' in df_inq.columns:
         pending_new = df_inq[df_inq['상태'] == sc.STATUS_FLOW[0]].sort_values('작성일', ascending=False).copy()
         pending_edit = df_inq[df_inq['상태'] == sc.STATUS_FLOW[1]].sort_values('작성일', ascending=False).copy()
         # 체결 이후 상태도 견적 수정 가능 (체결, 배정완료, 진행중)
         _edit_statuses = [sc.STATUS_FLOW[i] for i in range(2, min(5, len(sc.STATUS_FLOW)))]
         pending_contracted = df_inq[df_inq['상태'].isin(_edit_statuses)].sort_values('작성일', ascending=False).copy()
+        # 완료/정산완료 프로젝트 (조회/참고용)
+        _done_statuses = [sc.STATUS_FLOW[i] for i in range(5, min(7, len(sc.STATUS_FLOW)))]
+        pending_completed = df_inq[df_inq['상태'].isin(_done_statuses)].sort_values('작성일', ascending=False).copy()
 
     p_list = ["(신규작성)"]
     if not pending_new.empty:
@@ -210,8 +216,11 @@ def show(data):
     if not pending_contracted.empty:
         pending_contracted['label'] = "[체결수정] " + pending_contracted['업체명'].astype(str) + " (" + pending_contracted['행사명'].astype(str) + ")"
         p_list += pending_contracted['label'].tolist()
+    if not pending_completed.empty:
+        pending_completed['label'] = "[완료] " + pending_completed['업체명'].astype(str) + " (" + pending_completed['행사명'].astype(str) + ")"
+        p_list += pending_completed['label'].tolist()
 
-    _frames = [df for df in [pending_new, pending_edit, pending_contracted] if not df.empty]
+    _frames = [df for df in [pending_new, pending_edit, pending_contracted, pending_completed] if not df.empty]
     all_pending = pd.concat(_frames, ignore_index=True) if _frames else pd.DataFrame()
 
     p_list = ["(신규작성)"]
@@ -232,7 +241,9 @@ def show(data):
         sel_p = st.selectbox("📂 직접 선택", p_list, key="est_project_sel")
     with _search_col3:
         st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-        if sel_p.startswith("[체결수정]"):
+        if sel_p.startswith("[완료]"):
+            st.caption("📁 완료 프로젝트")
+        elif sel_p.startswith("[체결수정]"):
             st.warning("⚠️ 체결 수정")
         elif sel_p.startswith("[수정]"):
             st.info("📝 견적 수정")
@@ -243,7 +254,8 @@ def show(data):
     _cnt_new = len(pending_new)
     _cnt_edit = len(pending_edit)
     _cnt_contracted = len(pending_contracted)
-    _cnt_total = _cnt_new + _cnt_edit + _cnt_contracted
+    _cnt_completed = len(pending_completed)
+    _cnt_total = _cnt_new + _cnt_edit + _cnt_contracted + _cnt_completed
 
     def _render_cards(df_cards, tab_prefix="all"):
         """카드 그리드 렌더링 — 한 행에 4개"""
@@ -297,6 +309,8 @@ def show(data):
                         _s_cls, _c_cls, _s_txt = "status-new", "new", "🆕 신규접수"
                     elif _label.startswith("[수정]"):
                         _s_cls, _c_cls, _s_txt = "status-edit", "edit", "📝 견적수정"
+                    elif _label.startswith("[완료]"):
+                        _s_cls, _c_cls, _s_txt = "status-completed", "completed", "✅ 완료"
                     else:
                         _s_cls, _c_cls, _s_txt = "status-contracted", "contracted", "⚡ 체결수정"
 
@@ -314,11 +328,12 @@ def show(data):
                     _card_idx += 1
 
     with st.expander(f"📋 프로젝트 대기열 ({_cnt_total}건)", expanded=(_cnt_total > 0 and sel_p == "(신규작성)")):
-        tab_all, tab_new, tab_edit, tab_contracted = st.tabs([
+        tab_all, tab_new, tab_edit, tab_contracted, tab_completed = st.tabs([
             f"전체 ({_cnt_total})",
             f"🆕 신규접수 ({_cnt_new})",
             f"📝 견적수정 ({_cnt_edit})",
-            f"⚡ 체결수정 ({_cnt_contracted})"
+            f"⚡ 체결수정 ({_cnt_contracted})",
+            f"✅ 완료 ({_cnt_completed})"
         ])
         with tab_all:
             _render_cards(all_pending, "all")
@@ -328,9 +343,13 @@ def show(data):
             _render_cards(pending_edit, "edit")
         with tab_contracted:
             _render_cards(pending_contracted, "cont")
+        with tab_completed:
+            _render_cards(pending_completed, "done")
 
     # 상태 안내 배너
-    if sel_p.startswith("[체결수정]"):
+    if sel_p.startswith("[완료]"):
+        st.info("📁 완료된 프로젝트의 견적을 조회합니다. 수정 후 저장도 가능합니다.")
+    elif sel_p.startswith("[체결수정]"):
         st.warning("⚠️ 체결된 견적을 수정합니다. 저장 시 기존 데이터를 덮어씁니다.")
     elif sel_p.startswith("[수정]"):
         st.info("📝 기존 견적을 수정합니다. 저장 시 기존 데이터를 덮어씁니다.")
