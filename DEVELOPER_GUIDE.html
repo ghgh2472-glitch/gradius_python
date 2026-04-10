@@ -1,0 +1,2027 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;700&display=swap');
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Noto Sans KR', 'NanumGothic', sans-serif;
+    font-size: 12px; line-height: 1.7; color: #1a1a1a;
+    padding: 40px 50px; max-width: 1000px; margin: 0 auto;
+  }
+  h1 { font-size: 26px; color: #1e3a5f; border-bottom: 3px solid #2563EB; padding-bottom: 8px; margin: 30px 0 20px; }
+  h2 { font-size: 20px; color: #1e3a5f; border-bottom: 1px solid #c7d7f5; padding-bottom: 6px; margin: 28px 0 16px; }
+  h3 { font-size: 15px; color: #2563EB; margin: 20px 0 10px; }
+  h4 { font-size: 13px; color: #374151; margin: 14px 0 8px; }
+  p { margin: 8px 0; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 11px; }
+  th { background: #1e3a5f; color: white; padding: 7px 10px; text-align: left; }
+  td { padding: 6px 10px; border: 1px solid #d1d5db; }
+  tr:nth-child(even) td { background: #f8fafc; }
+  code { background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 3px;
+          padding: 1px 5px; font-family: 'Courier New', monospace; font-size: 10.5px; color: #c7254e; }
+  pre { background: #1e293b; color: #e2e8f0; border-radius: 6px;
+         padding: 14px 16px; margin: 10px 0; overflow-x: auto; }
+  pre code { background: none; border: none; color: #e2e8f0; font-size: 10.5px; padding: 0; }
+  blockquote { border-left: 4px solid #2563EB; background: #eff6ff; padding: 8px 14px; margin: 10px 0; border-radius: 0 4px 4px 0; }
+  ul, ol { padding-left: 22px; margin: 6px 0; }
+  li { margin: 3px 0; }
+  hr { border: none; border-top: 1px solid #e2e8f0; margin: 24px 0; }
+  .toc { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px 20px; margin-bottom: 30px; }
+  .toc ul { padding-left: 18px; }
+  .toc a { color: #2563EB; text-decoration: none; }
+</style>
+</head>
+<body>
+<h1 id="gradius-erp-개발자-기술-가이드">Gradius ERP — 개발자 기술 가이드</h1>
+
+<blockquote>
+  <p><strong>대상</strong>: 신규 개발자 및 시스템 유지보수 담당자<br />
+  <strong>최종 수정</strong>: 2026년 4월<br />
+  <strong>버전</strong>: v1.5 (master 브랜치 기준)</p>
+</blockquote>
+
+<hr />
+
+<h2 id="목차">목차</h2>
+
+<ol>
+<li><a href="#1-프로그램-개요">프로그램 개요</a></li>
+<li><a href="#2-기술-스택-및-의존성">기술 스택 및 의존성</a></li>
+<li><a href="#3-시스템-아키텍처">시스템 아키텍처</a></li>
+<li><a href="#4-디렉토리-구조-및-파일-역할">디렉토리 구조 및 파일 역할</a></li>
+<li><a href="#5-데이터-계층--google-sheets-구조">데이터 계층 — Google Sheets 구조</a></li>
+<li><a href="#6-업무-파이프라인-7단계-상태-흐름">업무 파이프라인 (7단계 상태 흐름)</a></li>
+<li><a href="#7-인증-및-gcp-설정">인증 및 GCP 설정</a></li>
+<li><a href="#8-데이터-로더-api-레퍼런스">데이터 로더 API 레퍼런스</a></li>
+<li><a href="#9-캐싱-전략">캐싱 전략</a></li>
+<li><a href="#10-페이지-모듈-레퍼런스">페이지 모듈 레퍼런스</a></li>
+<li><a href="#11-비즈니스-로직-모듈">비즈니스 로직 모듈</a></li>
+<li><a href="#12-ai-및-자동화">AI 및 자동화</a></li>
+<li><a href="#13-session-state-키-맵">Session State 키 맵</a></li>
+<li><a href="#14-개발-환경-설정">개발 환경 설정</a></li>
+<li><a href="#15-배포-가이드">배포 가이드</a></li>
+<li><a href="#16-주요-설계-패턴">주요 설계 패턴</a></li>
+<li><a href="#17-알려진-기술-부채">알려진 기술 부채</a></li>
+<li><a href="#18-개발-시-주의사항">개발 시 주의사항</a></li>
+</ol>
+
+<hr />
+
+<h2 id="1-프로그램-개요">1. 프로그램 개요</h2>
+
+<p><strong>Gradius ERP</strong>는 스태프 파견 및 이벤트 행사 전문업체를 위한 <strong>통합 행정 자동화 웹 애플리케이션</strong>입니다.</p>
+
+<h3 id="핵심-가치">핵심 가치</h3>
+
+<table>
+<thead>
+<tr>
+  <th>가치</th>
+  <th>설명</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td><strong>자동화</strong></td>
+  <td>문의 접수부터 정산 완료까지 수동 작업 최소화</td>
+</tr>
+<tr>
+  <td><strong>실시간</strong></td>
+  <td>Google Sheets 기반 공유 데이터, 30분 캐시로 빠른 응답</td>
+</tr>
+<tr>
+  <td><strong>AI 지원</strong></td>
+  <td>Gemini AI로 경영 인사이트, 견적 추천, 자연어 조회</td>
+</tr>
+<tr>
+  <td><strong>한국어 전용</strong></td>
+  <td>UI/데이터/용어 모두 한국어</td>
+</tr>
+</tbody>
+</table>
+
+<h3 id="사용자-역할">사용자 역할</h3>
+
+<ul>
+<li><strong>대표(CEO)</strong>: 전용 대시보드에서 미수금/미지급/수익률 모니터링 및 인사 컨펌</li>
+<li><strong>영업/기획</strong>: 문의 접수, 견적 작성, 계약 처리</li>
+<li><strong>운영/배정</strong>: 인력 배정, 출석 관리</li>
+<li><strong>정산 담당</strong>: 고객 청구, 인력 지급, 세금계산서</li>
+</ul>
+
+<hr />
+
+<h2 id="2-기술-스택-및-의존성">2. 기술 스택 및 의존성</h2>
+
+<h3 id="핵심-라이브러리">핵심 라이브러리</h3>
+
+<pre><code>streamlit&gt;=1.0            # 웹 프레임워크 (UI 전체)
+pandas&gt;=1.5               # 데이터 처리 (시트 데이터 ↔ DataFrame)
+gspread&gt;=5.7.0            # Google Sheets API 클라이언트
+oauth2client&gt;=4.1.3       # GCP 서비스 계정 인증
+google-auth&gt;=2.0.0        # Google 인증 라이브러리
+google-api-python-client&gt;=2.0  # Google API (Calendar 등)
+google-genai&gt;=1.0         # Gemini AI API
+plotly&gt;=5.0               # 차트 및 시각화
+apscheduler&gt;=3.10         # 백그라운드 스케줄러
+Pillow&gt;=9.0               # 이미지 처리 (견적서 생성)
+openpyxl&gt;=3.0             # Excel 호환
+streamlit-calendar&gt;=0.1   # 캘린더 위젯
+numpy&gt;=1.24               # 수치 계산
+requests&gt;=2.28            # HTTP 요청
+python-dotenv&gt;=0.20       # .env 파일 지원
+pydantic&gt;=1.9             # 데이터 검증
+</code></pre>
+
+<h3 id="시스템-패키지-packagestxt">시스템 패키지 (packages.txt)</h3>
+
+<pre><code>fonts-nanum               # 한글 나눔 폰트 (견적서 이미지 생성 필수)
+</code></pre>
+
+<h3 id="python-버전">Python 버전</h3>
+
+<p>Python 3.10 이상 권장 (3.9+ 호환)</p>
+
+<hr />
+
+<h2 id="3-시스템-아키텍처">3. 시스템 아키텍처</h2>
+
+<h3 id="전체-구조">전체 구조</h3>
+
+<pre><code>┌──────────────────────────────────────────────────────────────┐
+│                    사용자 (웹브라우저)                         │
+└──────────────────────────────┬───────────────────────────────┘
+                               │ HTTPS
+┌──────────────────────────────▼───────────────────────────────┐
+│                  STREAMLIT WEB APPLICATION                    │
+│                                                              │
+│  ┌─────────┐  ┌──────────────────────────────────────────┐  │
+│  │  app.py  │  │            Page Modules (11개)           │  │
+│  │ (라우터) │  │  대시보드│문의│견적│계약│배정│출석│정산  │  │
+│  └────┬────┘  └─────────────────┬────────────────────────┘  │
+│       │                         │                            │
+│  ┌────▼─────────────────────────▼────────────────────────┐  │
+│  │              Business Logic Layer                      │  │
+│  │    calculators.py │ smart_assignment.py │ utils_*.py  │  │
+│  └─────────────────────────────┬──────────────────────────┘  │
+│                                │                            │
+│  ┌─────────────────────────────▼──────────────────────────┐  │
+│  │              data_loader.py (Data Access Layer)        │  │
+│  │  커넥션 풀링 │ 캐시(30분) │ CRUD │ Batch 쓰기          │  │
+│  └─────────────────────────────┬──────────────────────────┘  │
+└──────────────────────────────────────────────────────────────┘
+                                │ Google Sheets API
+┌──────────────────────────────────────────────────────────────┐
+│                Google Cloud Platform                          │
+│                                                              │
+│  ┌──────────────────┐   ┌─────────────┐   ┌─────────────┐  │
+│  │   Google Sheets  │   │  Gemini AI  │   │  Calendar   │  │
+│  │  (Master DB)     │   │  (LLM)      │   │  API        │  │
+│  │  12개 시트       │   │  2.5 Flash  │   │             │  │
+│  └──────────────────┘   └─────────────┘   └─────────────┘  │
+└──────────────────────────────────────────────────────────────┘
+</code></pre>
+
+<h3 id="데이터-흐름">데이터 흐름</h3>
+
+<pre><code>사용자 액션
+  │
+  ▼ (1) UI 이벤트 → session_state 업데이트
+  │
+  ▼ (2) 비즈니스 로직 처리 (calculators, utils)
+  │
+  ▼ (3) data_loader 통해 Google Sheets 쓰기
+  │
+  ▼ (4) 캐시 무효화 (invalidate_*)
+  │
+  ▼ (5) st.rerun() → 화면 재렌더링
+  │
+  ▼ (6) get_data() → 세션 캐시 체크 → 없으면 Sheets에서 읽기
+</code></pre>
+
+<hr />
+
+<h2 id="4-디렉토리-구조-및-파일-역할">4. 디렉토리 구조 및 파일 역할</h2>
+
+<h3 id="진입점-및-라우팅">진입점 및 라우팅</h3>
+
+<table>
+<thead>
+<tr>
+  <th>파일</th>
+  <th>역할</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td><code>app.py</code></td>
+  <td><strong>메인 진입점</strong>. 사이드바 메뉴 정의, 페이지 라우팅, 전역 캐시 관리, 데이터 동기화 버튼</td>
+</tr>
+<tr>
+  <td><code>auth.py</code></td>
+  <td>GCP 서비스 계정 인증. <code>get_gspread_client()</code> 제공</td>
+</tr>
+</tbody>
+</table>
+
+<h4 id="apppy-라우팅-맵">app.py 라우팅 맵</h4>
+
+<div class="codehilite">
+<pre><span></span><code><span class="n">_menu_items</span> <span class="o">=</span> <span class="p">[</span>
+    <span class="s2">&quot;🏢 대표님 전용&quot;</span><span class="p">,</span>           <span class="c1"># → page_ceo.show()</span>
+    <span class="s2">&quot;📊 경영 대시보드&quot;</span><span class="p">,</span>         <span class="c1"># → page_dashboard.show()</span>
+    <span class="s2">&quot;📞 문의 접수 및 관리&quot;</span><span class="p">,</span>     <span class="c1"># → page_inquiry.show()</span>
+    <span class="s2">&quot;🧮 견적 통합 관리&quot;</span><span class="p">,</span>        <span class="c1"># → page_estimate.show()</span>
+    <span class="s2">&quot;📝 계약 관리 및 승인&quot;</span><span class="p">,</span>     <span class="c1"># → page_contract.show()</span>
+    <span class="s2">&quot;👷 인원 배정 관리&quot;</span><span class="p">,</span>        <span class="c1"># → page_staff_new.show()</span>
+    <span class="s2">&quot;📋 출석부 관리&quot;</span><span class="p">,</span>           <span class="c1"># → page_attendance.show()</span>
+    <span class="s2">&quot;💰 정산 및 급여 관리&quot;</span><span class="p">,</span>     <span class="c1"># → page_settlement.show()</span>
+    <span class="s2">&quot;🔍 프로젝트 상세확인&quot;</span><span class="p">,</span>     <span class="c1"># → page_project_detail.show()</span>
+    <span class="s2">&quot;🤖 AI 비서&quot;</span><span class="p">,</span>               <span class="c1"># → page_ai_assistant.show()</span>
+    <span class="s2">&quot;🛠️ 데이터 관리&quot;</span><span class="p">,</span>          <span class="c1"># → data_management.show_data_management()</span>
+<span class="p">]</span>
+</code></pre>
+</div>
+
+<h3 id="페이지-모듈-11개">페이지 모듈 (11개)</h3>
+
+<table>
+<thead>
+<tr>
+  <th>파일</th>
+  <th>메뉴명</th>
+  <th>주요 기능</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td><code>page_dashboard.py</code></td>
+  <td>경영 대시보드</td>
+  <td>KPI 카드, D-Day 현황, 계약대기/미체결 목록, 수익 차트</td>
+</tr>
+<tr>
+  <td><code>page_inquiry.py</code></td>
+  <td>문의 접수</td>
+  <td>고객 문의 입력폼, 자동 ID 생성, 행사 일정 파싱</td>
+</tr>
+<tr>
+  <td><code>page_estimate.py</code></td>
+  <td>견적 통합 관리</td>
+  <td>품목별 견적, 복수안 비교, 견적서 이미지 생성·발송, 완료 프로젝트 조회</td>
+</tr>
+<tr>
+  <td><code>page_contract.py</code></td>
+  <td>계약 관리</td>
+  <td>카드형 목록, 계약 승인, 사업자등록증 OCR</td>
+</tr>
+<tr>
+  <td><code>page_staff_new.py</code></td>
+  <td>인원 배정 관리</td>
+  <td>3단계 배정 (후보→직군→확정), 팀배정, 출석/지급/평가 탭</td>
+</tr>
+<tr>
+  <td><code>page_attendance.py</code></td>
+  <td>출석부 관리</td>
+  <td>스케줄표, 일일 출근/퇴근 기록, 근무시간 계산</td>
+</tr>
+<tr>
+  <td><code>page_settlement.py</code></td>
+  <td>정산 및 급여</td>
+  <td>전체 정산 현황, 건별 정산, 세금계산서</td>
+</tr>
+<tr>
+  <td><code>page_ceo.py</code></td>
+  <td>대표님 전용</td>
+  <td>미수금/미지급, 수익보고, 인사 컨펌, 지급 현황</td>
+</tr>
+<tr>
+  <td><code>page_project_detail.py</code></td>
+  <td>프로젝트 상세</td>
+  <td>문의→정산 전체 흐름 조회, 고객 카드</td>
+</tr>
+<tr>
+  <td><code>page_ai_assistant.py</code></td>
+  <td>AI 비서</td>
+  <td>자연어 경영 조회, 기간별 리포트, 브리핑</td>
+</tr>
+<tr>
+  <td><code>page_guide.py</code></td>
+  <td>사용 가이드</td>
+  <td>단계별 업무 안내 (정적 콘텐츠)</td>
+</tr>
+</tbody>
+</table>
+
+<h3 id="데이터-계층">데이터 계층</h3>
+
+<table>
+<thead>
+<tr>
+  <th>파일</th>
+  <th>역할</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td><code>data_loader.py</code></td>
+  <td><strong>핵심 데이터 계층</strong>. Google Sheets CRUD, 커넥션 풀링, 캐시 관리, 모든 시트 접근</td>
+</tr>
+<tr>
+  <td><code>data_management.py</code></td>
+  <td>데이터 초기화, 문의ID 기준 전체 삭제, 관리자 기능</td>
+</tr>
+</tbody>
+</table>
+
+<h3 id="비즈니스-로직">비즈니스 로직</h3>
+
+<table>
+<thead>
+<tr>
+  <th>파일</th>
+  <th>역할</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td><code>calculators.py</code></td>
+  <td>견적·급여·세금 자동 계산, 입력값 검증</td>
+</tr>
+<tr>
+  <td><code>smart_assignment.py</code></td>
+  <td>인력 스마트 매칭 (필터링 + 점수 산출 + AI 추천)</td>
+</tr>
+<tr>
+  <td><code>workflow_automation.py</code></td>
+  <td>배정→출석부→지급 자동 연계</td>
+</tr>
+<tr>
+  <td><code>ai_helper.py</code></td>
+  <td>매출 예측(이동평균), 리스크 분석, 고객 이탈 분석</td>
+</tr>
+</tbody>
+</table>
+
+<h3 id="유틸리티-brain-클래스-포함">유틸리티 (Brain 클래스 포함)</h3>
+
+<table>
+<thead>
+<tr>
+  <th>파일</th>
+  <th>핵심 클래스/함수</th>
+  <th>역할</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td><code>utils_estimate.py</code></td>
+  <td><code>EstimateBrain</code></td>
+  <td>단가 조회, 직군 정보, 견적서 HTML/이미지 생성</td>
+</tr>
+<tr>
+  <td><code>utils_staff.py</code></td>
+  <td><code>StaffBrain</code></td>
+  <td>인력 점수 파싱, 추천도 평가, 출석부 HTML</td>
+</tr>
+<tr>
+  <td><code>utils_settlement.py</code></td>
+  <td><code>SettlementBrain</code></td>
+  <td>지급 현황 파싱, 거래명세서/급여명세서 생성</td>
+</tr>
+<tr>
+  <td><code>utils_inquiry.py</code></td>
+  <td><code>InquiryParser</code></td>
+  <td>이메일/전화 파싱, 날짜 스마트 변환</td>
+</tr>
+<tr>
+  <td><code>utils_dashboard.py</code></td>
+  <td>집계 함수들</td>
+  <td>KPI 계산, 곧 나갈 현장 (D-10), 미체결 목록</td>
+</tr>
+<tr>
+  <td><code>utils_contract.py</code></td>
+  <td>카드 HTML 생성</td>
+  <td>계약 카드 렌더링, 발송 상태 추적</td>
+</tr>
+<tr>
+  <td><code>utils.py</code></td>
+  <td>범용 유틸리티</td>
+  <td>안전한 숫자 변환, 시간 계산, Base64 인코딩</td>
+</tr>
+<tr>
+  <td><code>helpers.py</code></td>
+  <td><code>now_kst()</code>, <code>@retry</code></td>
+  <td>KST 시간, 로거, 재시도 데코레이터</td>
+</tr>
+</tbody>
+</table>
+
+<h3 id="외부-연동">외부 연동</h3>
+
+<table>
+<thead>
+<tr>
+  <th>파일</th>
+  <th>역할</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td><code>ocr_utils.py</code></td>
+  <td>사업자등록증 OCR (Google Vision → EasyOCR → Pytesseract 폴백)</td>
+</tr>
+<tr>
+  <td><code>scheduler.py</code></td>
+  <td>APScheduler 일일(09:00, 17:00)/월간(1일 08:00) 자동 작업</td>
+</tr>
+<tr>
+  <td><code>notifications.py</code></td>
+  <td>이메일(SMTP)/Slack Webhook 알림 발송</td>
+</tr>
+<tr>
+  <td><code>gemini_client.py</code></td>
+  <td>Gemini API 래퍼. 민감정보 자동 마스킹 후 API 호출</td>
+</tr>
+</tbody>
+</table>
+
+<h3 id="설정-파일">설정 파일</h3>
+
+<table>
+<thead>
+<tr>
+  <th>파일</th>
+  <th>역할</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td><code>status_config.py</code></td>
+  <td>상태 정의, 전환 규칙, UI 아이콘·색상 매핑</td>
+</tr>
+<tr>
+  <td><code>project_context.py</code></td>
+  <td>프로젝트 설계 문서 (코드 주석 형태)</td>
+</tr>
+<tr>
+  <td><code>secrets.json</code></td>
+  <td>GCP 서비스 계정 자격증명 <strong>(절대 Git 커밋 금지)</strong></td>
+</tr>
+</tbody>
+</table>
+
+<h3 id="백업-파일">백업 파일</h3>
+
+<p><code>_home_backup/</code> 디렉토리 및 <code>*.bak</code>, <code>*_backup.py</code> 파일들은 개발 중 생성된 백업이며, 프로덕션에서 사용하지 않습니다.</p>
+
+<hr />
+
+<h2 id="5-데이터-계층-google-sheets-구조">5. 데이터 계층 — Google Sheets 구조</h2>
+
+<h3 id="스프레드시트-id">스프레드시트 ID</h3>
+
+<pre><code>13gzHX1p-oMZnZjVfYR93RV1Zj5YAalOm56FWYU-p7RI
+</code></pre>
+
+<blockquote>
+  <p>Google Sheets URL: <code>https://docs.google.com/spreadsheets/d/{SHEET_ID}</code></p>
+</blockquote>
+
+<h3 id="트랜잭션-시트-실시간-데이터">트랜잭션 시트 (실시간 데이터)</h3>
+
+<table>
+<thead>
+<tr>
+  <th>시트명</th>
+  <th>코드 내 키</th>
+  <th>역할</th>
+  <th>주요 컬럼</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td><code>문의작성</code></td>
+  <td><code>"inq"</code></td>
+  <td>고객 문의 원장</td>
+  <td>문의ID, 업체명, 행사명, 장소, 일시, 담당자, 연락처, 상태, 복장, 식사, 주차, 특이사항</td>
+</tr>
+<tr>
+  <td><code>견적상세</code></td>
+  <td><code>"estimate"</code></td>
+  <td>견적 메타</td>
+  <td>문의ID, 공급가액, 부가세, 합계금액, 발송방법, 발송메모</td>
+</tr>
+<tr>
+  <td><code>견적품목</code></td>
+  <td><code>"estimate_items"</code></td>
+  <td>견적 품목 상세</td>
+  <td>문의ID, 구분(인력/부대), 품목, 규격, 수량, 일수, 매출단가, 매입단가, 매출합계, 매입합계, 비고</td>
+</tr>
+<tr>
+  <td><code>견적안</code></td>
+  <td><code>"estimate_versions"</code></td>
+  <td>복수 견적안</td>
+  <td>문의ID, 견적안명, 품목데이터(JSON), 메타데이터(JSON), 생성일시</td>
+</tr>
+<tr>
+  <td><code>배정기록</code></td>
+  <td><code>"dispatch"</code></td>
+  <td>인력 배정 기록</td>
+  <td>배정ID, 문의ID, 행사명, 인력명, 직무, 팀코드, 구분(외부/본사), 지급단가, 근무일수, 총지급액, 상태</td>
+</tr>
+<tr>
+  <td><code>출석부</code></td>
+  <td><code>"attendance"</code></td>
+  <td>일일 출석 기록</td>
+  <td>기록ID, 배정ID, 문의ID, 인력명, 출석날짜, 출근시간, 퇴근시간, 근무시간, 출석상태</td>
+</tr>
+<tr>
+  <td><code>지급내역</code></td>
+  <td><code>"payment"</code></td>
+  <td>급여 지급 명세</td>
+  <td>지급ID, 배정ID, 문의ID, 인력명, 근무일수, 기본급, 교통비, 식비, 기타, 소계, 세금공제, 최종지급액, 지급상태, 별도정산, 비고</td>
+</tr>
+<tr>
+  <td><code>평가표</code></td>
+  <td><code>"evaluation"</code></td>
+  <td>인력 평가</td>
+  <td>평가ID, 배정ID, 인력명, 현장명, 근태, 수행, 외모, 팀워크, 총점, 평가등급</td>
+</tr>
+<tr>
+  <td><code>계약건은청구금액적기</code></td>
+  <td><code>"settlement"</code></td>
+  <td><strong>정산 마스터</strong></td>
+  <td>문의ID, 현장명, 업체, 파견일자, 청구금액, 공급가액, 부가세, 받은금액, 잔액, 진행상황, 입금여부, 지급액, 이익</td>
+</tr>
+</tbody>
+</table>
+
+<h3 id="참조-시트-설정마스터-데이터">참조 시트 (설정/마스터 데이터)</h3>
+
+<table>
+<thead>
+<tr>
+  <th>시트명</th>
+  <th>코드 내 키</th>
+  <th>역할</th>
+  <th>주요 컬럼</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td><code>STAFF</code></td>
+  <td><code>"staff"</code></td>
+  <td>인력 데이터베이스</td>
+  <td>이름, 성별, 나이, 키, 영어, 운전면허, 거주지, 가능직무, 추천도, 근태/수행/외모/팀워크 점수, 총점, 비고</td>
+</tr>
+<tr>
+  <td><code>고객정보</code></td>
+  <td><code>"client"</code></td>
+  <td>거래처 DB</td>
+  <td>업체명, 대표자, 업태, 종목, 사업자번호, 사업자주소, 담당자, 연락처, 이메일</td>
+</tr>
+<tr>
+  <td><code>Roles</code></td>
+  <td><code>"roles"</code></td>
+  <td>직군 정의 + 기본 단가</td>
+  <td>직군명, 매출단가(기본), 매입단가(기본), 팀장추가비</td>
+</tr>
+<tr>
+  <td><code>Factors</code></td>
+  <td><code>"factors"</code></td>
+  <td>평가 항목 배점</td>
+  <td>항목명, 만점, 가중치, 등급기준</td>
+</tr>
+<tr>
+  <td><code>Guides</code></td>
+  <td><code>"guides"</code></td>
+  <td>업무 가이드 콘텐츠</td>
+  <td>단계, 제목, 내용, 주의사항</td>
+</tr>
+</tbody>
+</table>
+
+<h3 id="데이터-로딩-방식">데이터 로딩 방식</h3>
+
+<div class="codehilite">
+<pre><span></span><code><span class="c1"># data_loader.py</span>
+<span class="n">data</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">get_data</span><span class="p">()</span>
+<span class="c1"># 반환 구조:</span>
+<span class="p">{</span>
+    <span class="s2">&quot;df_inq&quot;</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>       <span class="c1"># 문의작성 시트</span>
+    <span class="s2">&quot;df_est&quot;</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>       <span class="c1"># 견적상세 시트</span>
+    <span class="s2">&quot;df_staff&quot;</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>     <span class="c1"># STAFF 시트</span>
+    <span class="s2">&quot;df_client&quot;</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>    <span class="c1"># 고객정보 시트</span>
+    <span class="s2">&quot;df_roles&quot;</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>     <span class="c1"># Roles 시트</span>
+    <span class="s2">&quot;df_factors&quot;</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>   <span class="c1"># Factors 시트</span>
+    <span class="s2">&quot;df_guides&quot;</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>    <span class="c1"># Guides 시트</span>
+<span class="p">}</span>
+
+<span class="n">dispatch_data</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">get_dispatch</span><span class="p">()</span>
+<span class="c1"># 반환 구조:</span>
+<span class="p">{</span>
+    <span class="s2">&quot;df_dispatch&quot;</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>    <span class="c1"># 배정기록 시트</span>
+    <span class="s2">&quot;df_settlement&quot;</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>  <span class="c1"># 계약건은청구금액적기 시트</span>
+    <span class="s2">&quot;df_payment&quot;</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>     <span class="c1"># 지급내역 시트</span>
+    <span class="s2">&quot;df_attendance&quot;</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>  <span class="c1"># 출석부 시트 (일부 페이지)</span>
+<span class="p">}</span>
+</code></pre>
+</div>
+
+<hr />
+
+<h2 id="6-업무-파이프라인-7단계-상태-흐름">6. 업무 파이프라인 (7단계 상태 흐름)</h2>
+
+<h3 id="상태-정의">상태 정의</h3>
+
+<div class="codehilite">
+<pre><span></span><code><span class="c1"># status_config.py</span>
+<span class="n">STATUS_FLOW</span> <span class="o">=</span> <span class="p">[</span>
+    <span class="s2">&quot;접수&quot;</span><span class="p">,</span>     <span class="c1"># 0: 고객 문의 접수</span>
+    <span class="s2">&quot;견적&quot;</span><span class="p">,</span>     <span class="c1"># 1: 견적서 작성 완료</span>
+    <span class="s2">&quot;체결&quot;</span><span class="p">,</span>     <span class="c1"># 2: 계약 확정</span>
+    <span class="s2">&quot;배정완료&quot;</span><span class="p">,</span> <span class="c1"># 3: 인력 배정 완료</span>
+    <span class="s2">&quot;진행중&quot;</span><span class="p">,</span>   <span class="c1"># 4: 행사 진행 중</span>
+    <span class="s2">&quot;완료&quot;</span><span class="p">,</span>     <span class="c1"># 5: 행사 종료</span>
+    <span class="s2">&quot;정산완료&quot;</span><span class="p">,</span> <span class="c1"># 6: 급여/청구 정산 완료</span>
+<span class="p">]</span>
+
+<span class="n">STATUS_EXIT</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;미체결&quot;</span><span class="p">,</span> <span class="s2">&quot;보류&quot;</span><span class="p">,</span> <span class="s2">&quot;취소&quot;</span><span class="p">]</span>  <span class="c1"># 이탈 상태</span>
+</code></pre>
+</div>
+
+<h3 id="상태-전환-규칙">상태 전환 규칙</h3>
+
+<div class="codehilite">
+<pre><span></span><code><span class="n">STATUS_TRANSITIONS</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">&quot;접수&quot;</span><span class="p">:</span>     <span class="p">[</span><span class="s2">&quot;견적&quot;</span><span class="p">,</span> <span class="s2">&quot;미체결&quot;</span><span class="p">,</span> <span class="s2">&quot;보류&quot;</span><span class="p">,</span> <span class="s2">&quot;취소&quot;</span><span class="p">],</span>
+    <span class="s2">&quot;견적&quot;</span><span class="p">:</span>     <span class="p">[</span><span class="s2">&quot;체결&quot;</span><span class="p">,</span> <span class="s2">&quot;미체결&quot;</span><span class="p">,</span> <span class="s2">&quot;보류&quot;</span><span class="p">,</span> <span class="s2">&quot;취소&quot;</span><span class="p">,</span> <span class="s2">&quot;접수&quot;</span><span class="p">],</span>
+    <span class="s2">&quot;체결&quot;</span><span class="p">:</span>     <span class="p">[</span><span class="s2">&quot;배정완료&quot;</span><span class="p">,</span> <span class="s2">&quot;보류&quot;</span><span class="p">,</span> <span class="s2">&quot;취소&quot;</span><span class="p">],</span>
+    <span class="s2">&quot;배정완료&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;진행중&quot;</span><span class="p">,</span> <span class="s2">&quot;체결&quot;</span><span class="p">,</span> <span class="s2">&quot;보류&quot;</span><span class="p">,</span> <span class="s2">&quot;취소&quot;</span><span class="p">],</span>
+    <span class="s2">&quot;진행중&quot;</span><span class="p">:</span>   <span class="p">[</span><span class="s2">&quot;완료&quot;</span><span class="p">,</span> <span class="s2">&quot;보류&quot;</span><span class="p">],</span>
+    <span class="s2">&quot;완료&quot;</span><span class="p">:</span>     <span class="p">[</span><span class="s2">&quot;정산완료&quot;</span><span class="p">],</span>
+    <span class="s2">&quot;정산완료&quot;</span><span class="p">:</span> <span class="p">[],</span>           <span class="c1"># 최종 완료 (변경 불가)</span>
+    <span class="s2">&quot;미체결&quot;</span><span class="p">:</span>   <span class="p">[</span><span class="s2">&quot;접수&quot;</span><span class="p">],</span>     <span class="c1"># 재활성화 가능</span>
+    <span class="s2">&quot;보류&quot;</span><span class="p">:</span>     <span class="p">[</span><span class="s2">&quot;접수&quot;</span><span class="p">,</span> <span class="s2">&quot;견적&quot;</span><span class="p">,</span> <span class="s2">&quot;체결&quot;</span><span class="p">,</span> <span class="s2">&quot;배정완료&quot;</span><span class="p">],</span>
+    <span class="s2">&quot;취소&quot;</span><span class="p">:</span>     <span class="p">[],</span>           <span class="c1"># 최종 취소</span>
+<span class="p">}</span>
+</code></pre>
+</div>
+
+<h3 id="단계별-상세-업무-흐름">단계별 상세 업무 흐름</h3>
+
+<h4 id="step-1-문의-접수-page_inquirypy">Step 1: 문의 접수 (<code>page_inquiry.py</code>)</h4>
+
+<pre><code>입력: 업체명, 행사명, 장소, 일시, 필요인원, 복장/식사/주차, 특이사항
+  │
+  ▼ (자동) UUID[:8] 형식으로 문의ID 생성
+  │
+  ▼ db.append_row("문의작성", row_data)
+  │
+  └── 상태: "접수", 대시보드 알림 카운트 +1
+</code></pre>
+
+<h4 id="step-2-견적-산출-page_estimatepy">Step 2: 견적 산출 (<code>page_estimate.py</code>)</h4>
+
+<pre><code>문의 선택 → 문의 데이터 자동 로드 (업체명, 행사일, 인원 등)
+  │
+  ▼ 견적 품목 입력 (품목명, 수량, 일수, 매출단가, 매입단가)
+  ├── 매출합계 = 수량 × 일수 × 매출단가 (자동계산)
+  ├── 매입합계 = 수량 × 일수 × 매입단가
+  └── 예상이익 = 매출합계 - 매입합계
+  │
+  ▼ 부대비용 입력 (교통비, 식비, 장비비 등)
+  │
+  ▼ 최종 금액 계산
+  ├── 공급가액 = 품목합계 + 부대비용합계 - 할인액
+  ├── 부가세 = 공급가액 × 0.1 (VAT 포함 선택 시)
+  └── 합계금액 = 공급가액 + 부가세
+  │
+  ▼ db.save_estimate_details() + db.save_estimate_items()
+  │
+  ▼ 견적서 이미지 생성 (Pillow) → 카카오/이메일 발송
+  │
+  └── 상태: "견적"
+</code></pre>
+
+<h4 id="step-3-계약-승인-page_contractpy">Step 3: 계약 승인 (<code>page_contract.py</code>)</h4>
+
+<pre><code>카드형 목록에서 견적 건 선택
+  │
+  ▼ 고객 정보 확인 (사업자등록증 OCR 옵션)
+  │
+  ▼ 계약일자 입력 → 승인 버튼
+  │
+  ▼ 정산 마스터("계약건은청구금액적기") 시트에 청구 정보 등록
+  │
+  └── 상태: "체결"
+</code></pre>
+
+<h4 id="step-4-인력-배정-page_staff_newpy-3단계">Step 4: 인력 배정 (<code>page_staff_new.py</code>) — 3단계</h4>
+
+<pre><code>Step 1️⃣: 후보 등록
+  ├── STAFF 시트에서 필터 검색 (성별, 나이, 추천도, 가능직무, 지역)
+  ├── SmartAssignment.ai_recommend() → AI 매칭 점수 산출
+  ├── 선택 인력 → 후보풀(assign_cart)에 저장
+  └── db.save_candidates_batch() → 배정기록 시트에 "후보" 상태로 저장
+
+Step 2️⃣: 직군별 배정
+  ├── 견적품목에서 직군 목록 자동 추출 (_get_role_status)
+  ├── 각 직군별 필요인원 vs 배정인원 진행률 표시
+  └── 후보풀 → 직군 할당 (db.batch_assign_to_role)
+
+Step 3️⃣: 확정 &amp; 일정 관리
+  ├── 인력별 근무 일정 입력 (일반: 단일 기간, 장기: 매트릭스)
+  ├── [배정 확정] → db.batch_confirm_assignments()
+  └── 상태: "배정완료"
+</code></pre>
+
+<h4 id="step-5-출석-관리-page_attendancepy">Step 5: 출석 관리 (<code>page_attendance.py</code>)</h4>
+
+<pre><code>배정 확정된 건 선택
+  │
+  ▼ 스케줄표: 배정 인력 × 행사 일자 매트릭스
+  │
+  ▼ 각 인력별 출근시간/퇴근시간 입력
+  │
+  ▼ 근무시간 자동 계산 (퇴근 - 출근)
+  │
+  ▼ db.batch_save_attendance()
+  │
+  └── 상태 수동 전환: "진행중" → "완료"
+</code></pre>
+
+<h4 id="step-6-정산-page_settlementpy">Step 6: 정산 (<code>page_settlement.py</code>)</h4>
+
+<pre><code>TAB 1: 전체 현황
+  ├── 미입금/부분입금 건 목록
+  ├── 입금여부 업데이트 (미입금/부분입금/입금완료)
+  └── 잔액 = 청구금액 - 받은금액 (자동계산)
+
+TAB 2: 건별 정산
+  ├── 인력별 지급액 입력 (근무일수 × 지급단가)
+  ├── 세금공제 자동 계산
+  ├── 지급기록 일괄 저장 (db.batch_save_payment_records)
+  └── 본사인원 → 자동 0원 확인완료 처리
+
+TAB 3: 세금계산서
+  └── 발행 정보 입력 → 세금계산서 HTML/PDF 생성
+</code></pre>
+
+<h4 id="step-7-최종-완료">Step 7: 최종 완료</h4>
+
+<pre><code>정산 완료 확인 → db.update_status(inquiry_id, "정산완료")
+  │
+  └── page_project_detail에서 전체 히스토리 조회 가능
+</code></pre>
+
+<hr />
+
+<h2 id="7-인증-및-gcp-설정">7. 인증 및 GCP 설정</h2>
+
+<h3 id="서비스-계정-자격증명-구조">서비스 계정 자격증명 구조</h3>
+
+<div class="codehilite">
+<pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;service_account&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;project_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;gradius-system&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;private_key_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;키 ID&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;private_key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;client_email&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;python-bot@gradius-system.iam.gserviceaccount.com&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;client_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;숫자 ID&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;auth_uri&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://accounts.google.com/o/oauth2/auth&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;token_uri&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://oauth2.googleapis.com/token&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;auth_provider_x509_cert_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://www.googleapis.com/oauth2/v1/certs&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;client_x509_cert_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span>
+<span class="p">}</span>
+</code></pre>
+</div>
+
+<h3 id="필요-api-스코프">필요 API 스코프</h3>
+
+<div class="codehilite">
+<pre><span></span><code><span class="n">SCOPES</span> <span class="o">=</span> <span class="p">[</span>
+    <span class="s2">&quot;https://www.googleapis.com/auth/spreadsheets&quot;</span><span class="p">,</span>   <span class="c1"># Sheets 읽기/쓰기</span>
+    <span class="s2">&quot;https://www.googleapis.com/auth/drive&quot;</span><span class="p">,</span>           <span class="c1"># 파일 관리</span>
+    <span class="s2">&quot;https://www.googleapis.com/auth/calendar&quot;</span><span class="p">,</span>        <span class="c1"># 캘린더 (선택적)</span>
+<span class="p">]</span>
+</code></pre>
+</div>
+
+<h3 id="인증-우선순위-authpy">인증 우선순위 (auth.py)</h3>
+
+<div class="codehilite">
+<pre><span></span><code><span class="n">get_gspread_client</span><span class="p">()</span>
+  <span class="mf">1.</span> <span class="n">secrets</span><span class="o">.</span><span class="n">json</span> <span class="n">파일</span> <span class="n">존재</span> <span class="n">시</span> <span class="err">→</span> <span class="n">from_json_keyfile_name</span><span class="p">()</span>
+  <span class="mf">2.</span> <span class="n">st</span><span class="o">.</span><span class="n">secrets</span><span class="p">[</span><span class="s1">&#39;gcp_service_account&#39;</span><span class="p">]</span> <span class="n">존재</span> <span class="n">시</span> <span class="err">→</span> <span class="n">from_json_keyfile_dict</span><span class="p">()</span>
+  <span class="mf">3.</span> <span class="n">st</span><span class="o">.</span><span class="n">secrets</span><span class="p">[</span><span class="s1">&#39;service_account&#39;</span><span class="p">]</span> <span class="n">존재</span> <span class="n">시</span> <span class="err">→</span> <span class="n">from_json_keyfile_dict</span><span class="p">()</span>
+  <span class="mf">4.</span> <span class="n">모두</span> <span class="n">실패</span> <span class="err">→</span> <span class="kc">None</span> <span class="n">반환</span><span class="p">,</span> <span class="n">앱</span> <span class="n">중단</span>
+</code></pre>
+</div>
+
+<h3 id="gcp-콘솔-설정-체크리스트">GCP 콘솔 설정 체크리스트</h3>
+
+<pre><code>□ Google Sheets API 활성화
+□ Google Drive API 활성화
+□ Google Calendar API 활성화 (캘린더 기능 사용 시)
+□ 서비스 계정 생성 (python-bot@gradius-system.iam.gserviceaccount.com)
+□ 서비스 계정에 JSON 키 발급 → secrets.json으로 저장
+□ Google Sheets 문서에 서비스 계정 이메일 공유 (편집자 권한)
+</code></pre>
+
+<hr />
+
+<h2 id="8-데이터-로더-api-레퍼런스">8. 데이터 로더 API 레퍼런스</h2>
+
+<h3 id="초기화">초기화</h3>
+
+<div class="codehilite">
+<pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">data_loader</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">db</span>
+<span class="c1"># data_loader는 모듈 레벨에서 초기화</span>
+<span class="c1"># 페이지 모듈에서: import data_loader as db</span>
+</code></pre>
+</div>
+
+<h3 id="데이터-읽기">데이터 읽기</h3>
+
+<div class="codehilite">
+<pre><span></span><code><span class="c1"># 메인 데이터 (문의, 견적, 인력, 고객, Roles, Guides)</span>
+<span class="n">data</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">get_data</span><span class="p">()</span>
+<span class="n">df_inq</span> <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="s1">&#39;df_inq&#39;</span><span class="p">]</span>
+<span class="n">df_est</span> <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="s1">&#39;df_est&#39;</span><span class="p">]</span>
+<span class="n">df_staff</span> <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="s1">&#39;df_staff&#39;</span><span class="p">]</span>
+
+<span class="c1"># 배정/정산 데이터</span>
+<span class="n">dispatch</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">get_dispatch</span><span class="p">()</span>
+<span class="n">df_dispatch</span> <span class="o">=</span> <span class="n">dispatch</span><span class="p">[</span><span class="s1">&#39;df_dispatch&#39;</span><span class="p">]</span>
+<span class="n">df_settlement</span> <span class="o">=</span> <span class="n">dispatch</span><span class="p">[</span><span class="s1">&#39;df_settlement&#39;</span><span class="p">]</span>
+<span class="n">df_payment</span> <span class="o">=</span> <span class="n">dispatch</span><span class="p">[</span><span class="s1">&#39;df_payment&#39;</span><span class="p">]</span>
+</code></pre>
+</div>
+
+<h3 id="캐시-무효화">캐시 무효화</h3>
+
+<div class="codehilite">
+<pre><span></span><code><span class="n">db</span><span class="o">.</span><span class="n">invalidate_data</span><span class="p">()</span>          <span class="c1"># 전체 캐시 (문의+배정 모두)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">invalidate_main_only</span><span class="p">()</span>     <span class="c1"># 문의/견적 관련 변경 후</span>
+<span class="n">db</span><span class="o">.</span><span class="n">invalidate_dispatch_only</span><span class="p">()</span> <span class="c1"># 배정/정산 관련 변경 후</span>
+<span class="n">db</span><span class="o">.</span><span class="n">invalidate_payment_cache</span><span class="p">()</span> <span class="c1"># 지급내역 변경 후</span>
+</code></pre>
+</div>
+
+<blockquote>
+  <p><strong>규칙</strong>: 데이터를 쓴 후 반드시 해당 캐시를 무효화하고 <code>st.rerun()</code> 호출</p>
+</blockquote>
+
+<h3 id="상태-변경">상태 변경</h3>
+
+<div class="codehilite">
+<pre><span></span><code><span class="n">db</span><span class="o">.</span><span class="n">update_status</span><span class="p">(</span><span class="n">inquiry_id</span><span class="p">,</span> <span class="s2">&quot;견적&quot;</span><span class="p">)</span>     <span class="c1"># 상태 업데이트</span>
+<span class="n">db</span><span class="o">.</span><span class="n">update_cell</span><span class="p">(</span><span class="s2">&quot;문의작성&quot;</span><span class="p">,</span> <span class="n">inquiry_id</span><span class="p">,</span> <span class="s2">&quot;담당자&quot;</span><span class="p">,</span> <span class="s2">&quot;홍길동&quot;</span><span class="p">)</span>  <span class="c1"># 특정 셀 업데이트</span>
+</code></pre>
+</div>
+
+<h3 id="견적-저장">견적 저장</h3>
+
+<div class="codehilite">
+<pre><span></span><code><span class="c1"># 견적 메타데이터 저장</span>
+<span class="n">db</span><span class="o">.</span><span class="n">save_estimate_details</span><span class="p">(</span><span class="n">est_data_dict</span><span class="p">,</span> <span class="n">metadata_dict</span><span class="p">)</span>
+
+<span class="c1"># 견적 품목 저장 (인력 + 부대비용 한 번에)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">save_estimate_items</span><span class="p">(</span><span class="n">inquiry_id</span><span class="p">,</span> <span class="n">items_df</span><span class="p">,</span> <span class="n">additional_costs_df</span><span class="p">)</span>
+
+<span class="c1"># 견적안 버전 관리</span>
+<span class="n">db</span><span class="o">.</span><span class="n">save_estimate_version</span><span class="p">(</span><span class="n">inquiry_id</span><span class="p">,</span> <span class="s2">&quot;견적안1&quot;</span><span class="p">,</span> <span class="n">items_df</span><span class="p">,</span> <span class="n">metadata</span><span class="p">)</span>
+<span class="n">versions</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">load_estimate_versions</span><span class="p">(</span><span class="n">inquiry_id</span><span class="p">)</span>
+</code></pre>
+</div>
+
+<h3 id="배정-관련">배정 관련</h3>
+
+<div class="codehilite">
+<pre><span></span><code><span class="c1"># 후보 등록 (배치)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">save_candidates_batch</span><span class="p">(</span><span class="n">inquiry_id</span><span class="p">,</span> <span class="n">event_name</span><span class="p">,</span> <span class="p">[</span>
+    <span class="p">{</span><span class="s2">&quot;이름&quot;</span><span class="p">:</span> <span class="s2">&quot;홍길동&quot;</span><span class="p">,</span> <span class="s2">&quot;직무&quot;</span><span class="p">:</span> <span class="s2">&quot;경호원&quot;</span><span class="p">,</span> <span class="s2">&quot;구분&quot;</span><span class="p">:</span> <span class="s2">&quot;외부&quot;</span><span class="p">,</span> <span class="o">...</span><span class="p">},</span>
+<span class="p">])</span>
+
+<span class="c1"># 직군 배정 (배치)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">batch_assign_to_role</span><span class="p">([</span>
+    <span class="p">{</span><span class="s2">&quot;배정ID&quot;</span><span class="p">:</span> <span class="s2">&quot;...&quot;</span><span class="p">,</span> <span class="s2">&quot;직무&quot;</span><span class="p">:</span> <span class="s2">&quot;경호원&quot;</span><span class="p">,</span> <span class="s2">&quot;지급단가&quot;</span><span class="p">:</span> <span class="mi">150000</span><span class="p">,</span> <span class="s2">&quot;근무일수&quot;</span><span class="p">:</span> <span class="mi">2</span><span class="p">},</span>
+<span class="p">])</span>
+
+<span class="c1"># 배정 확정</span>
+<span class="n">db</span><span class="o">.</span><span class="n">batch_confirm_assignments</span><span class="p">(</span><span class="n">assign_ids_list</span><span class="p">,</span> <span class="n">long_term</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+
+<span class="c1"># 일정 업데이트</span>
+<span class="n">db</span><span class="o">.</span><span class="n">batch_update_schedule</span><span class="p">([</span>
+    <span class="p">{</span><span class="s2">&quot;배정ID&quot;</span><span class="p">:</span> <span class="s2">&quot;...&quot;</span><span class="p">,</span> <span class="s2">&quot;날짜&quot;</span><span class="p">:</span> <span class="s2">&quot;2026-04-15&quot;</span><span class="p">,</span> <span class="s2">&quot;출근&quot;</span><span class="p">:</span> <span class="s2">&quot;09:00&quot;</span><span class="p">,</span> <span class="o">...</span><span class="p">},</span>
+<span class="p">])</span>
+</code></pre>
+</div>
+
+<h3 id="지급정산">지급/정산</h3>
+
+<div class="codehilite">
+<pre><span></span><code><span class="c1"># 지급기록 배치 저장</span>
+<span class="n">db</span><span class="o">.</span><span class="n">batch_save_payment_records</span><span class="p">([</span>
+    <span class="p">{</span><span class="s2">&quot;문의ID&quot;</span><span class="p">:</span> <span class="s2">&quot;...&quot;</span><span class="p">,</span> <span class="s2">&quot;인력명&quot;</span><span class="p">:</span> <span class="s2">&quot;홍길동&quot;</span><span class="p">,</span> <span class="s2">&quot;근무일수&quot;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span> <span class="s2">&quot;기본급&quot;</span><span class="p">:</span> <span class="mi">300000</span><span class="p">,</span> <span class="o">...</span><span class="p">},</span>
+<span class="p">])</span>
+
+<span class="c1"># 지급 상태 업데이트</span>
+<span class="n">db</span><span class="o">.</span><span class="n">batch_update_payment_status</span><span class="p">([</span>
+    <span class="p">{</span><span class="s2">&quot;assign_id&quot;</span><span class="p">:</span> <span class="s2">&quot;...&quot;</span><span class="p">,</span> <span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;확인완료&quot;</span><span class="p">,</span> <span class="s2">&quot;pay_date&quot;</span><span class="p">:</span> <span class="s2">&quot;2026-04-20&quot;</span><span class="p">},</span>
+<span class="p">])</span>
+
+<span class="c1"># 정산 마스터 업데이트</span>
+<span class="n">db</span><span class="o">.</span><span class="n">update_settlement_progress</span><span class="p">(</span><span class="n">inquiry_id</span><span class="p">,</span> <span class="s2">&quot;정산완료&quot;</span><span class="p">)</span>
+</code></pre>
+</div>
+
+<hr />
+
+<h2 id="9-캐싱-전략">9. 캐싱 전략</h2>
+
+<h3 id="3-레벨-캐싱-아키텍처">3-레벨 캐싱 아키텍처</h3>
+
+<pre><code>Level 1: Google Sheets API (외부)
+  └── 요청마다 네트워크 I/O (느림, 매번 호출 X)
+
+Level 2: @st.cache_data (프로세스 메모리)
+  ├── load_all_data()        TTL=1800 (30분)
+  ├── load_dispatch_data()   TTL=1800 (30분)
+  ├── load_dispatch_sheet()  TTL=120  (2분)
+  └── load_estimate_items()  TTL=120  (2분)
+
+Level 3: st.session_state (세션 메모리)
+  ├── _app_data    → get_data() 반환값 캐시
+  └── _dispatch_data → get_dispatch() 반환값 캐시
+</code></pre>
+
+<h3 id="stcache_resource-싱글턴">@st.cache_resource (싱글턴)</h3>
+
+<div class="codehilite">
+<pre><span></span><code><span class="nd">@st</span><span class="o">.</span><span class="n">cache_resource</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_get_cached_client</span><span class="p">():</span>      <span class="c1"># gspread.Client 싱글턴 (인증 1회)</span>
+    <span class="o">...</span>
+
+<span class="nd">@st</span><span class="o">.</span><span class="n">cache_resource</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_get_cached_spreadsheet</span><span class="p">():</span> <span class="c1"># Spreadsheet 객체 싱글턴</span>
+    <span class="o">...</span>
+</code></pre>
+</div>
+
+<h3 id="캐시-무효화-흐름">캐시 무효화 흐름</h3>
+
+<div class="codehilite">
+<pre><span></span><code><span class="c1"># 데이터 변경 후 반드시 이 순서로:</span>
+<span class="n">db</span><span class="o">.</span><span class="n">save_something</span><span class="p">(</span><span class="o">...</span><span class="p">)</span>          <span class="c1"># 1. Sheets에 쓰기</span>
+<span class="n">db</span><span class="o">.</span><span class="n">invalidate_main_only</span><span class="p">()</span>       <span class="c1"># 2. 캐시 삭제 (session_state)</span>
+<span class="c1"># st.cache_data는 자동 만료(TTL) 또는 _collect_all_cache 클리어</span>
+<span class="n">st</span><span class="o">.</span><span class="n">rerun</span><span class="p">()</span>                      <span class="c1"># 3. 리렌더 (get_data() 다시 호출)</span>
+</code></pre>
+</div>
+
+<h3 id="수동-동기화">수동 동기화</h3>
+
+<p>앱 사이드바의 "🔄 데이터 동기화" 버튼:</p>
+
+<div class="codehilite">
+<pre><span></span><code><span class="n">db</span><span class="o">.</span><span class="n">invalidate_data</span><span class="p">()</span>            <span class="c1"># 전체 세션 캐시 삭제</span>
+<span class="n">st</span><span class="o">.</span><span class="n">cache_data</span><span class="o">.</span><span class="n">clear</span><span class="p">()</span>           <span class="c1"># @st.cache_data 전체 클리어</span>
+<span class="n">st</span><span class="o">.</span><span class="n">rerun</span><span class="p">()</span>
+</code></pre>
+</div>
+
+<hr />
+
+<h2 id="10-페이지-모듈-레퍼런스">10. 페이지 모듈 레퍼런스</h2>
+
+<h3 id="page_staff_newpy-가장-복잡한-모듈">page<em>staff</em>new.py — 가장 복잡한 모듈</h3>
+
+<p><strong>주요 함수 목록</strong></p>
+
+<table>
+<thead>
+<tr>
+  <th>함수</th>
+  <th>라인</th>
+  <th>설명</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td><code>show(data)</code></td>
+  <td>-</td>
+  <td>메인 진입점 (4개 탭 라우팅)</td>
+</tr>
+<tr>
+  <td><code>apply_styles()</code></td>
+  <td>27</td>
+  <td>CSS 스타일 주입</td>
+</tr>
+<tr>
+  <td><code>_col(df, *candidates)</code></td>
+  <td>54</td>
+  <td>컬럼명 후보 중 존재하는 것 반환</td>
+</tr>
+<tr>
+  <td><code>_select_contract(df_inq, statuses, key)</code></td>
+  <td>80</td>
+  <td>계약 선택 드롭다운</td>
+</tr>
+<tr>
+  <td><code>_get_role_status(est_items, assignments_df)</code></td>
+  <td>142</td>
+  <td>직군별 배정 현황 계산</td>
+</tr>
+<tr>
+  <td><code>_lookup_staff_brief(df_staff, name)</code></td>
+  <td>240</td>
+  <td>이름으로 인력 기본정보 조회</td>
+</tr>
+<tr>
+  <td><code>_auto_update_status(inquiry_id, role_status)</code></td>
+  <td>282</td>
+  <td>배정 완료 시 상태 자동 전환</td>
+</tr>
+<tr>
+  <td><code>_search_staff(df_staff, ...)</code></td>
+  <td>315</td>
+  <td>다중 조건 인력 검색</td>
+</tr>
+<tr>
+  <td><code>tab_assignment(data)</code></td>
+  <td>401</td>
+  <td>배정 탭 전체 렌더링</td>
+</tr>
+<tr>
+  <td><code>_step1_candidate_pool(...)</code></td>
+  <td>569</td>
+  <td>Step1: 후보풀 UI</td>
+</tr>
+<tr>
+  <td><code>_step2_role_assignment(...)</code></td>
+  <td>1039</td>
+  <td>Step2: 직군배정 UI</td>
+</tr>
+<tr>
+  <td><code>_step3_confirm_and_schedule(...)</code></td>
+  <td>1620</td>
+  <td>Step3: 확정/일정 UI</td>
+</tr>
+<tr>
+  <td><code>tab_attendance(data)</code></td>
+  <td>1805</td>
+  <td>출석부 탭</td>
+</tr>
+<tr>
+  <td><code>tab_payment(data)</code></td>
+  <td>2022</td>
+  <td>지급현황 탭</td>
+</tr>
+</tbody>
+</table>
+
+<p><strong><em>get</em>role_status() 반환 구조</strong></p>
+
+<div class="codehilite">
+<pre><span></span><code><span class="p">[</span>
+    <span class="p">{</span>
+        <span class="s2">&quot;role&quot;</span><span class="p">:</span> <span class="s2">&quot;경호원&quot;</span><span class="p">,</span>          <span class="c1"># 직군명</span>
+        <span class="s2">&quot;needed&quot;</span><span class="p">:</span> <span class="mi">5</span><span class="p">,</span>              <span class="c1"># 필요 인원</span>
+        <span class="s2">&quot;needed_mandays&quot;</span><span class="p">:</span> <span class="mi">10</span><span class="p">,</span>     <span class="c1"># 필요 인일 (인원 × 일수)</span>
+        <span class="s2">&quot;assigned_count&quot;</span><span class="p">:</span> <span class="mi">3</span><span class="p">,</span>      <span class="c1"># 현재 배정 인원</span>
+        <span class="s2">&quot;actual_mandays&quot;</span><span class="p">:</span> <span class="mi">6</span><span class="p">,</span>      <span class="c1"># 현재 배정 인일</span>
+        <span class="s2">&quot;pay_rate&quot;</span><span class="p">:</span> <span class="mi">150000</span><span class="p">,</span>       <span class="c1"># 지급단가</span>
+        <span class="s2">&quot;days&quot;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>                <span class="c1"># 기본 일수</span>
+        <span class="s2">&quot;complete&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span>        <span class="c1"># 배정 완료 여부</span>
+        <span class="s2">&quot;has_date_items&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span>  <span class="c1"># 날짜별 품목 여부</span>
+        <span class="s2">&quot;date_details&quot;</span><span class="p">:</span> <span class="p">{},</span>       <span class="c1"># 날짜별 인원 {날짜: 인원}</span>
+    <span class="p">},</span>
+    <span class="o">...</span>
+<span class="p">]</span>
+</code></pre>
+</div>
+
+<h3 id="page_estimatepy-견적-관리">page_estimate.py — 견적 관리</h3>
+
+<p><strong>주요 함수 목록</strong></p>
+
+<table>
+<thead>
+<tr>
+  <th>함수</th>
+  <th>라인</th>
+  <th>설명</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td><code>show(data)</code></td>
+  <td>165</td>
+  <td>메인 진입점</td>
+</tr>
+<tr>
+  <td><code>_load_existing_items(inquiry_id)</code></td>
+  <td>132</td>
+  <td>기존 견적 품목 로드</td>
+</tr>
+<tr>
+  <td><code>_show_send_status_section(...)</code></td>
+  <td>2124</td>
+  <td>견적 발송 현황 섹션</td>
+</tr>
+<tr>
+  <td><code>_show_history_tab(...)</code></td>
+  <td>2263</td>
+  <td>견적 버전 히스토리 탭</td>
+</tr>
+<tr>
+  <td><code>_show_auto_recommend(...)</code></td>
+  <td>2393</td>
+  <td>AI 단가 자동 추천</td>
+</tr>
+</tbody>
+</table>
+
+<p><strong>프로젝트 대기열 구분</strong></p>
+
+<div class="codehilite">
+<pre><span></span><code><span class="s2">&quot;[접수] 업체명 (행사명)&quot;</span>    <span class="err">→</span> <span class="n">pending_new</span> <span class="p">(</span><span class="n">STATUS_FLOW</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+<span class="s2">&quot;[수정] 업체명 (행사명)&quot;</span>    <span class="err">→</span> <span class="n">pending_edit</span> <span class="p">(</span><span class="n">STATUS_FLOW</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+<span class="s2">&quot;[체결수정] 업체명 (행사명)&quot;</span> <span class="err">→</span> <span class="n">pending_contracted</span> <span class="p">(</span><span class="n">STATUS_FLOW</span><span class="p">[</span><span class="mi">2</span><span class="o">~</span><span class="mi">4</span><span class="p">])</span>
+<span class="s2">&quot;[완료] 업체명 (행사명)&quot;</span>    <span class="err">→</span> <span class="n">pending_completed</span> <span class="p">(</span><span class="n">STATUS_FLOW</span><span class="p">[</span><span class="mi">5</span><span class="o">~</span><span class="mi">6</span><span class="p">])</span>
+</code></pre>
+</div>
+
+<h3 id="page_settlementpy-정산">page_settlement.py — 정산</h3>
+
+<p><strong>주요 함수 목록</strong></p>
+
+<table>
+<thead>
+<tr>
+  <th>함수</th>
+  <th>라인</th>
+  <th>설명</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td><code>show(data)</code></td>
+  <td>60</td>
+  <td>메인 진입점</td>
+</tr>
+<tr>
+  <td><code>_auto_check_event_completion(df)</code></td>
+  <td>77</td>
+  <td>행사 종료 자동 감지</td>
+</tr>
+<tr>
+  <td><code>show_settlement_overview()</code></td>
+  <td>128</td>
+  <td>TAB1: 전체 현황</td>
+</tr>
+<tr>
+  <td><code>show_settlement_detail(data)</code></td>
+  <td>844</td>
+  <td>TAB2: 건별 정산</td>
+</tr>
+<tr>
+  <td><code>update_payment_and_profit(...)</code></td>
+  <td>766</td>
+  <td>청구/지급액 동기화</td>
+</tr>
+<tr>
+  <td><code>show_tax_invoice_management()</code></td>
+  <td>2621</td>
+  <td>TAB3: 세금계산서</td>
+</tr>
+</tbody>
+</table>
+
+<hr />
+
+<h2 id="11-비즈니스-로직-모듈">11. 비즈니스 로직 모듈</h2>
+
+<h3 id="calculatorspy">calculators.py</h3>
+
+<div class="codehilite">
+<pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">calculators</span><span class="w"> </span><span class="kn">import</span> <span class="n">EstimateCalculator</span><span class="p">,</span> <span class="n">SalaryCalculator</span><span class="p">,</span> <span class="n">InvoiceCalculator</span>
+
+<span class="c1"># 견적 계산</span>
+<span class="n">calc</span> <span class="o">=</span> <span class="n">EstimateCalculator</span><span class="p">()</span>
+<span class="n">supply</span> <span class="o">=</span> <span class="n">calc</span><span class="o">.</span><span class="n">calc_supply_price</span><span class="p">(</span><span class="n">items</span><span class="p">)</span>          <span class="c1"># 공급가액</span>
+<span class="n">supply</span><span class="p">,</span> <span class="n">vat</span><span class="p">,</span> <span class="n">total</span> <span class="o">=</span> <span class="n">calc</span><span class="o">.</span><span class="n">calc_total_with_tax</span><span class="p">(</span><span class="n">supply</span><span class="p">,</span> <span class="n">vat_included</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">profit</span><span class="p">,</span> <span class="n">margin_pct</span> <span class="o">=</span> <span class="n">calc</span><span class="o">.</span><span class="n">calc_margin</span><span class="p">(</span><span class="n">supply</span><span class="p">,</span> <span class="n">cost</span><span class="p">)</span>
+
+<span class="c1"># 급여 계산</span>
+<span class="n">salary</span> <span class="o">=</span> <span class="n">SalaryCalculator</span><span class="p">()</span>
+<span class="n">result</span> <span class="o">=</span> <span class="n">salary</span><span class="o">.</span><span class="n">calc_staff_salary</span><span class="p">(</span><span class="n">assign_records</span><span class="p">)</span>   <span class="c1"># {name: 급여액}</span>
+
+<span class="c1"># 세금계산서 집계</span>
+<span class="n">invoice</span> <span class="o">=</span> <span class="n">InvoiceCalculator</span><span class="p">()</span>
+<span class="n">monthly</span> <span class="o">=</span> <span class="n">invoice</span><span class="o">.</span><span class="n">aggregate_monthly</span><span class="p">(</span><span class="n">contracts</span><span class="p">,</span> <span class="mi">2026</span><span class="p">,</span> <span class="mi">4</span><span class="p">)</span>
+</code></pre>
+</div>
+
+<h3 id="smart_assignmentpy">smart_assignment.py</h3>
+
+<div class="codehilite">
+<pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">smart_assignment</span><span class="w"> </span><span class="kn">import</span> <span class="n">SmartAssignment</span><span class="p">,</span> <span class="n">StaffFilter</span>
+
+<span class="c1"># 필터링</span>
+<span class="n">sf</span> <span class="o">=</span> <span class="n">StaffFilter</span><span class="p">()</span>
+<span class="n">df_filtered</span> <span class="o">=</span> <span class="n">sf</span><span class="o">.</span><span class="n">apply_filters</span><span class="p">(</span><span class="n">df_staff</span><span class="p">,</span> <span class="n">df_dispatch</span><span class="p">,</span> <span class="p">{</span>
+    <span class="s2">&quot;gender&quot;</span><span class="p">:</span> <span class="s2">&quot;F&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;age_range&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">25</span><span class="p">,</span> <span class="mi">40</span><span class="p">),</span>
+    <span class="s2">&quot;skills&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;서빙&quot;</span><span class="p">,</span> <span class="s2">&quot;안내&quot;</span><span class="p">],</span>
+    <span class="s2">&quot;location&quot;</span><span class="p">:</span> <span class="s2">&quot;서울&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;availability&quot;</span><span class="p">:</span> <span class="p">(</span><span class="n">start_date</span><span class="p">,</span> <span class="n">end_date</span><span class="p">,</span> <span class="s2">&quot;경호원&quot;</span><span class="p">),</span>
+<span class="p">})</span>
+
+<span class="c1"># AI 추천</span>
+<span class="n">engine</span> <span class="o">=</span> <span class="n">SmartAssignment</span><span class="p">()</span>
+<span class="n">top5</span> <span class="o">=</span> <span class="n">engine</span><span class="o">.</span><span class="n">ai_recommend</span><span class="p">(</span>
+    <span class="n">staff_df</span><span class="o">=</span><span class="n">df_staff</span><span class="p">,</span>
+    <span class="n">dispatch_df</span><span class="o">=</span><span class="n">df_dispatch</span><span class="p">,</span>
+    <span class="n">job_type</span><span class="o">=</span><span class="s2">&quot;경호원&quot;</span><span class="p">,</span>
+    <span class="n">location</span><span class="o">=</span><span class="s2">&quot;서울&quot;</span><span class="p">,</span>
+    <span class="n">gender</span><span class="o">=</span><span class="s2">&quot;M&quot;</span><span class="p">,</span>
+    <span class="n">age_range</span><span class="o">=</span><span class="p">(</span><span class="mi">25</span><span class="p">,</span> <span class="mi">40</span><span class="p">),</span>
+    <span class="n">start_date</span><span class="o">=</span><span class="n">start_d</span><span class="p">,</span>
+    <span class="n">end_date</span><span class="o">=</span><span class="n">end_d</span><span class="p">,</span>
+    <span class="n">top_n</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="c1"># 반환: [{&quot;이름&quot;: ..., &quot;score&quot;: 87.3, &quot;이유&quot;: &quot;...&quot;}, ...]</span>
+</code></pre>
+</div>
+
+<h3 id="hq_staff-상수">HQ_STAFF 상수</h3>
+
+<div class="codehilite">
+<pre><span></span><code><span class="c1"># data_loader.py 내 정의 (L3255 근처)</span>
+<span class="n">HQ_STAFF</span> <span class="o">=</span> <span class="p">[</span>
+    <span class="p">{</span><span class="s2">&quot;이름&quot;</span><span class="p">:</span> <span class="s2">&quot;최규성&quot;</span><span class="p">,</span> <span class="s2">&quot;직무&quot;</span><span class="p">:</span> <span class="s2">&quot;현장총괄&quot;</span><span class="p">,</span> <span class="s2">&quot;구분&quot;</span><span class="p">:</span> <span class="s2">&quot;본사&quot;</span><span class="p">},</span>
+    <span class="p">{</span><span class="s2">&quot;이름&quot;</span><span class="p">:</span> <span class="s2">&quot;송무재&quot;</span><span class="p">,</span> <span class="s2">&quot;직무&quot;</span><span class="p">:</span> <span class="s2">&quot;현장관리&quot;</span><span class="p">,</span> <span class="s2">&quot;구분&quot;</span><span class="p">:</span> <span class="s2">&quot;본사&quot;</span><span class="p">},</span>
+    <span class="p">{</span><span class="s2">&quot;이름&quot;</span><span class="p">:</span> <span class="s2">&quot;여지은&quot;</span><span class="p">,</span> <span class="s2">&quot;직무&quot;</span><span class="p">:</span> <span class="s2">&quot;현장관리&quot;</span><span class="p">,</span> <span class="s2">&quot;구분&quot;</span><span class="p">:</span> <span class="s2">&quot;본사&quot;</span><span class="p">},</span>
+    <span class="p">{</span><span class="s2">&quot;이름&quot;</span><span class="p">:</span> <span class="s2">&quot;김영찬&quot;</span><span class="p">,</span> <span class="s2">&quot;직무&quot;</span><span class="p">:</span> <span class="s2">&quot;현장관리&quot;</span><span class="p">,</span> <span class="s2">&quot;구분&quot;</span><span class="p">:</span> <span class="s2">&quot;본사&quot;</span><span class="p">},</span>
+<span class="p">]</span>
+
+<span class="c1"># 사용: from data_loader import HQ_STAFF</span>
+<span class="n">_hq_names</span> <span class="o">=</span> <span class="p">[</span><span class="n">m</span><span class="p">[</span><span class="s2">&quot;이름&quot;</span><span class="p">]</span> <span class="k">for</span> <span class="n">m</span> <span class="ow">in</span> <span class="n">HQ_STAFF</span><span class="p">]</span>
+<span class="c1"># 본사인원은 수익률 계산에서 제외, 정산 시 0원 자동확인완료</span>
+</code></pre>
+</div>
+
+<h3 id="helperspy">helpers.py</h3>
+
+<div class="codehilite">
+<pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">now_kst</span><span class="p">,</span> <span class="n">today_kst</span><span class="p">,</span> <span class="n">get_logger</span><span class="p">,</span> <span class="n">retry</span>
+
+<span class="c1"># KST 현재 시각</span>
+<span class="n">now</span> <span class="o">=</span> <span class="n">now_kst</span><span class="p">()</span>        <span class="c1"># timezone-aware datetime</span>
+
+<span class="c1"># KST 오늘 날짜</span>
+<span class="n">today</span> <span class="o">=</span> <span class="n">today_kst</span><span class="p">()</span>    <span class="c1"># naive datetime (비교용)</span>
+
+<span class="c1"># 로거</span>
+<span class="n">logger</span> <span class="o">=</span> <span class="n">get_logger</span><span class="p">(</span><span class="s2">&quot;page_estimate&quot;</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;견적 저장 완료&quot;</span><span class="p">)</span>
+
+<span class="c1"># 재시도 데코레이터</span>
+<span class="nd">@retry</span><span class="p">(</span><span class="n">times</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">backoff</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">fetch_from_sheets</span><span class="p">():</span>
+    <span class="o">...</span>
+</code></pre>
+</div>
+
+<hr />
+
+<h2 id="12-ai-및-자동화">12. AI 및 자동화</h2>
+
+<h3 id="gemini-ai-연동">Gemini AI 연동</h3>
+
+<p><strong>모델</strong>: <code>gemini-2.5-flash</code><br />
+<strong>파일</strong>: <code>gemini_client.py</code>, <code>page_ai_assistant.py</code>, <code>ai_helper.py</code></p>
+
+<div class="codehilite">
+<pre><span></span><code><span class="c1"># gemini_client.py</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">gemini_client</span><span class="w"> </span><span class="kn">import</span> <span class="n">GeminiClient</span>
+
+<span class="n">client</span> <span class="o">=</span> <span class="n">GeminiClient</span><span class="p">()</span>
+
+<span class="c1"># 민감정보 자동 마스킹 후 전송</span>
+<span class="n">response</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">ask</span><span class="p">(</span>
+    <span class="n">question</span><span class="o">=</span><span class="s2">&quot;이번 달 매출은?&quot;</span><span class="p">,</span>
+    <span class="n">context_data</span><span class="o">=</span><span class="p">{</span>
+        <span class="s2">&quot;settlements&quot;</span><span class="p">:</span> <span class="n">df_settlement</span><span class="o">.</span><span class="n">to_dict</span><span class="p">(),</span>
+        <span class="s2">&quot;staff&quot;</span><span class="p">:</span> <span class="n">df_staff</span><span class="p">[[</span><span class="s1">&#39;이름&#39;</span><span class="p">,</span> <span class="s1">&#39;직무&#39;</span><span class="p">]]</span><span class="o">.</span><span class="n">to_dict</span><span class="p">(),</span>  <span class="c1"># 민감컬럼 사전 제거</span>
+    <span class="p">}</span>
+<span class="p">)</span>
+</code></pre>
+</div>
+
+<p><strong>민감정보 자동 마스킹 규칙</strong>:<br />
+- 주민번호 패턴 (<code>\d{6}-\d{7}</code>) → <code>[MASKED]</code><br />
+- 계좌번호 패턴 → <code>[MASKED]</code><br />
+- <code>private_key</code>, <code>password</code> 키 → 값 삭제</p>
+
+<h3 id="ai_helperpy-기능">ai_helper.py 기능</h3>
+
+<div class="codehilite">
+<pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">ai_helper</span><span class="w"> </span><span class="kn">import</span> <span class="n">predict_monthly_revenue</span><span class="p">,</span> <span class="n">analyze_risk</span>
+
+<span class="c1"># 매출 예측 (3개월 이동평균)</span>
+<span class="n">forecast</span> <span class="o">=</span> <span class="n">predict_monthly_revenue</span><span class="p">(</span><span class="n">df_settlement</span><span class="p">,</span> <span class="n">months_ahead</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
+<span class="c1"># 반환: [{&quot;month&quot;: &quot;2026-05&quot;, &quot;predicted&quot;: 15_000_000, &quot;confidence&quot;: &quot;높음&quot;}]</span>
+
+<span class="c1"># 리스크 분석</span>
+<span class="n">risks</span> <span class="o">=</span> <span class="n">analyze_risk</span><span class="p">(</span><span class="n">df_inq</span><span class="p">,</span> <span class="n">df_settlement</span><span class="p">,</span> <span class="n">df_dispatch</span><span class="p">)</span>
+<span class="c1"># 반환: {&quot;미수금_건수&quot;: N, &quot;미배정_건수&quot;: N, &quot;임박_현장&quot;: [...]}</span>
+</code></pre>
+</div>
+
+<h3 id="스케줄러-schedulerpy">스케줄러 (scheduler.py)</h3>
+
+<div class="codehilite">
+<pre><span></span><code><span class="c1"># APScheduler 기반 백그라운드 작업</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">apscheduler.schedulers.background</span><span class="w"> </span><span class="kn">import</span> <span class="n">BackgroundScheduler</span>
+
+<span class="n">scheduler</span> <span class="o">=</span> <span class="n">BackgroundScheduler</span><span class="p">()</span>
+<span class="n">scheduler</span><span class="o">.</span><span class="n">add_job</span><span class="p">(</span><span class="n">morning_check</span><span class="p">,</span> <span class="s1">&#39;cron&#39;</span><span class="p">,</span> <span class="n">hour</span><span class="o">=</span><span class="mi">9</span><span class="p">,</span> <span class="n">minute</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>    <span class="c1"># 일일 오전 체크</span>
+<span class="n">scheduler</span><span class="o">.</span><span class="n">add_job</span><span class="p">(</span><span class="n">evening_check</span><span class="p">,</span> <span class="s1">&#39;cron&#39;</span><span class="p">,</span> <span class="n">hour</span><span class="o">=</span><span class="mi">17</span><span class="p">,</span> <span class="n">minute</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>   <span class="c1"># 일일 오후 체크</span>
+<span class="n">scheduler</span><span class="o">.</span><span class="n">add_job</span><span class="p">(</span><span class="n">monthly_report</span><span class="p">,</span> <span class="s1">&#39;cron&#39;</span><span class="p">,</span> <span class="n">day</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">hour</span><span class="o">=</span><span class="mi">8</span><span class="p">)</span>      <span class="c1"># 월간 리포트</span>
+</code></pre>
+</div>
+
+<h3 id="workflow_automationpy">workflow_automation.py</h3>
+
+<div class="codehilite">
+<pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">workflow_automation</span><span class="w"> </span><span class="kn">import</span> <span class="n">WorkflowEngine</span>
+
+<span class="n">engine</span> <span class="o">=</span> <span class="n">WorkflowEngine</span><span class="p">(</span><span class="n">db</span><span class="p">)</span>
+
+<span class="c1"># 배정 확정 시 출석부/지급내역 자동 생성</span>
+<span class="n">engine</span><span class="o">.</span><span class="n">on_assignment_confirmed</span><span class="p">(</span><span class="n">inquiry_id</span><span class="p">,</span> <span class="n">assignments</span><span class="p">)</span>
+
+<span class="c1"># 행사 완료 시 정산 준비 알림</span>
+<span class="n">engine</span><span class="o">.</span><span class="n">on_event_completed</span><span class="p">(</span><span class="n">inquiry_id</span><span class="p">)</span>
+</code></pre>
+</div>
+
+<hr />
+
+<h2 id="13-session-state-키-맵">13. Session State 키 맵</h2>
+
+<h3 id="전역-키">전역 키</h3>
+
+<table>
+<thead>
+<tr>
+  <th>키</th>
+  <th>타입</th>
+  <th>설명</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td><code>_data_loaded_at</code></td>
+  <td>str (HH:MM:SS)</td>
+  <td>마지막 데이터 동기화 시각</td>
+</tr>
+<tr>
+  <td><code>_app_data</code></td>
+  <td>dict</td>
+  <td>메인 데이터 캐시 (df<em>inq, df</em>est 등)</td>
+</tr>
+<tr>
+  <td><code>_dispatch_data</code></td>
+  <td>dict</td>
+  <td>배정/정산 데이터 캐시</td>
+</tr>
+<tr>
+  <td><code>_inq_headers_checked</code></td>
+  <td>bool</td>
+  <td>문의 시트 헤더 자동 확장 실행 여부</td>
+</tr>
+<tr>
+  <td><code>_nav_target</code></td>
+  <td>str</td>
+  <td>사이드바 네비게이션 타겟</td>
+</tr>
+</tbody>
+</table>
+
+<h3 id="견적-페이지-키-w_-접두사-workspace">견적 페이지 키 (w_ 접두사 = Workspace)</h3>
+
+<table>
+<thead>
+<tr>
+  <th>키</th>
+  <th>타입</th>
+  <th>설명</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td><code>w_client</code></td>
+  <td>str</td>
+  <td>업체명</td>
+</tr>
+<tr>
+  <td><code>w_event</code></td>
+  <td>str</td>
+  <td>행사명</td>
+</tr>
+<tr>
+  <td><code>w_loc</code></td>
+  <td>str</td>
+  <td>장소</td>
+</tr>
+<tr>
+  <td><code>w_manager</code></td>
+  <td>str</td>
+  <td>담당자</td>
+</tr>
+<tr>
+  <td><code>w_contact</code></td>
+  <td>str</td>
+  <td>연락처</td>
+</tr>
+<tr>
+  <td><code>w_sdate</code></td>
+  <td>date</td>
+  <td>행사 시작일</td>
+</tr>
+<tr>
+  <td><code>w_edate</code></td>
+  <td>date</td>
+  <td>행사 종료일</td>
+</tr>
+<tr>
+  <td><code>w_date_periods</code></td>
+  <td>list[(date,date)]</td>
+  <td>다중 기간</td>
+</tr>
+<tr>
+  <td><code>w_date_text</code></td>
+  <td>str</td>
+  <td>날짜 직접입력 텍스트</td>
+</tr>
+<tr>
+  <td><code>w_qty</code></td>
+  <td>int</td>
+  <td>필요 인원</td>
+</tr>
+<tr>
+  <td><code>w_dress</code></td>
+  <td>str</td>
+  <td>복장</td>
+</tr>
+<tr>
+  <td><code>w_meal</code></td>
+  <td>str</td>
+  <td>식사</td>
+</tr>
+<tr>
+  <td><code>w_parking</code></td>
+  <td>str</td>
+  <td>주차</td>
+</tr>
+<tr>
+  <td><code>w_note</code></td>
+  <td>str</td>
+  <td>특이사항</td>
+</tr>
+<tr>
+  <td><code>est_items</code></td>
+  <td>DataFrame</td>
+  <td>견적 품목 테이블</td>
+</tr>
+<tr>
+  <td><code>additional_costs</code></td>
+  <td>DataFrame</td>
+  <td>부대비용 테이블</td>
+</tr>
+<tr>
+  <td><code>vat_yn</code></td>
+  <td>bool</td>
+  <td>VAT 포함 여부</td>
+</tr>
+<tr>
+  <td><code>discount_amt</code></td>
+  <td>int</td>
+  <td>할인액</td>
+</tr>
+<tr>
+  <td><code>est_project_sel</code></td>
+  <td>str</td>
+  <td>선택된 프로젝트 라벨</td>
+</tr>
+<tr>
+  <td><code>last_project</code></td>
+  <td>str</td>
+  <td>이전 선택 프로젝트 (중복 로드 방지)</td>
+</tr>
+<tr>
+  <td><code>_current_inq_id</code></td>
+  <td>str</td>
+  <td>현재 문의ID</td>
+</tr>
+<tr>
+  <td><code>dp_s_N</code> / <code>dp_e_N</code></td>
+  <td>date</td>
+  <td>N번째 기간 시작/종료</td>
+</tr>
+<tr>
+  <td><code>_tab2_gen</code></td>
+  <td>int</td>
+  <td>탭 세대 카운터 (위젯 키 리셋용)</td>
+</tr>
+</tbody>
+</table>
+
+<h3 id="배정-페이지-키">배정 페이지 키</h3>
+
+<table>
+<thead>
+<tr>
+  <th>키</th>
+  <th>타입</th>
+  <th>설명</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td><code>assign_cart</code></td>
+  <td>list</td>
+  <td>후보풀 인력 목록</td>
+</tr>
+<tr>
+  <td><code>search_done</code></td>
+  <td>bool</td>
+  <td>검색 완료 여부</td>
+</tr>
+<tr>
+  <td><code>search_results</code></td>
+  <td>DataFrame</td>
+  <td>검색 결과</td>
+</tr>
+<tr>
+  <td><code>_editing_assign_id</code></td>
+  <td>str</td>
+  <td>수정 중인 배정ID</td>
+</tr>
+<tr>
+  <td><code>matrix_days_RI_CI</code></td>
+  <td>int</td>
+  <td>매트릭스 셀별 일수</td>
+</tr>
+<tr>
+  <td><code>matrix_dates_RI_CI</code></td>
+  <td>list</td>
+  <td>매트릭스 셀별 날짜</td>
+</tr>
+</tbody>
+</table>
+
+<hr />
+
+<h2 id="14-개발-환경-설정">14. 개발 환경 설정</h2>
+
+<h3 id="1-레포지토리-클론">1. 레포지토리 클론</h3>
+
+<div class="codehilite">
+<pre><span></span><code>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/ghgh2472-glitch/gradius_python.git
+<span class="nb">cd</span><span class="w"> </span>gradius_python
+</code></pre>
+</div>
+
+<h3 id="2-python-환경-설정">2. Python 환경 설정</h3>
+
+<div class="codehilite">
+<pre><span></span><code>python<span class="w"> </span>-m<span class="w"> </span>venv<span class="w"> </span>venv
+<span class="nb">source</span><span class="w"> </span>venv/bin/activate<span class="w">          </span><span class="c1"># macOS/Linux</span>
+<span class="c1"># venv\Scripts\activate           # Windows</span>
+
+pip<span class="w"> </span>install<span class="w"> </span>-r<span class="w"> </span>requirements.txt
+</code></pre>
+</div>
+
+<h3 id="3-시스템-패키지-ubuntudebian">3. 시스템 패키지 (Ubuntu/Debian)</h3>
+
+<div class="codehilite">
+<pre><span></span><code>sudo<span class="w"> </span>apt-get<span class="w"> </span>install<span class="w"> </span>fonts-nanum<span class="w">  </span><span class="c1"># 한글 폰트 (견적서 이미지 생성 필수)</span>
+</code></pre>
+</div>
+
+<h3 id="4-자격증명-설정">4. 자격증명 설정</h3>
+
+<div class="codehilite">
+<pre><span></span><code><span class="c1"># GCP 서비스 계정 JSON을 secrets.json으로 저장</span>
+cp<span class="w"> </span>/path/to/your-service-account.json<span class="w"> </span>secrets.json
+</code></pre>
+</div>
+
+<blockquote>
+  <p><strong>⚠️ 주의</strong>: <code>secrets.json</code>은 절대 Git에 커밋하면 안 됩니다. <code>.gitignore</code>에 이미 포함되어 있습니다.</p>
+</blockquote>
+
+<h3 id="5-앱-실행">5. 앱 실행</h3>
+
+<div class="codehilite">
+<pre><span></span><code>streamlit<span class="w"> </span>run<span class="w"> </span>app.py<span class="w"> </span>--server.enableCORS<span class="w"> </span><span class="nb">false</span><span class="w"> </span>--server.enableXsrfProtection<span class="w"> </span><span class="nb">false</span>
+</code></pre>
+</div>
+
+<p>브라우저에서 <code>http://localhost:8501</code> 접속</p>
+
+<h3 id="6-개발-시-유용한-명령어">6. 개발 시 유용한 명령어</h3>
+
+<div class="codehilite">
+<pre><span></span><code><span class="c1"># 특정 포트 지정</span>
+streamlit<span class="w"> </span>run<span class="w"> </span>app.py<span class="w"> </span>--server.port<span class="w"> </span><span class="m">8502</span>
+
+<span class="c1"># 디버그 모드 (파일 변경 시 자동 리로드 비활성화)</span>
+streamlit<span class="w"> </span>run<span class="w"> </span>app.py<span class="w"> </span>--server.runOnSave<span class="w"> </span><span class="nb">false</span>
+
+<span class="c1"># 캐시 클리어 후 재시작</span>
+streamlit<span class="w"> </span>cache<span class="w"> </span>clear<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>streamlit<span class="w"> </span>run<span class="w"> </span>app.py
+</code></pre>
+</div>
+
+<hr />
+
+<h2 id="15-배포-가이드">15. 배포 가이드</h2>
+
+<h3 id="streamlit-community-cloud-기준">Streamlit Community Cloud 기준</h3>
+
+<h4 id="streamlitsecretstoml"><code>.streamlit/secrets.toml</code></h4>
+
+<div class="codehilite">
+<pre><span></span><code><span class="k">[gcp_service_account]</span>
+<span class="n">type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;service_account&quot;</span>
+<span class="n">project_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;gradius-system&quot;</span>
+<span class="n">private_key_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;...&quot;</span>
+<span class="n">private_key</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;-----BEGIN PRIVATE KEY-----</span><span class="se">\n</span><span class="s2">...</span><span class="se">\n</span><span class="s2">-----END PRIVATE KEY-----</span><span class="se">\n</span><span class="s2">&quot;</span>
+<span class="n">client_email</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;python-bot@gradius-system.iam.gserviceaccount.com&quot;</span>
+<span class="n">client_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;...&quot;</span>
+<span class="n">auth_uri</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;https://accounts.google.com/o/oauth2/auth&quot;</span>
+<span class="n">token_uri</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;https://oauth2.googleapis.com/token&quot;</span>
+<span class="n">auth_provider_x509_cert_url</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;https://www.googleapis.com/oauth2/v1/certs&quot;</span>
+<span class="n">client_x509_cert_url</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;...&quot;</span>
+</code></pre>
+</div>
+
+<h4 id="streamlitconfigtoml"><code>.streamlit/config.toml</code></h4>
+
+<div class="codehilite">
+<pre><span></span><code><span class="k">[server]</span>
+<span class="n">maxUploadSize</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">50</span><span class="w">                </span><span class="c1"># MB, 사업자등록증 업로드용</span>
+<span class="n">enableCORS</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">false</span>
+<span class="n">enableXsrfProtection</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">false</span>
+
+<span class="k">[theme]</span>
+<span class="n">primaryColor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;#2563EB&quot;</span>
+<span class="n">backgroundColor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;#FFFFFF&quot;</span>
+<span class="n">secondaryBackgroundColor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;#F8FAFC&quot;</span>
+<span class="n">textColor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;#1E293B&quot;</span>
+<span class="n">font</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;sans serif&quot;</span>
+</code></pre>
+</div>
+
+<h3 id="자체-서버-docker-기준">자체 서버 (Docker) 기준</h3>
+
+<div class="codehilite">
+<pre><span></span><code><span class="k">FROM</span><span class="w"> </span><span class="s">python:3.11-slim</span>
+
+<span class="k">RUN</span><span class="w"> </span>apt-get<span class="w"> </span>update<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>apt-get<span class="w"> </span>install<span class="w"> </span>-y<span class="w"> </span>fonts-nanum
+<span class="k">WORKDIR</span><span class="w"> </span><span class="s">/app</span>
+<span class="k">COPY</span><span class="w"> </span>requirements.txt<span class="w"> </span>.
+<span class="k">RUN</span><span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>-r<span class="w"> </span>requirements.txt
+<span class="k">COPY</span><span class="w"> </span>.<span class="w"> </span>.
+
+<span class="k">EXPOSE</span><span class="w"> </span><span class="s">8501</span>
+<span class="k">CMD</span><span class="w"> </span><span class="o">[</span><span class="s2">&quot;streamlit&quot;</span>,<span class="w"> </span><span class="s2">&quot;run&quot;</span>,<span class="w"> </span><span class="s2">&quot;app.py&quot;</span>,<span class="w"> </span><span class="se">\</span>
+<span class="w">     </span><span class="s2">&quot;--server.enableCORS=false&quot;</span>,<span class="w"> </span><span class="se">\</span>
+<span class="w">     </span><span class="s2">&quot;--server.enableXsrfProtection=false&quot;</span>,<span class="w"> </span><span class="se">\</span>
+<span class="w">     </span><span class="s2">&quot;--server.port=8501&quot;</span><span class="o">]</span>
+</code></pre>
+</div>
+
+<h3 id="배포-전-체크리스트">배포 전 체크리스트</h3>
+
+<pre><code>□ secrets.json → 환경 변수 또는 시크릿 매니저로 이전
+□ requirements.txt 최신 상태 확인
+□ packages.txt에 fonts-nanum 포함 확인
+□ Google Sheets API Rate Limit 확인 (초당 100 요청)
+□ 서비스 계정이 스프레드시트 편집자로 공유되어 있는지 확인
+□ Gemini API 키 시크릿에 추가 (GEMINI_API_KEY)
+</code></pre>
+
+<hr />
+
+<h2 id="16-주요-설계-패턴">16. 주요 설계 패턴</h2>
+
+<h3 id="1-상태-머신-패턴-status-machine">1. 상태 머신 패턴 (Status Machine)</h3>
+
+<p>모든 프로젝트는 <code>STATUS_FLOW</code>를 따르며, <code>STATUS_TRANSITIONS</code>에 정의된 전환만 허용됩니다.</p>
+
+<div class="codehilite">
+<pre><span></span><code><span class="c1"># status_config.py 활용 예시</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">status_config</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">sc</span>
+
+<span class="c1"># 현재 상태에서 이동 가능한 다음 상태 목록</span>
+<span class="n">next_options</span> <span class="o">=</span> <span class="n">sc</span><span class="o">.</span><span class="n">get_next_statuses</span><span class="p">(</span><span class="n">current_status</span><span class="p">)</span>
+
+<span class="c1"># 상태 뱃지 HTML 생성</span>
+<span class="n">badge_html</span> <span class="o">=</span> <span class="n">sc</span><span class="o">.</span><span class="n">get_status_badge_html</span><span class="p">(</span><span class="s2">&quot;체결&quot;</span><span class="p">)</span>
+
+<span class="c1"># 진행률 바</span>
+<span class="n">progress</span> <span class="o">=</span> <span class="n">sc</span><span class="o">.</span><span class="n">get_status_progress</span><span class="p">(</span><span class="s2">&quot;배정완료&quot;</span><span class="p">)</span>  <span class="c1"># 50 (%)</span>
+</code></pre>
+</div>
+
+<h3 id="2-brain-클래스-패턴">2. Brain 클래스 패턴</h3>
+
+<p>도메인별 복잡한 비즈니스 로직을 클래스로 캡슐화합니다.</p>
+
+<div class="codehilite">
+<pre><span></span><code><span class="c1"># 새 Brain 클래스 작성 예시</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">NewFeatureBrain</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">df_data1</span><span class="p">,</span> <span class="n">df_data2</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">data1</span> <span class="o">=</span> <span class="n">df_data1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">data2</span> <span class="o">=</span> <span class="n">df_data2</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">calculate_something</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">inquiry_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+        <span class="c1"># 로직 구현</span>
+        <span class="o">...</span>
+        <span class="k">return</span> <span class="n">result</span>
+</code></pre>
+</div>
+
+<h3 id="3-컬럼명-유연-조회-패턴">3. 컬럼명 유연 조회 패턴</h3>
+
+<p>Google Sheets 컬럼명이 버전에 따라 다를 수 있으므로, 후보 목록에서 존재하는 컬럼을 찾는 패턴을 사용합니다.</p>
+
+<div class="codehilite">
+<pre><span></span><code><span class="c1"># page_staff_new.py의 _col() 패턴</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_col</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="o">*</span><span class="n">candidates</span><span class="p">):</span>
+    <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">candidates</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">c</span>
+    <span class="k">return</span> <span class="n">candidates</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>  <span class="c1"># 없으면 첫 번째 반환 (KeyError 대신 명시적 실패)</span>
+
+<span class="c1"># 사용 예시</span>
+<span class="n">name_col</span> <span class="o">=</span> <span class="n">_col</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="s1">&#39;이름&#39;</span><span class="p">,</span> <span class="s1">&#39;인력명&#39;</span><span class="p">,</span> <span class="s1">&#39;성명&#39;</span><span class="p">)</span>
+<span class="n">role_col</span> <span class="o">=</span> <span class="n">_col</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="s1">&#39;직무&#39;</span><span class="p">,</span> <span class="s1">&#39;직군&#39;</span><span class="p">,</span> <span class="s1">&#39;역할&#39;</span><span class="p">)</span>
+</code></pre>
+</div>
+
+<h3 id="4-세션-상태-백업복원-패턴">4. 세션 상태 백업/복원 패턴</h3>
+
+<p>Streamlit 탭 전환 시 위젯 상태가 리셋되는 문제를 방지합니다.</p>
+
+<div class="codehilite">
+<pre><span></span><code><span class="c1"># 저장 전 백업</span>
+<span class="k">if</span> <span class="s1">&#39;w_client&#39;</span> <span class="ow">in</span> <span class="n">st</span><span class="o">.</span><span class="n">session_state</span><span class="p">:</span>
+    <span class="n">st</span><span class="o">.</span><span class="n">session_state</span><span class="p">[</span><span class="s1">&#39;_bak_w_client&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">st</span><span class="o">.</span><span class="n">session_state</span><span class="p">[</span><span class="s1">&#39;w_client&#39;</span><span class="p">]</span>
+
+<span class="c1"># 복원 시 체크</span>
+<span class="k">if</span> <span class="s1">&#39;_bak_w_client&#39;</span> <span class="ow">in</span> <span class="n">st</span><span class="o">.</span><span class="n">session_state</span> <span class="ow">and</span> <span class="s1">&#39;w_client&#39;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">st</span><span class="o">.</span><span class="n">session_state</span><span class="p">:</span>
+    <span class="n">st</span><span class="o">.</span><span class="n">session_state</span><span class="p">[</span><span class="s1">&#39;w_client&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">st</span><span class="o">.</span><span class="n">session_state</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="s1">&#39;_bak_w_client&#39;</span><span class="p">)</span>
+</code></pre>
+</div>
+
+<h3 id="5-배치-쓰기-패턴-api-호출-최소화">5. 배치 쓰기 패턴 (API 호출 최소화)</h3>
+
+<div class="codehilite">
+<pre><span></span><code><span class="c1"># 개별 호출 (나쁜 예 - API 호출 N번)</span>
+<span class="k">for</span> <span class="n">record</span> <span class="ow">in</span> <span class="n">records</span><span class="p">:</span>
+    <span class="n">worksheet</span><span class="o">.</span><span class="n">append_row</span><span class="p">(</span><span class="n">record</span><span class="p">)</span>  <span class="c1"># N번 호출</span>
+
+<span class="c1"># 배치 호출 (좋은 예 - API 호출 1번)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">gspread.cell</span><span class="w"> </span><span class="kn">import</span> <span class="n">Cell</span>
+
+<span class="n">cells</span> <span class="o">=</span> <span class="p">[]</span>
+<span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">record</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">records</span><span class="p">):</span>
+    <span class="n">row_num</span> <span class="o">=</span> <span class="n">existing_rows</span> <span class="o">+</span> <span class="n">i</span> <span class="o">+</span> <span class="mi">1</span>
+    <span class="k">for</span> <span class="n">j</span><span class="p">,</span> <span class="n">val</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">record</span><span class="p">):</span>
+        <span class="n">cells</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">Cell</span><span class="p">(</span><span class="n">row</span><span class="o">=</span><span class="n">row_num</span><span class="p">,</span> <span class="n">col</span><span class="o">=</span><span class="n">j</span><span class="o">+</span><span class="mi">1</span><span class="p">,</span> <span class="n">value</span><span class="o">=</span><span class="n">val</span><span class="p">))</span>
+
+<span class="n">worksheet</span><span class="o">.</span><span class="n">update_cells</span><span class="p">(</span><span class="n">cells</span><span class="p">,</span> <span class="n">value_input_option</span><span class="o">=</span><span class="s1">&#39;RAW&#39;</span><span class="p">)</span>  <span class="c1"># 1번 호출</span>
+</code></pre>
+</div>
+
+<h3 id="6-탭-세대-카운터-패턴">6. 탭 세대 카운터 패턴</h3>
+
+<p>프로젝트 전환 시 위젯 키 충돌을 방지합니다.</p>
+
+<div class="codehilite">
+<pre><span></span><code><span class="c1"># 프로젝트 전환 시</span>
+<span class="n">st</span><span class="o">.</span><span class="n">session_state</span><span class="p">[</span><span class="s1">&#39;_tab2_gen&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">st</span><span class="o">.</span><span class="n">session_state</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;_tab2_gen&#39;</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span> <span class="o">+</span> <span class="mi">1</span>
+
+<span class="c1"># 위젯 키에 세대 포함</span>
+<span class="n">gen</span> <span class="o">=</span> <span class="n">st</span><span class="o">.</span><span class="n">session_state</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;_tab2_gen&#39;</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+<span class="n">st</span><span class="o">.</span><span class="n">text_input</span><span class="p">(</span><span class="s2">&quot;업체명&quot;</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;final_client_</span><span class="si">{</span><span class="n">gen</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</code></pre>
+</div>
+
+<hr />
+
+<h2 id="17-알려진-기술-부채">17. 알려진 기술 부채</h2>
+
+<table>
+<thead>
+<tr>
+  <th>항목</th>
+  <th>현황</th>
+  <th>개선 방안</th>
+  <th>우선순위</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td><strong>동명이인 구분</strong></td>
+  <td>이름만으로 인력 식별 (성별/연락처 미사용)</td>
+  <td>배정 시 복합키(이름+연락처) 저장, 조회 시 복합 매칭</td>
+  <td>높음</td>
+</tr>
+<tr>
+  <td><strong>데이터 정규화</strong></td>
+  <td>일부 데이터가 JSON 문자열로 셀에 저장됨</td>
+  <td>별도 컬럼으로 스키마 분리</td>
+  <td>중간</td>
+</tr>
+<tr>
+  <td><strong>OCR 정확도</strong></td>
+  <td>Pytesseract 한글 인식률 ~70%</td>
+  <td>Google Vision API 활성화 또는 GPT-4V 연동</td>
+  <td>낮음</td>
+</tr>
+<tr>
+  <td><strong>동시성</strong></td>
+  <td>Google Sheets API 동시 쓰기 시 충돌 가능</td>
+  <td>낙관적 잠금(Optimistic Locking) 또는 큐 기반 쓰기</td>
+  <td>중간</td>
+</tr>
+<tr>
+  <td><strong>권한 관리</strong></td>
+  <td>모든 사용자가 동일 접근 권한</td>
+  <td>역할 기반 접근 제어(RBAC) 구현</td>
+  <td>낮음</td>
+</tr>
+<tr>
+  <td><strong>백업</strong></td>
+  <td>Google Sheets에만 의존</td>
+  <td>주기적 Cloud Storage 내보내기</td>
+  <td>중간</td>
+</tr>
+<tr>
+  <td><strong>테스트</strong></td>
+  <td>자동화 테스트 부재</td>
+  <td>핵심 비즈니스 로직 단위 테스트 추가</td>
+  <td>중간</td>
+</tr>
+</tbody>
+</table>
+
+<hr />
+
+<h2 id="18-개발-시-주의사항">18. 개발 시 주의사항</h2>
+
+<h3 id="절대-금지-사항">절대 금지 사항</h3>
+
+<pre><code>❌ secrets.json을 Git에 커밋하지 말 것
+❌ Google Sheets를 직접 편집하지 말 것 (app 통해서만)
+❌ st.cache_data로 데코레이트된 함수 내에서 Sheets 쓰기 금지
+❌ session_state 키를 중복 정의하지 말 것 (다른 페이지와 충돌)
+</code></pre>
+
+<h3 id="새-기능-개발-가이드라인">새 기능 개발 가이드라인</h3>
+
+<p><strong>1. 새 페이지 추가 시</strong></p>
+
+<div class="codehilite">
+<pre><span></span><code><span class="c1"># app.py에 메뉴 항목 추가</span>
+<span class="n">_menu_items</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;🆕 새 기능&quot;</span><span class="p">)</span>
+
+<span class="c1"># 새 파일 생성: page_newfeature.py</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">show</span><span class="p">(</span><span class="n">data</span><span class="p">):</span>
+    <span class="n">db</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;db&#39;</span><span class="p">)</span>  <span class="c1"># or import data_loader as db</span>
+    <span class="n">df_inq</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;df_inq&#39;</span><span class="p">,</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">())</span>
+    <span class="o">...</span>
+</code></pre>
+</div>
+
+<p><strong>2. 새 시트 컬럼 추가 시</strong></p>
+
+<div class="codehilite">
+<pre><span></span><code><span class="c1"># data_loader.py의 ensure_*_headers() 패턴 사용</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">ensure_new_headers</span><span class="p">():</span>
+    <span class="n">ws</span> <span class="o">=</span> <span class="n">_get_worksheet</span><span class="p">(</span><span class="s2">&quot;문의작성&quot;</span><span class="p">)</span>
+    <span class="n">headers</span> <span class="o">=</span> <span class="n">ws</span><span class="o">.</span><span class="n">row_values</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">new_cols</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;새컬럼1&quot;</span><span class="p">,</span> <span class="s2">&quot;새컬럼2&quot;</span><span class="p">]</span>
+    <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">new_cols</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">col</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">headers</span><span class="p">:</span>
+            <span class="n">ws</span><span class="o">.</span><span class="n">add_cols</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+            <span class="n">ws</span><span class="o">.</span><span class="n">update_cell</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">headers</span><span class="p">)</span><span class="o">+</span><span class="mi">1</span><span class="p">,</span> <span class="n">col</span><span class="p">)</span>
+</code></pre>
+</div>
+
+<p><strong>3. 데이터 쓰기 후 반드시</strong></p>
+
+<div class="codehilite">
+<pre><span></span><code><span class="n">db</span><span class="o">.</span><span class="n">save_something</span><span class="p">(</span><span class="o">...</span><span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">invalidate_main_only</span><span class="p">()</span>  <span class="c1"># 또는 invalidate_dispatch_only()</span>
+<span class="n">st</span><span class="o">.</span><span class="n">rerun</span><span class="p">()</span>
+</code></pre>
+</div>
+
+<p><strong>4. 새로운 상태 추가 시</strong></p>
+
+<div class="codehilite">
+<pre><span></span><code><span class="c1"># status_config.py 수정 필요:</span>
+<span class="c1"># - STATUS_FLOW 또는 STATUS_EXIT에 추가</span>
+<span class="c1"># - STATUS_CONFIG에 icon/color/bg/desc 추가</span>
+<span class="c1"># - STATUS_TRANSITIONS에 전환 규칙 추가</span>
+<span class="c1"># - ACTIVE_STATUSES, CONFIRMED_STATUSES 등 그룹 상수 업데이트</span>
+</code></pre>
+</div>
+
+<h3 id="성능-고려사항">성능 고려사항</h3>
+
+<ul>
+<li>Google Sheets API <strong>100 요청/초</strong> Rate Limit 존재</li>
+<li>대량 데이터 쓰기 시 반드시 <code>batch_*</code> 메서드 사용</li>
+<li>자주 읽는 데이터는 <code>@st.cache_data</code>로 캐싱</li>
+<li><code>st.rerun()</code> 남발 금지 (매 호출마다 전체 스크립트 재실행)</li>
+</ul>
+
+<h3 id="코드-스타일">코드 스타일</h3>
+
+<ul>
+<li>한국어 변수명 허용 (컬럼명, UI 레이블)</li>
+<li>영어 함수명 사용 (스네이크 케이스)</li>
+<li>내부 헬퍼 함수는 <code>_</code> 접두사 (<code>_get_role_status</code>, <code>_lookup_staff_brief</code>)</li>
+<li>페이지별 CSS는 <code>apply_styles()</code> 함수에 집중</li>
+</ul>
+
+<hr />
+
+<h2 id="부록-자주-쓰는-코드-스니펫">부록: 자주 쓰는 코드 스니펫</h2>
+
+<h3 id="특정-문의id의-전체-데이터-조회">특정 문의ID의 전체 데이터 조회</h3>
+
+<div class="codehilite">
+<pre><span></span><code><span class="n">inq_id</span> <span class="o">=</span> <span class="s2">&quot;ABC12345&quot;</span>
+<span class="n">row</span> <span class="o">=</span> <span class="n">df_inq</span><span class="p">[</span><span class="n">df_inq</span><span class="p">[</span><span class="s1">&#39;문의ID&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span><span class="o">.</span><span class="n">str</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span> <span class="o">==</span> <span class="n">inq_id</span><span class="p">]</span>
+<span class="n">est</span> <span class="o">=</span> <span class="n">df_est</span><span class="p">[</span><span class="n">df_est</span><span class="p">[</span><span class="s1">&#39;문의ID&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span><span class="o">.</span><span class="n">str</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span> <span class="o">==</span> <span class="n">inq_id</span><span class="p">]</span>
+<span class="n">dispatch_rows</span> <span class="o">=</span> <span class="n">df_dispatch</span><span class="p">[</span><span class="n">df_dispatch</span><span class="p">[</span><span class="s1">&#39;문의ID&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span><span class="o">.</span><span class="n">str</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span> <span class="o">==</span> <span class="n">inq_id</span><span class="p">]</span>
+</code></pre>
+</div>
+
+<h3 id="상태-뱃지-표시">상태 뱃지 표시</h3>
+
+<div class="codehilite">
+<pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">status_config</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">sc</span>
+<span class="n">status</span> <span class="o">=</span> <span class="s2">&quot;체결&quot;</span>
+<span class="n">st</span><span class="o">.</span><span class="n">markdown</span><span class="p">(</span><span class="n">sc</span><span class="o">.</span><span class="n">get_status_badge_html</span><span class="p">(</span><span class="n">status</span><span class="p">),</span> <span class="n">unsafe_allow_html</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</code></pre>
+</div>
+
+<h3 id="안전한-숫자-변환">안전한 숫자 변환</h3>
+
+<div class="codehilite">
+<pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">safe_int</span><span class="p">,</span> <span class="n">safe_float</span>
+<span class="n">amount</span> <span class="o">=</span> <span class="n">safe_int</span><span class="p">(</span><span class="n">row</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;금액&#39;</span><span class="p">,</span> <span class="mi">0</span><span class="p">))</span>  <span class="c1"># None/NaN/&#39;&#39; → 0</span>
+<span class="n">rate</span> <span class="o">=</span> <span class="n">safe_float</span><span class="p">(</span><span class="n">row</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;수익률&#39;</span><span class="p">,</span> <span class="mi">0</span><span class="p">))</span>
+</code></pre>
+</div>
+
+<h3 id="kst-현재-시각-기록">KST 현재 시각 기록</h3>
+
+<div class="codehilite">
+<pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">now_kst</span>
+<span class="n">timestamp</span> <span class="o">=</span> <span class="n">now_kst</span><span class="p">()</span><span class="o">.</span><span class="n">strftime</span><span class="p">(</span><span class="s2">&quot;%Y-%m-</span><span class="si">%d</span><span class="s2"> %H:%M:%S&quot;</span><span class="p">)</span>
+</code></pre>
+</div>
+
+<h3 id="페이지-내-네비게이션-이동">페이지 내 네비게이션 이동</h3>
+
+<div class="codehilite">
+<pre><span></span><code><span class="c1"># 다른 페이지로 이동 (app.py의 _nav_map 활용)</span>
+<span class="n">st</span><span class="o">.</span><span class="n">session_state</span><span class="p">[</span><span class="s1">&#39;_nav_target&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;정산&quot;</span>
+<span class="n">st</span><span class="o">.</span><span class="n">rerun</span><span class="p">()</span>
+</code></pre>
+</div>
+
+<hr />
+
+<p><em>이 문서는 Gradius ERP master 브랜치 기준으로 작성되었습니다. 코드 변경 시 문서도 함께 업데이트해 주세요.</em></p>
+
+</body>
+</html>
