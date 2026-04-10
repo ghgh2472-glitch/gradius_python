@@ -200,12 +200,10 @@ def _get_role_status(est_items, assignments_df):
             days_col = '근무일수' if '근무일수' in assignments_df.columns else '일수'
             onsite_col = '현장참여' if '현장참여' in assignments_df.columns else None
             if role_col in assignments_df.columns:
-                # ★ 수정: 배정기록의 직무가 base_role을 포함하는지 확인
-                # (배정 시 직무='경호원'으로 저장되므로 정확 매칭 + 포함 매칭 모두 처리)
+                # ★ 정확 매칭: 직무명이 완전히 일치하는 경우만 (부분문자열 매칭 제거)
                 role_rows = assignments_df[
-                    assignments_df[role_col].astype(str).str.strip().apply(
-                        lambda x: x == base_role or base_role in x or x in base_role
-                    )]
+                    assignments_df[role_col].astype(str).str.strip() == base_role
+                ]
                 # ★ 현장불참 팀장은 인원/인일 카운트에서 제외
                 if onsite_col:
                     onsite_rows = role_rows[role_rows[onsite_col].astype(str).str.strip().str.upper() != 'N']
@@ -1395,9 +1393,8 @@ def _step2_role_assignment(sel_id, sel, role_status, start_d=None, end_d=None, d
                 days = rs['days']
 
                 role_assigned = assigned[
-                    assigned[role_col_name].astype(str).str.strip().apply(
-                        lambda x: x == role_name or role_name in x or x in role_name
-                    )] if not assigned.empty else pd.DataFrame()
+                    assigned[role_col_name].astype(str).str.strip() == role_name
+                ] if not assigned.empty else pd.DataFrame()
                 current_count = len(role_assigned)
 
                 # 인일 기반 진행률
