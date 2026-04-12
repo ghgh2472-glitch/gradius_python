@@ -524,16 +524,21 @@ def show(data):
                             if _prow_st in ('완료', '확인완료'):
                                 _pay_done_map[_prow_id]['done'] += 1
                     # 배정기록 외부인력 카운트 맵: 지급내역 교차검증용
-                    # 외부인력(팀장/팀원/외부)이 있는데 지급내역이 0건이면 미완료로 판정
-                    _ext_count_map = {}  # 문의ID → 외부인력 수
+                    # 외부 확정인력이 있는데 지급내역이 0건이면 미완료로 판정
+                    # 후보/취소 제외, 확정/배정중/확정(일정미입력)만 카운트
+                    _ext_count_map = {}  # 문의ID → 외부 확정인력 수
+                    _SKIP_STATUSES = {'후보', '취소'}
                     if not df_dispatch.empty and '문의ID' in df_dispatch.columns:
                         _has_gubun = '구분' in df_dispatch.columns
+                        _has_status = '지급상태' in df_dispatch.columns
                         for _, _drow in df_dispatch.iterrows():
                             _drow_id = str(_drow.get('문의ID', '')).strip()
                             if not _drow_id:
                                 continue
                             if _has_gubun and str(_drow.get('구분', '')).strip() == '본사':
                                 continue  # 본사 인원 제외
+                            if _has_status and str(_drow.get('지급상태', '')).strip() in _SKIP_STATUSES:
+                                continue  # 후보/취소 제외
                             _ext_count_map[_drow_id] = _ext_count_map.get(_drow_id, 0) + 1
                 # ──────────────────────────────────────────────────────────────
 

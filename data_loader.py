@@ -1122,8 +1122,10 @@ def batch_finalize_settlements(inq_ids):
                 pay_map[pid]['done'] += 1
 
         # ── API 3: 배정기록 읽기 (지급내역 교차검증용) ──
-        # 외부인력(팀장/팀원/외부)이 있는데 지급내역이 0건이면 지급미완료로 판정
-        ext_count_map = {}  # inq_id → 외부인력 수 (구분 != '본사')
+        # 외부 확정인력이 있는데 지급내역이 0건이면 지급미완료로 판정
+        # 후보/취소 제외, 확정/배정중/확정(일정미입력)만 카운트
+        _SKIP_STATUSES = {'후보', '취소'}
+        ext_count_map = {}  # inq_id → 외부 확정인력 수
         try:
             dispatch_records = sh.worksheet("배정기록").get_all_records()
             for rec in dispatch_records:
@@ -1132,6 +1134,8 @@ def batch_finalize_settlements(inq_ids):
                     continue
                 if str(rec.get('구분', '')).strip() == '본사':
                     continue  # 본사 인원 제외
+                if str(rec.get('지급상태', '')).strip() in _SKIP_STATUSES:
+                    continue  # 후보/취소 제외
                 ext_count_map[did] = ext_count_map.get(did, 0) + 1
         except Exception as _de:
             logger.warning(f"배정기록 조회 실패 (pay_ok 판정 완화): {_de}")
