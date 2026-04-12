@@ -1121,6 +1121,19 @@ def batch_finalize_settlements(inq_ids):
             if str(rec.get('지급상태', '')).strip() in ('완료', '확인완료'):
                 pay_map[pid]['done'] += 1
 
+        # ── API 3: 배정기록 읽기 (지급내역 교차검증용) ──
+        # 배정인원이 있는데 지급내역이 0건이면 지급미완료로 판정
+        dispatch_count_map = {}  # inq_id → 배정 row 수
+        try:
+            dispatch_records = sh.worksheet("배정기록").get_all_records()
+            for rec in dispatch_records:
+                did = str(rec.get('문의ID', '')).strip()
+                if did not in inq_set:
+                    continue
+                dispatch_count_map[did] = dispatch_count_map.get(did, 0) + 1
+        except Exception as _de:
+            logger.warning(f"배정기록 조회 실패 (pay_ok 판정 완화): {_de}")
+
         # ── 재검증 ──
         confirmed = []
         logger.info(f"🔍 batch_finalize_settlements 재검증: {inq_set}")
@@ -1131,9 +1144,11 @@ def batch_finalize_settlements(inq_ids):
             p = pay_map.get(iid, {'done': 0, 'total': 0})
             dep_ok  = s['deposit_ok'] if s else False
             paid_ok = s.get('paid', 0) > 0 if s else False  # 실제 입금액 > 0 필수
-            pay_ok  = p['done'] == p['total']   # 0==0 → True (본사인력만, 지급내역 없음)
+            # 배정기록이 있는데 지급내역이 0건이면 지급미완료로 판정
+            dc = dispatch_count_map.get(iid, 0)
+            pay_ok  = (p['done'] == p['total']) and (p['total'] > 0 or dc == 0)
             already = s['progress'] == '정산완료' if s else False
-            logger.info(f"   {iid}: dep_ok={dep_ok}, paid_ok={paid_ok}, pay_ok={pay_ok}({p['done']}/{p['total']}), already={already}, in_map={bool(s)}")
+            logger.info(f"   {iid}: dep_ok={dep_ok}, paid_ok={paid_ok}, pay_ok={pay_ok}({p['done']}/{p['total']}, dispatch={dc}), already={already}, in_map={bool(s)}")
             if dep_ok and paid_ok and pay_ok and s and not already:
                 confirmed.append(iid)
             else:
@@ -1149,7 +1164,7 @@ def batch_finalize_settlements(inq_ids):
         if not confirmed:
             return result
 
-        # ── API 3: 정산시트 배치 쓰기 ──
+        # ── API 4: 정산시트 배치 쓰기 ──
         if prog_col_1based:
             settle_cells = [
                 _gs.Cell(row=settle_map[iid]['row_idx'], col=prog_col_1based, value='정산완료')
@@ -1158,7 +1173,7 @@ def batch_finalize_settlements(inq_ids):
             if settle_cells:
                 wks_settle.update_cells(settle_cells, value_input_option='RAW')
 
-        # ── API 4+5: 문의작성 시트 배치 쓰기 ──
+        # ── API 5+6: 문의작성 시트 배치 쓰기 ──
         wks_inq = sh.worksheet("문의작성")
         inq_all = wks_inq.get_all_values()
         if inq_all:
