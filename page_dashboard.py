@@ -538,7 +538,7 @@ def show(data):
                         if _sid in _pipe_ids
                         and _si.get('progress', '') != '정산완료'  # 이미 정산완료된 항목 제외
                         and _si['deposit_ok']
-                        # total=0(지급내역 없음=본사인력)도 허용: done==total (0==0)
+                        and _si.get('paid', 0) > 0  # 실제 입금액이 0이면 제외
                         and (_pay_done_map.get(_sid, {'done': 0, 'total': 0})['done']
                              == _pay_done_map.get(_sid, {'done': 0, 'total': 0})['total'])
                     ]
@@ -552,6 +552,7 @@ def show(data):
                             _dbg_s = _settle_status_map.get(_dbg_id, {})
                             _dbg_p = _pay_done_map.get(_dbg_id, {})
                             st.write(f"  `{_dbg_id}`: dep_ok={_dbg_s.get('deposit_ok')}, "
+                                     f"paid={_dbg_s.get('paid', 0)}, "
                                      f"progress={_dbg_s.get('progress')!r}, "
                                      f"pay={_dbg_p.get('done')}/{_dbg_p.get('total')}")
                         st.write(f"**_ready_inq_ids**: {_ready_inq_ids}")
@@ -650,6 +651,7 @@ def show(data):
                             _pd = _pinfo.get('done', 0)
                             _pt = _pinfo.get('total', 0)
                             _dep_ok = _sinfo.get('deposit_ok', False)
+                            _paid_ok = _sinfo.get('paid', 0) > 0  # 실제 입금액 > 0
                             # total=0: 지급내역 없음 = 본사인력만 진행 → 지급완료로 간주
                             _pay_ok = _pd == _pt
                             _fs1, _fs2, _fs3 = st.columns([2, 2, 1.3])
@@ -684,7 +686,7 @@ def show(data):
                                     _n_txt = ', '.join(_unpaid_names[:3]) + ('...' if len(_unpaid_names) > 3 else '')
                                     st.warning(f"💸 인건비 {_pd}/{_pt}명  미지급: {_n_txt}" if _n_txt else f"💸 인건비 {_pd}/{_pt}명")
                             with _fs3:
-                                if _dep_ok and _pay_ok:
+                                if _dep_ok and _paid_ok and _pay_ok:
                                     if st.button("✅ 정산완료", key=f"_fin_{_p_id}",
                                                  type="primary", use_container_width=True):
                                         _fin = db.batch_finalize_settlements([_p_id])
@@ -695,8 +697,9 @@ def show(data):
                                             st.warning("조건 재확인 필요")
                                 else:
                                     _miss = []
-                                    if not _dep_ok: _miss.append("입금미완료")
-                                    if not _pay_ok: _miss.append("지급미완료")
+                                    if not _dep_ok:   _miss.append("입금미완료")
+                                    if not _paid_ok:  _miss.append("받은금액=0")
+                                    if not _pay_ok:   _miss.append("지급미완료")
                                     st.button("🔒 조건미충족", key=f"_fin_{_p_id}",
                                               disabled=True, use_container_width=True,
                                               help=" · ".join(_miss))

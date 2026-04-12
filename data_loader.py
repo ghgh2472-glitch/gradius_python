@@ -1103,6 +1103,7 @@ def batch_finalize_settlements(inq_ids):
             prog    = str(rec.get('진행상황', '')).strip()
             settle_map[sid] = {
                 'row_idx':    i,
+                'paid':       paid,   # 실제 입금액 (paid>0 검증용)
                 'deposit_ok': (balance <= 0 and paid > 0) or dep == '입금완료',
                 'progress':   prog,
             }
@@ -1129,17 +1130,19 @@ def batch_finalize_settlements(inq_ids):
             s = settle_map.get(iid)
             p = pay_map.get(iid, {'done': 0, 'total': 0})
             dep_ok  = s['deposit_ok'] if s else False
+            paid_ok = s.get('paid', 0) > 0 if s else False  # 실제 입금액 > 0 필수
             pay_ok  = p['done'] == p['total']   # 0==0 → True (본사인력만, 지급내역 없음)
             already = s['progress'] == '정산완료' if s else False
-            logger.info(f"   {iid}: dep_ok={dep_ok}, pay_ok={pay_ok}({p['done']}/{p['total']}), already={already}, in_map={bool(s)}")
-            if dep_ok and pay_ok and s and not already:
+            logger.info(f"   {iid}: dep_ok={dep_ok}, paid_ok={paid_ok}, pay_ok={pay_ok}({p['done']}/{p['total']}), already={already}, in_map={bool(s)}")
+            if dep_ok and paid_ok and pay_ok and s and not already:
                 confirmed.append(iid)
             else:
                 skip_reason = []
-                if not s:      skip_reason.append("정산시트에 없음")
-                elif already:  skip_reason.append("이미 정산완료")
-                if not dep_ok: skip_reason.append("입금미완료")
-                if not pay_ok: skip_reason.append(f"지급미완료({p['done']}/{p['total']})")
+                if not s:          skip_reason.append("정산시트에 없음")
+                elif already:      skip_reason.append("이미 정산완료")
+                if not dep_ok:     skip_reason.append("입금미완료")
+                if not paid_ok:    skip_reason.append(f"받은금액=0 (실제 입금액 없음)")
+                if not pay_ok:     skip_reason.append(f"지급미완료({p['done']}/{p['total']})")
                 logger.warning(f"   SKIP {iid}: {', '.join(skip_reason)}")
                 result['skipped'].append(iid)
 
