@@ -523,9 +523,16 @@ def show(data):
 
                 # ── 완료 상태: 전체 정산완료 버튼 ────────────────────────────────
                 if _pipe_sel == '완료':
+                    # _pipe_df 에 실제로 표시되는 ID만 대상으로 한정
+                    _pipe_ids = set(
+                        str(_pr2.get(col_id, '')).strip()
+                        for _, _pr2 in _pipe_df.iterrows()
+                        if col_id
+                    )
                     _ready_inq_ids = [
                         _sid for _sid, _si in _settle_status_map.items()
-                        if _si['deposit_ok']
+                        if _sid in _pipe_ids
+                        and _si['deposit_ok']
                         and _pay_done_map.get(_sid, {}).get('total', 0) > 0
                         and _pay_done_map[_sid]['done'] == _pay_done_map[_sid]['total']
                     ]
