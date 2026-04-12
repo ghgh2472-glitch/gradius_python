@@ -704,7 +704,15 @@ def show(data):
                                     _n_txt = ', '.join(_unpaid_names[:3]) + ('...' if len(_unpaid_names) > 3 else '')
                                     st.warning(f"💸 인건비 {_pd}/{_pt}명  미지급: {_n_txt}" if _n_txt else f"💸 인건비 {_pd}/{_pt}명")
                             with _fs3:
-                                if _dep_ok and _paid_ok and _pay_ok:
+                                _already = _sinfo.get('progress', '') == '정산완료'
+                                if _already:
+                                    st.markdown(
+                                        '<div style="background:#ECFDF5;color:#059669;padding:8px;'
+                                        'border-radius:8px;text-align:center;font-weight:700;">'
+                                        '✅ 정산완료</div>',
+                                        unsafe_allow_html=True,
+                                    )
+                                elif _dep_ok and _paid_ok and _pay_ok:
                                     if st.button("✅ 정산완료", key=f"_fin_{_p_id}",
                                                  type="primary", use_container_width=True):
                                         _fin = db.batch_finalize_settlements([_p_id])
