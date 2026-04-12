@@ -1158,7 +1158,7 @@ def batch_finalize_settlements(inq_ids):
             status_col = inq_hdrs.index('상태') + 1 if '상태' in inq_hdrs else None
             if status_col:
                 id_row_map = {
-                    str(row[inq_id_col]).strip(): i + 1
+                    str(row[inq_id_col]).strip(): i + 2  # +2: 헤더(row1) + 0-based offset
                     for i, row in enumerate(inq_all[1:])
                     if row and str(row[inq_id_col]).strip()
                 }
