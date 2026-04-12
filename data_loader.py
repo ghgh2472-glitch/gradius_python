@@ -1047,14 +1047,7 @@ def auto_fix_status_by_date():
 
 
 def batch_finalize_settlements(inq_ids):
-    """완료 → 정산완료 전환. 대시보드 캐시로 1차 판단 후 여기서 신선한 데이터로 재검증.
-
-    API 호출 수: N건 무관 고정 7회
-      - 정산시트 전체 읽기 1회
-      - 지급내역 전체 읽기 1회
-      - 정산시트 배치 쓰기 1회
-      - 문의작성 시트 전체 읽기 1회 (get_all_values)
-      - 문의작성 시트 배치 쓰기 1회
+    """완료 → 정산완료 전환. 신선한 데이터로 재검증 후 배치 쓰기.
 
     Args:
         inq_ids: 정산완료 처리할 문의ID 목록 (1건이어도 리스트로)
@@ -1071,49 +1064,43 @@ def batch_finalize_settlements(inq_ids):
     if not client:
         return result
 
+    def _n(v):
+        try: return float(str(v).replace(',', '').strip() or 0)
+        except: return 0.0
+
     try:
         sh = client.open_by_key(SHEET_ID)
         import gspread as _gs
 
-        # ── API 1: 정산시트 전체 읽기 ──
+        # ── API 1: 정산시트 - get_all_records() (구버전과 동일한 신뢰성) ──
         wks_settle = sh.worksheet("계약건은청구금액적기")
-        settle_all = wks_settle.get_all_values()
-        if not settle_all:
-            return result
+        try:
+            settle_records = wks_settle.get_all_records()
+        except Exception as e1:
+            logger.warning(f"settle get_all_records 실패, get_all_values 시도: {e1}")
+            raw = wks_settle.get_all_values()
+            if len(raw) <= 1:
+                return result
+            settle_records = [dict(zip([str(h).strip() for h in raw[0]], row)) for row in raw[1:]]
 
-        s_hdrs = [str(h).strip() for h in settle_all[0]]
-        def _scol(name): return s_hdrs.index(name) if name in s_hdrs else None
-
-        # 문의ID 컬럼: '문의ID' 외 변형도 탐색
-        s_inq_c = _scol('문의ID') or _scol('문의 ID') or _scol('문의번호') or _scol('ID')
-        s_prog_c  = _scol('진행상황')
-        s_paid_c  = _scol('받은금액')
-        s_sup_c   = _scol('공급가액')
-        s_tax_c   = _scol('부가세')
-        s_bal_c   = _scol('잔액')
-        s_dep_c   = _scol('입금여부')
-
-        if s_inq_c is None:
-            logger.error(f"❌ batch_finalize_settlements: 정산시트에 '문의ID' 컬럼 없음. 헤더={s_hdrs[:15]}")
-            return result
+        # 진행상황 컬럼 인덱스 (배치 쓰기용) - row_values(1) 대신 첫 번째 레코드 키로 확인
+        settle_hdrs_raw = wks_settle.row_values(1)  # API 1b (소비 최소)
+        settle_hdrs = [str(h).strip() for h in settle_hdrs_raw]
+        prog_col_1based = (settle_hdrs.index('진행상황') + 1) if '진행상황' in settle_hdrs else None
 
         settle_map = {}  # inq_id → {row_idx, deposit_ok, progress}
-        for i, row in enumerate(settle_all[1:], start=2):
-            def _v(c): return row[c] if c is not None and c < len(row) else ''
-            sid = str(_v(s_inq_c)).strip()
-            if sid not in inq_set:
+        for i, rec in enumerate(settle_records, start=2):
+            sid = str(rec.get('문의ID', '')).strip()
+            if not sid or sid not in inq_set:
                 continue
-            def _f(c):
-                try: return float(str(_v(c)).replace(',', '') or 0)
-                except: return 0.0
-            paid    = _f(s_paid_c)
-            supply  = _f(s_sup_c)
-            tax     = _f(s_tax_c)
-            bal_raw = _f(s_bal_c)
+            paid    = _n(rec.get('받은금액', 0))
+            supply  = _n(rec.get('공급가액', 0))
+            tax     = _n(rec.get('부가세', 0))
+            bal_raw = _n(rec.get('잔액', 0))
             total   = supply + tax
             balance = bal_raw if bal_raw > 0 else max(0.0, total - paid)
-            dep     = str(_v(s_dep_c)).strip()
-            prog    = str(_v(s_prog_c)).strip() if s_prog_c is not None else ''
+            dep     = str(rec.get('입금여부', '')).strip()
+            prog    = str(rec.get('진행상황', '')).strip()
             settle_map[sid] = {
                 'row_idx':    i,
                 'deposit_ok': (balance <= 0 and paid > 0) or dep == '입금완료',
@@ -1133,7 +1120,7 @@ def batch_finalize_settlements(inq_ids):
             if str(rec.get('지급상태', '')).strip() in ('완료', '확인완료'):
                 pay_map[pid]['done'] += 1
 
-        # ── 재검증: 두 조건 동시 충족 확인 ──
+        # ── 재검증 ──
         confirmed = []
         logger.info(f"🔍 batch_finalize_settlements 재검증: {inq_set}")
         logger.info(f"   settle_map IDs: {set(settle_map.keys())}")
@@ -1141,18 +1128,18 @@ def batch_finalize_settlements(inq_ids):
         for iid in inq_set:
             s = settle_map.get(iid)
             p = pay_map.get(iid, {'done': 0, 'total': 0})
-            dep_ok = s['deposit_ok'] if s else False
-            # total=0: 지급내역 없음 = 본사인력만 → 지급완료로 간주 (done==total when both 0)
-            pay_ok = p['done'] == p['total']
+            dep_ok  = s['deposit_ok'] if s else False
+            pay_ok  = p['done'] == p['total']   # 0==0 → True (본사인력만, 지급내역 없음)
             already = s['progress'] == '정산완료' if s else False
+            logger.info(f"   {iid}: dep_ok={dep_ok}, pay_ok={pay_ok}({p['done']}/{p['total']}), already={already}, in_map={bool(s)}")
             if dep_ok and pay_ok and s and not already:
                 confirmed.append(iid)
             else:
                 skip_reason = []
-                if not s:          skip_reason.append("정산시트에 없음")
-                elif already:      skip_reason.append("이미 정산완료")
-                if not dep_ok:     skip_reason.append(f"입금미완료(dep_ok={dep_ok})")
-                if not pay_ok:     skip_reason.append(f"지급미완료({p['done']}/{p['total']})")
+                if not s:      skip_reason.append("정산시트에 없음")
+                elif already:  skip_reason.append("이미 정산완료")
+                if not dep_ok: skip_reason.append("입금미완료")
+                if not pay_ok: skip_reason.append(f"지급미완료({p['done']}/{p['total']})")
                 logger.warning(f"   SKIP {iid}: {', '.join(skip_reason)}")
                 result['skipped'].append(iid)
 
@@ -1160,8 +1147,7 @@ def batch_finalize_settlements(inq_ids):
             return result
 
         # ── API 3: 정산시트 배치 쓰기 ──
-        if s_prog_c is not None:
-            prog_col_1based = s_prog_c + 1
+        if prog_col_1based:
             settle_cells = [
                 _gs.Cell(row=settle_map[iid]['row_idx'], col=prog_col_1based, value='정산완료')
                 for iid in confirmed if iid in settle_map
@@ -1171,23 +1157,22 @@ def batch_finalize_settlements(inq_ids):
 
         # ── API 4+5: 문의작성 시트 배치 쓰기 ──
         wks_inq = sh.worksheet("문의작성")
-        inq_all = wks_inq.get_all_values()   # API 4
+        inq_all = wks_inq.get_all_values()
         if inq_all:
             inq_hdrs = [str(h).strip() for h in inq_all[0]]
-            inq_id_col = 0  # 문의ID는 항상 첫 컬럼
-            status_col = inq_hdrs.index('상태') + 1 if '상태' in inq_hdrs else None
+            status_col = (inq_hdrs.index('상태') + 1) if '상태' in inq_hdrs else None
             if status_col:
                 id_row_map = {
-                    str(row[inq_id_col]).strip(): i + 2  # +2: 헤더(row1) + 0-based offset
+                    str(row[0]).strip(): i + 2   # +2: 헤더(row1) + 0-based
                     for i, row in enumerate(inq_all[1:])
-                    if row and str(row[inq_id_col]).strip()
+                    if row and str(row[0]).strip()
                 }
                 inq_cells = [
                     _gs.Cell(row=id_row_map[iid], col=status_col, value='정산완료')
                     for iid in confirmed if iid in id_row_map
                 ]
                 if inq_cells:
-                    wks_inq.update_cells(inq_cells, value_input_option='RAW')  # API 5
+                    wks_inq.update_cells(inq_cells, value_input_option='RAW')
 
         invalidate_data()
         result['confirmed'] = confirmed
@@ -1195,7 +1180,7 @@ def batch_finalize_settlements(inq_ids):
         return result
 
     except Exception as e:
-        logger.error(f"❌ batch_finalize_settlements 오류: {e}")
+        logger.error(f"❌ batch_finalize_settlements 오류: {e}", exc_info=True)
         return result
 
 
