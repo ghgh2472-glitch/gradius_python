@@ -926,6 +926,122 @@ def batch_update_settlement_progress(updates):
         return 0
 
 
+def batch_update_inq_status(updates):
+    """문의작성 시트의 '상태'를 일괄 업데이트 (배치 1회)
+
+    Args:
+        updates: list of (inquiry_id, new_status) tuples
+    Returns:
+        int: 성공 건수
+    """
+    if not updates:
+        return 0
+
+    client = get_connection()
+    if not client:
+        return 0
+
+    try:
+        sh = client.open_by_key(SHEET_ID)
+        wks = sh.worksheet("문의작성")
+
+        headers = wks.row_values(1)
+        headers_clean = [str(h).strip() for h in headers]
+
+        if "상태" not in headers_clean:
+            logger.error("❌ batch_update_inq_status: '상태' 컬럼 없음")
+            return 0
+
+        col_idx = headers_clean.index("상태") + 1
+
+        id_col = wks.col_values(1)
+        id_col_clean = [str(x).strip() for x in id_col]
+
+        id_row_map = {}
+        for i, cid in enumerate(id_col_clean):
+            if cid:
+                id_row_map[cid] = i + 1
+
+        import gspread
+        cells_to_update = []
+        for inq_id, new_status in updates:
+            inq_id = str(inq_id).strip()
+            row_num = id_row_map.get(inq_id)
+            if row_num:
+                cells_to_update.append(
+                    gspread.Cell(row=row_num, col=col_idx, value=str(new_status))
+                )
+
+        if not cells_to_update:
+            return 0
+
+        wks.update_cells(cells_to_update, value_input_option="RAW")
+        logger.info(f"✅ batch_update_inq_status: {len(cells_to_update)}건 일괄 업데이트")
+        return len(cells_to_update)
+
+    except Exception as e:
+        logger.error(f"❌ batch_update_inq_status 오류: {e}")
+        return 0
+
+
+def auto_fix_status_by_date():
+    """행사종료일이 지난 '배정완료'/'진행중' 건을 '완료'로 일괄 전환.
+
+    대시보드 진입 시 하루 1회 호출됨.
+    당일 종료 건은 제외 (event_end < today strictly).
+
+    Returns:
+        int: 전환된 건수 (0이면 변경 없음)
+    """
+    from datetime import date
+
+    client = get_connection()
+    if not client:
+        return 0
+
+    try:
+        sh = client.open_by_key(SHEET_ID)
+        wks = sh.worksheet("문의작성")
+
+        all_rows = wks.get_all_records()
+        today = date.today()
+
+        updates = []
+        for row in all_rows:
+            status = str(row.get("상태", "")).strip()
+            if status not in ("배정완료", "진행중"):
+                continue
+
+            end_raw = str(row.get("행사종료일", "")).strip()
+            if not end_raw:
+                continue
+
+            try:
+                # 날짜 포맷: YYYY-MM-DD 또는 YYYY/MM/DD
+                end_raw_norm = end_raw.replace("/", "-")
+                event_end = date.fromisoformat(end_raw_norm[:10])
+            except ValueError:
+                continue
+
+            if event_end < today:
+                inq_id = str(row.get("문의ID", "")).strip()
+                if inq_id:
+                    updates.append((inq_id, "완료"))
+
+        if not updates:
+            return 0
+
+        count = batch_update_inq_status(updates)
+        if count:
+            invalidate_data()
+            logger.info(f"✅ auto_fix_status_by_date: {count}건 → 완료 전환")
+        return count
+
+    except Exception as e:
+        logger.error(f"❌ auto_fix_status_by_date 오류: {e}")
+        return 0
+
+
 def save_estimate_details(est_data, metadata=None):
     """
     견적상세 시트에 견적 정보를 저장합니다.

@@ -85,7 +85,17 @@ def show(data):
     apply_styles()
     st.title("🚀 Gradius 경영 대시보드")
     st.caption("실시간 사업 현황 통합 분석")
-    
+
+    # ── 하루 1회 자동 상태 전환 (배정완료/진행중 → 완료) ──────────────────
+    _today_str = today_kst().strftime("%Y-%m-%d")
+    if st.session_state.get("_auto_fix_date") != _today_str:
+        fixed = db.auto_fix_status_by_date()
+        st.session_state["_auto_fix_date"] = _today_str
+        if fixed:
+            st.toast(f"✅ 행사 종료 {fixed}건이 자동으로 '완료' 처리되었습니다.", icon="🎯")
+            data = db.load_all_data()   # 갱신된 데이터로 교체
+    # ────────────────────────────────────────────────────────────────────────
+
     df_inq = data['inq']
     
     # 배정 데이터와 정산 데이터 로드 (세션 캐시)

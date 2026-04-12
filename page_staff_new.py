@@ -2005,11 +2005,6 @@ def tab_attendance(data):
                 if db.save_attendance_record(rec):
                     saved += 1
         if saved > 0:
-            if current_status == '배정완료':
-                try:
-                    db.update_status(sel_id, sc.STATUS_FLOW[4])  # '진행중'
-                except Exception:
-                    pass
             db.invalidate_data()
             st.balloons()
             st.success(f"✅ {saved}명 출석 기록 완료!")
@@ -2184,9 +2179,9 @@ def tab_payment(data):
 def tab_evaluation(data):
     """평가 — STAFF DB 평가항목과 일치 (근태/수행/외모/팀워크) + 캐시 최적화"""
     df_inq = data.get('inq', pd.DataFrame())
-    sel_id, sel = _select_contract(df_inq, ['진행중', '완료'], "eval")
+    sel_id, sel = _select_contract(df_inq, ['배정완료', '진행중', '완료'], "eval")
     if sel_id is None:
-        st.info("📌 진행중 또는 완료 상태의 계약이 필요합니다.")
+        st.info("📌 배정완료/진행중/완료 상태의 계약이 필요합니다.")
         return
 
     # 배정 인력 캐시 (selectbox 변경 시 재로딩 방지)

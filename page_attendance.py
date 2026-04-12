@@ -738,11 +738,6 @@ def _do_save(sel_id, current_status, att_records):
     with st.spinner("출석 기록 저장 중..."):
         ok, fail = db.batch_save_attendance(att_records)
     if ok > 0:
-        if current_status == '배정완료':
-            try:
-                db.update_status(sel_id, sc.STATUS_FLOW[4])   # 진행중
-            except Exception:
-                pass
         db.invalidate_data()
         st.toast(f"✅ {ok}명 출석 기록 저장 완료!", icon="✅")
         st.balloons()
