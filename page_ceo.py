@@ -1655,9 +1655,9 @@ def _render_profit_tab(settlement_df, payment_df):
         st.warning("⚠️ 필수 컬럼(문의ID, 공급가액, 진행상황)이 없습니다.")
         return
 
-    # 행사종료 필터
+    # 행사종료 + 정산완료 필터 (정산완료는 행사종료 이후 상태)
     df['_progress'] = df[col_progress].astype(str).str.strip()
-    df_done = df[df['_progress'] == '행사종료'].copy()
+    df_done = df[df['_progress'].isin(['행사종료', '정산완료'])].copy()
 
     if df_done.empty:
         st.info("행사종료된 프로젝트가 아직 없습니다.")

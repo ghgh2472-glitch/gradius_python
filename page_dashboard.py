@@ -523,15 +523,18 @@ def show(data):
                             _pay_done_map[_prow_id]['total'] += 1
                             if _prow_st in ('완료', '확인완료'):
                                 _pay_done_map[_prow_id]['done'] += 1
-                    # 배정기록 카운트 맵: 지급내역 교차검증용
-                    # 배정인원이 있는데 지급내역이 0건이면 지급 미완료로 판정
-                    _dispatch_count_map = {}
+                    # 배정기록 외부인력 카운트 맵: 지급내역 교차검증용
+                    # 외부인력(팀장/팀원/외부)이 있는데 지급내역이 0건이면 미완료로 판정
+                    _ext_count_map = {}  # 문의ID → 외부인력 수
                     if not df_dispatch.empty and '문의ID' in df_dispatch.columns:
+                        _has_gubun = '구분' in df_dispatch.columns
                         for _, _drow in df_dispatch.iterrows():
                             _drow_id = str(_drow.get('문의ID', '')).strip()
                             if not _drow_id:
                                 continue
-                            _dispatch_count_map[_drow_id] = _dispatch_count_map.get(_drow_id, 0) + 1
+                            if _has_gubun and str(_drow.get('구분', '')).strip() == '본사':
+                                continue  # 본사 인원 제외
+                            _ext_count_map[_drow_id] = _ext_count_map.get(_drow_id, 0) + 1
                 # ──────────────────────────────────────────────────────────────
 
                 # ── 완료 상태: 전체 정산완료 버튼 ────────────────────────────────
@@ -549,8 +552,8 @@ def show(data):
                         and _si['deposit_ok']
                         and _si.get('paid', 0) > 0  # 실제 입금액이 0이면 제외
                         and (lambda _p=_pay_done_map.get(_sid, {'done': 0, 'total': 0}),
-                                  _dc=_dispatch_count_map.get(_sid, 0):
-                             _p['done'] == _p['total'] and (_p['total'] > 0 or _dc == 0))()
+                                  _ec=_ext_count_map.get(_sid, 0):
+                             _p['done'] == _p['total'] and (_p['total'] > 0 or _ec == 0))()
                     ]
                     # ── 디버그 expander ──
                     with st.expander("🔍 전체정산 버튼 디버그", expanded=False):
@@ -662,9 +665,9 @@ def show(data):
                             _pt = _pinfo.get('total', 0)
                             _dep_ok = _sinfo.get('deposit_ok', False)
                             _paid_ok = _sinfo.get('paid', 0) > 0  # 실제 입금액 > 0
-                            # 배정기록이 있는데 지급내역이 0건이면 지급미완료로 판정
-                            _dc = _dispatch_count_map.get(_p_id, 0)
-                            _pay_ok = (_pd == _pt) and (_pt > 0 or _dc == 0)
+                            # 외부인력이 있는데 지급내역이 0건이면 지급미완료로 판정
+                            _ec = _ext_count_map.get(_p_id, 0)
+                            _pay_ok = (_pd == _pt) and (_pt > 0 or _ec == 0)
                             _fs1, _fs2, _fs3 = st.columns([2, 2, 1.3])
                             with _fs1:
                                 if _dep_ok:
@@ -677,8 +680,12 @@ def show(data):
                                 else:
                                     st.info("💰 정산 데이터 없음")
                             with _fs2:
-                                if _pt == 0:
-                                    st.info("💸 지급내역 없음")
+                                if _pt == 0 and _ec == 0:
+                                    # 외부인력 없음 = 본사 인원만 진행
+                                    st.success("💼 본사 인원 전용  지급 불필요")
+                                elif _pt == 0 and _ec > 0:
+                                    # 외부인력이 있는데 지급내역이 0건 = 인사담당자 미컨펌
+                                    st.warning(f"💸 지급 대기  외부 {_ec}명  (인사담당자 확인 필요)")
                                 elif _pay_ok:
                                     st.success(f"💸 인건비 전원 지급완료  {_pd}명")
                                 else:

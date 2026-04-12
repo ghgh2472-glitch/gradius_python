@@ -1122,15 +1122,17 @@ def batch_finalize_settlements(inq_ids):
                 pay_map[pid]['done'] += 1
 
         # ── API 3: 배정기록 읽기 (지급내역 교차검증용) ──
-        # 배정인원이 있는데 지급내역이 0건이면 지급미완료로 판정
-        dispatch_count_map = {}  # inq_id → 배정 row 수
+        # 외부인력(팀장/팀원/외부)이 있는데 지급내역이 0건이면 지급미완료로 판정
+        ext_count_map = {}  # inq_id → 외부인력 수 (구분 != '본사')
         try:
             dispatch_records = sh.worksheet("배정기록").get_all_records()
             for rec in dispatch_records:
                 did = str(rec.get('문의ID', '')).strip()
                 if did not in inq_set:
                     continue
-                dispatch_count_map[did] = dispatch_count_map.get(did, 0) + 1
+                if str(rec.get('구분', '')).strip() == '본사':
+                    continue  # 본사 인원 제외
+                ext_count_map[did] = ext_count_map.get(did, 0) + 1
         except Exception as _de:
             logger.warning(f"배정기록 조회 실패 (pay_ok 판정 완화): {_de}")
 
@@ -1144,11 +1146,11 @@ def batch_finalize_settlements(inq_ids):
             p = pay_map.get(iid, {'done': 0, 'total': 0})
             dep_ok  = s['deposit_ok'] if s else False
             paid_ok = s.get('paid', 0) > 0 if s else False  # 실제 입금액 > 0 필수
-            # 배정기록이 있는데 지급내역이 0건이면 지급미완료로 판정
-            dc = dispatch_count_map.get(iid, 0)
-            pay_ok  = (p['done'] == p['total']) and (p['total'] > 0 or dc == 0)
+            # 외부인력이 있는데 지급내역이 0건이면 지급미완료로 판정
+            ec = ext_count_map.get(iid, 0)
+            pay_ok  = (p['done'] == p['total']) and (p['total'] > 0 or ec == 0)
             already = s['progress'] == '정산완료' if s else False
-            logger.info(f"   {iid}: dep_ok={dep_ok}, paid_ok={paid_ok}, pay_ok={pay_ok}({p['done']}/{p['total']}, dispatch={dc}), already={already}, in_map={bool(s)}")
+            logger.info(f"   {iid}: dep_ok={dep_ok}, paid_ok={paid_ok}, pay_ok={pay_ok}({p['done']}/{p['total']}, ext={ec}), already={already}, in_map={bool(s)}")
             if dep_ok and paid_ok and pay_ok and s and not already:
                 confirmed.append(iid)
             else:
