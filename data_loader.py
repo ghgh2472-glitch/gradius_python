@@ -1080,13 +1080,18 @@ def batch_finalize_settlements(inq_ids):
         s_hdrs = [str(h).strip() for h in settle_all[0]]
         def _scol(name): return s_hdrs.index(name) if name in s_hdrs else None
 
-        s_inq_c   = _scol('문의ID')
+        # 문의ID 컬럼: '문의ID' 외 변형도 탐색
+        s_inq_c = _scol('문의ID') or _scol('문의 ID') or _scol('문의번호') or _scol('ID')
         s_prog_c  = _scol('진행상황')
         s_paid_c  = _scol('받은금액')
         s_sup_c   = _scol('공급가액')
         s_tax_c   = _scol('부가세')
         s_bal_c   = _scol('잔액')
         s_dep_c   = _scol('입금여부')
+
+        if s_inq_c is None:
+            logger.error(f"❌ batch_finalize_settlements: 정산시트에 '문의ID' 컬럼 없음. 헤더={s_hdrs[:15]}")
+            return result
 
         settle_map = {}  # inq_id → {row_idx, deposit_ok, progress}
         for i, row in enumerate(settle_all[1:], start=2):
@@ -1126,14 +1131,24 @@ def batch_finalize_settlements(inq_ids):
 
         # ── 재검증: 두 조건 동시 충족 확인 ──
         confirmed = []
+        logger.info(f"🔍 batch_finalize_settlements 재검증: {inq_set}")
+        logger.info(f"   settle_map IDs: {set(settle_map.keys())}")
+        logger.info(f"   pay_map IDs:    {set(pay_map.keys())}")
         for iid in inq_set:
             s = settle_map.get(iid)
             p = pay_map.get(iid, {'done': 0, 'total': 0})
             dep_ok = s['deposit_ok'] if s else False
             pay_ok = p['total'] > 0 and p['done'] == p['total']
-            if dep_ok and pay_ok and s and s['progress'] != '정산완료':
+            already = s['progress'] == '정산완료' if s else False
+            if dep_ok and pay_ok and s and not already:
                 confirmed.append(iid)
             else:
+                skip_reason = []
+                if not s:          skip_reason.append("정산시트에 없음")
+                elif already:      skip_reason.append("이미 정산완료")
+                if not dep_ok:     skip_reason.append(f"입금미완료(dep_ok={dep_ok})")
+                if not pay_ok:     skip_reason.append(f"지급미완료({p['done']}/{p['total']})")
+                logger.warning(f"   SKIP {iid}: {', '.join(skip_reason)}")
                 result['skipped'].append(iid)
 
         if not confirmed:
