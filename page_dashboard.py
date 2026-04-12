@@ -490,23 +490,27 @@ def show(data):
                 _pay_done_map = {}
                 if _pipe_sel == '완료':
                     if not df_settlement.empty and '문의ID' in df_settlement.columns:
+                        def _n(v):  # 콤마 포함 숫자 문자열 안전 변환
+                            try: return float(str(v).replace(',', '').strip() or 0)
+                            except: return 0.0
                         for _, _sr in df_settlement.iterrows():
                             _sid = str(_sr.get('문의ID', '')).strip()
                             if not _sid:
                                 continue
-                            def _n(v): n = pd.to_numeric(v, errors='coerce'); return 0.0 if pd.isna(n) else float(n)
                             _s_supply = _n(_sr.get('공급가액', 0))
                             _s_tax    = _n(_sr.get('부가세', 0))
                             _s_paid   = _n(_sr.get('받은금액', 0))
                             _s_bal    = _n(_sr.get('잔액', 0))
-                            if _s_bal == 0:
+                            if _s_bal <= 0:
                                 _s_bal = max(0, _s_supply + _s_tax - _s_paid)
-                            _s_dep = str(_sr.get('입금여부', '')).strip()
+                            _s_dep  = str(_sr.get('입금여부', '')).strip()
+                            _s_prog = str(_sr.get('진행상황', '')).strip()
                             _settle_status_map[_sid] = {
                                 'deposit_ok': (_s_bal <= 0 and _s_paid > 0) or _s_dep == '입금완료',
-                                'paid': int(_s_paid),
-                                'balance': int(_s_bal),
-                                'total': int(_s_supply + _s_tax),
+                                'paid':     int(_s_paid),
+                                'balance':  int(_s_bal),
+                                'total':    int(_s_supply + _s_tax),
+                                'progress': _s_prog,  # 진행상황 저장 (이미 정산완료 필터용)
                             }
                     if not df_payment.empty and '문의ID' in df_payment.columns and '지급상태' in df_payment.columns:
                         for _, _prow in df_payment.iterrows():
@@ -532,6 +536,7 @@ def show(data):
                     _ready_inq_ids = [
                         _sid for _sid, _si in _settle_status_map.items()
                         if _sid in _pipe_ids
+                        and _si.get('progress', '') != '정산완료'  # 이미 정산완료된 항목 제외
                         and _si['deposit_ok']
                         and _pay_done_map.get(_sid, {}).get('total', 0) > 0
                         and _pay_done_map[_sid]['done'] == _pay_done_map[_sid]['total']

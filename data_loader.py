@@ -532,6 +532,10 @@ def invalidate_data():
         load_dispatch_data.clear()
     except Exception:
         pass
+    try:
+        _load_payment_sheet_cached.clear()  # 정산완료 후 지급내역 캐시도 초기화
+    except Exception:
+        pass
     print("[SESSION] Data cache invalidated")
 
 
