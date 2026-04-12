@@ -1042,6 +1042,94 @@ def auto_fix_status_by_date():
         return 0
 
 
+def check_and_finalize_settlement(inq_id):
+    """완료 → 정산완료 전환 조건 확인 및 양 시트 동시 업데이트.
+
+    조건:
+    1. 업체 입금완료: 계약건은청구금액적기 잔액 == 0 또는 입금여부 == '입금완료'
+    2. 인건비 전원 지급완료: 지급내역 시트 전원 지급상태 in ('완료', '확인완료')
+
+    두 조건 모두 충족 시:
+    - 계약건은청구금액적기.진행상황 → '정산완료'
+    - 문의작성.상태 → '정산완료'  (파이프라인 동기화)
+
+    Returns:
+        dict: ready(bool), deposit_ok(bool), payment_ok(bool), updated(bool)
+    """
+    inq_id = str(inq_id).strip()
+    result = {'ready': False, 'deposit_ok': False, 'payment_ok': False, 'updated': False}
+
+    client = get_connection()
+    if not client:
+        return result
+
+    try:
+        sh = client.open_by_key(SHEET_ID)
+
+        # 1. 업체 입금 확인 (정산 시트)
+        wks_settle = sh.worksheet("계약건은청구금액적기")
+        settle_records = wks_settle.get_all_records()
+        settle_headers = wks_settle.row_values(1)
+        settle_headers_clean = [str(h).strip() for h in settle_headers]
+
+        target_row_idx = None
+        current_progress = ''
+        deposit_ok = False
+
+        for i, rec in enumerate(settle_records, start=2):
+            if str(rec.get('문의ID', '')).strip() != inq_id:
+                continue
+            target_row_idx = i
+            current_progress = str(rec.get('진행상황', '')).strip()
+            paid = int(float(rec.get('받은금액', 0) or 0))
+            supply = int(float(rec.get('공급가액', 0) or 0))
+            tax = int(float(rec.get('부가세', 0) or 0))
+            balance_raw = int(float(rec.get('잔액', 0) or 0))
+            total = supply + tax
+            balance = balance_raw if balance_raw > 0 else max(0, total - paid)
+            dep_status = str(rec.get('입금여부', '')).strip()
+            deposit_ok = (balance <= 0 and paid > 0) or dep_status == '입금완료'
+            break
+
+        result['deposit_ok'] = deposit_ok
+
+        # 2. 인건비 전원 지급 확인 (지급내역 시트)
+        payment_records = sh.worksheet("지급내역").get_all_records()
+        inq_payments = [r for r in payment_records
+                        if str(r.get('문의ID', '')).strip() == inq_id]
+        total_count = len(inq_payments)
+        done_count = sum(
+            1 for r in inq_payments
+            if str(r.get('지급상태', '')).strip() in ('완료', '확인완료')
+        )
+        payment_ok = total_count > 0 and done_count == total_count
+        result['payment_ok'] = payment_ok
+        result['ready'] = deposit_ok and payment_ok
+
+        # 3. 조건 충족 시 정산완료 전환
+        if result['ready'] and target_row_idx:
+            import gspread
+            cells = []
+            if '진행상황' in settle_headers_clean and current_progress != '정산완료':
+                col = settle_headers_clean.index('진행상황') + 1
+                cells.append(gspread.Cell(row=target_row_idx, col=col, value='정산완료'))
+            if cells:
+                wks_settle.update_cells(cells, value_input_option='RAW')
+
+            # 문의작성 시트 파이프라인 동기화
+            count = batch_update_inq_status([(inq_id, '정산완료')])
+            if count:
+                invalidate_data()
+                result['updated'] = True
+                logger.info(f"✅ check_and_finalize_settlement: {inq_id} → 정산완료")
+
+        return result
+
+    except Exception as e:
+        logger.error(f"❌ check_and_finalize_settlement 오류: {e}")
+        return result
+
+
 def save_estimate_details(est_data, metadata=None):
     """
     견적상세 시트에 견적 정보를 저장합니다.

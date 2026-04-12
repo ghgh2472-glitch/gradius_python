@@ -484,7 +484,42 @@ def show(data):
                 col_pay = ud.find_col(df_inq, ["페이", "예산"])
                 col_note = ud.find_col(df_inq, ["특이사항"])
                 col_status_val = ud.find_col(df_inq, ["상태"])
-                
+
+                # ── 완료 상태: 정산/지급 현황 맵 사전 구성 ────────────────────
+                _settle_status_map = {}
+                _pay_done_map = {}
+                if _pipe_sel == '완료':
+                    if not df_settlement.empty and '문의ID' in df_settlement.columns:
+                        for _, _sr in df_settlement.iterrows():
+                            _sid = str(_sr.get('문의ID', '')).strip()
+                            if not _sid:
+                                continue
+                            _s_supply = pd.to_numeric(_sr.get('공급가액', 0), errors='coerce') or 0
+                            _s_tax = pd.to_numeric(_sr.get('부가세', 0), errors='coerce') or 0
+                            _s_paid = pd.to_numeric(_sr.get('받은금액', 0), errors='coerce') or 0
+                            _s_bal = pd.to_numeric(_sr.get('잔액', 0), errors='coerce') or 0
+                            if _s_bal == 0:
+                                _s_bal = max(0, _s_supply + _s_tax - _s_paid)
+                            _s_dep = str(_sr.get('입금여부', '')).strip()
+                            _settle_status_map[_sid] = {
+                                'deposit_ok': (_s_bal <= 0 and _s_paid > 0) or _s_dep == '입금완료',
+                                'paid': int(_s_paid),
+                                'balance': int(_s_bal),
+                                'total': int(_s_supply + _s_tax),
+                            }
+                    if not df_payment.empty and '문의ID' in df_payment.columns and '지급상태' in df_payment.columns:
+                        for _, _prow in df_payment.iterrows():
+                            _prow_id = str(_prow.get('문의ID', '')).strip()
+                            _prow_st = str(_prow.get('지급상태', '')).strip()
+                            if not _prow_id:
+                                continue
+                            if _prow_id not in _pay_done_map:
+                                _pay_done_map[_prow_id] = {'done': 0, 'total': 0}
+                            _pay_done_map[_prow_id]['total'] += 1
+                            if _prow_st in ('완료', '확인완료'):
+                                _pay_done_map[_prow_id]['done'] += 1
+                # ──────────────────────────────────────────────────────────────
+
                 for _pi, _pr in _pipe_df.iterrows():
                     _p_id = str(_pr.get(col_id, '')) if col_id else ''
                     _p_company = str(_pr.get(col_company, '')) if col_company else ''
@@ -555,7 +590,66 @@ def show(data):
                                 </div>""", unsafe_allow_html=True)
                             if _est_amount > 0:
                                 st.metric("견적액", f"{_est_amount:,}원")
-                
+                        # ── 완료 상태: 정산/지급 현황 표시 ───────────────────
+                        if _pipe_sel == '완료':
+                            st.divider()
+                            _sinfo = _settle_status_map.get(_p_id, {})
+                            _pinfo = _pay_done_map.get(_p_id, {'done': 0, 'total': 0})
+                            _pd = _pinfo.get('done', 0)
+                            _pt = _pinfo.get('total', 0)
+                            _dep_ok = _sinfo.get('deposit_ok', False)
+                            _pay_ok = _pt > 0 and _pd == _pt
+                            _fs1, _fs2, _fs3 = st.columns([2, 2, 1.3])
+                            with _fs1:
+                                if _dep_ok:
+                                    st.success(f"💰 업체 입금완료  ₩{_sinfo.get('paid', 0):,}")
+                                elif _sinfo:
+                                    if _sinfo.get('paid', 0) > 0:
+                                        st.warning(f"💰 부분입금  잔액 ₩{_sinfo.get('balance', 0):,}")
+                                    else:
+                                        st.error(f"💰 미입금  청구 ₩{_sinfo.get('total', 0):,}")
+                                else:
+                                    st.info("💰 정산 데이터 없음")
+                            with _fs2:
+                                if _pt == 0:
+                                    st.info("💸 지급내역 없음")
+                                elif _pay_ok:
+                                    st.success(f"💸 인건비 전원 지급완료  {_pd}명")
+                                else:
+                                    _unpaid_names = []
+                                    if (not df_payment.empty
+                                            and '문의ID' in df_payment.columns
+                                            and '인력명' in df_payment.columns
+                                            and '지급상태' in df_payment.columns):
+                                        _pm = (
+                                            (df_payment['문의ID'].astype(str).str.strip() == _p_id)
+                                            & (~df_payment['지급상태'].astype(str).str.strip()
+                                               .isin(['완료', '확인완료']))
+                                        )
+                                        if _pm.any():
+                                            _unpaid_names = df_payment[_pm]['인력명'].astype(str).tolist()
+                                    _n_txt = ', '.join(_unpaid_names[:3]) + ('...' if len(_unpaid_names) > 3 else '')
+                                    st.warning(f"💸 인건비 {_pd}/{_pt}명  미지급: {_n_txt}" if _n_txt else f"💸 인건비 {_pd}/{_pt}명")
+                            with _fs3:
+                                if _dep_ok and _pay_ok:
+                                    if st.button("✅ 정산완료", key=f"_fin_{_p_id}",
+                                                 type="primary", use_container_width=True):
+                                        _fin = db.check_and_finalize_settlement(_p_id)
+                                        if _fin.get('updated'):
+                                            st.success("정산완료 처리!")
+                                            db.invalidate_data()
+                                            st.rerun()
+                                        else:
+                                            st.warning("조건 재확인 필요")
+                                else:
+                                    _miss = []
+                                    if not _dep_ok: _miss.append("입금미완료")
+                                    if not _pay_ok: _miss.append("지급미완료")
+                                    st.button("🔒 조건미충족", key=f"_fin_{_p_id}",
+                                              disabled=True, use_container_width=True,
+                                              help=" · ".join(_miss))
+                        # ─────────────────────────────────────────────────────
+
                 st.caption(f"총 {len(_pipe_df)}건")
             else:
                 st.info("해당 상태의 건이 없습니다.")
