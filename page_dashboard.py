@@ -494,10 +494,11 @@ def show(data):
                             _sid = str(_sr.get('문의ID', '')).strip()
                             if not _sid:
                                 continue
-                            _s_supply = pd.to_numeric(_sr.get('공급가액', 0), errors='coerce') or 0
-                            _s_tax = pd.to_numeric(_sr.get('부가세', 0), errors='coerce') or 0
-                            _s_paid = pd.to_numeric(_sr.get('받은금액', 0), errors='coerce') or 0
-                            _s_bal = pd.to_numeric(_sr.get('잔액', 0), errors='coerce') or 0
+                            def _n(v): n = pd.to_numeric(v, errors='coerce'); return 0.0 if pd.isna(n) else float(n)
+                            _s_supply = _n(_sr.get('공급가액', 0))
+                            _s_tax    = _n(_sr.get('부가세', 0))
+                            _s_paid   = _n(_sr.get('받은금액', 0))
+                            _s_bal    = _n(_sr.get('잔액', 0))
                             if _s_bal == 0:
                                 _s_bal = max(0, _s_supply + _s_tax - _s_paid)
                             _s_dep = str(_sr.get('입금여부', '')).strip()
