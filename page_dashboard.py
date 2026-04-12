@@ -521,6 +521,30 @@ def show(data):
                                 _pay_done_map[_prow_id]['done'] += 1
                 # ──────────────────────────────────────────────────────────────
 
+                # ── 완료 상태: 전체 정산완료 버튼 ────────────────────────────────
+                if _pipe_sel == '완료':
+                    _ready_inq_ids = [
+                        _sid for _sid, _si in _settle_status_map.items()
+                        if _si['deposit_ok']
+                        and _pay_done_map.get(_sid, {}).get('total', 0) > 0
+                        and _pay_done_map[_sid]['done'] == _pay_done_map[_sid]['total']
+                    ]
+                    if _ready_inq_ids:
+                        _bulk_col, _ = st.columns([2, 3])
+                        with _bulk_col:
+                            if st.button(
+                                f"✅ 조건충족 전체 {len(_ready_inq_ids)}건 정산완료",
+                                type="primary", key="_bulk_finalize",
+                                use_container_width=True,
+                            ):
+                                _bulk = db.batch_finalize_settlements(_ready_inq_ids)
+                                if _bulk.get('confirmed'):
+                                    st.success(f"{len(_bulk['confirmed'])}건 정산완료 처리!")
+                                    st.rerun()
+                                else:
+                                    st.warning("재검증 결과 조건 미충족")
+                # ──────────────────────────────────────────────────────────────
+
                 for _pi, _pr in _pipe_df.iterrows():
                     _p_id = str(_pr.get(col_id, '')) if col_id else ''
                     _p_company = str(_pr.get(col_company, '')) if col_company else ''
@@ -635,10 +659,9 @@ def show(data):
                                 if _dep_ok and _pay_ok:
                                     if st.button("✅ 정산완료", key=f"_fin_{_p_id}",
                                                  type="primary", use_container_width=True):
-                                        _fin = db.check_and_finalize_settlement(_p_id)
-                                        if _fin.get('updated'):
+                                        _fin = db.batch_finalize_settlements([_p_id])
+                                        if _fin.get('confirmed'):
                                             st.success("정산완료 처리!")
-                                            db.invalidate_data()
                                             st.rerun()
                                         else:
                                             st.warning("조건 재확인 필요")
