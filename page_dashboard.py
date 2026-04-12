@@ -541,6 +541,20 @@ def show(data):
                         and _pay_done_map.get(_sid, {}).get('total', 0) > 0
                         and _pay_done_map[_sid]['done'] == _pay_done_map[_sid]['total']
                     ]
+                    # ── 디버그 expander ──
+                    with st.expander("🔍 전체정산 버튼 디버그", expanded=False):
+                        st.write(f"**파이프라인 ID 수**: {len(_pipe_ids)}")
+                        st.write(f"**settle_map IDs**: {len(_settle_status_map)}개 → {list(_settle_status_map.keys())[:10]}")
+                        st.write(f"**pay_map IDs**: {len(_pay_done_map)}개")
+                        st.write(f"**pipe_ids ∩ settle_map**: {_pipe_ids & set(_settle_status_map.keys())}")
+                        for _dbg_id in list(_pipe_ids)[:10]:
+                            _dbg_s = _settle_status_map.get(_dbg_id, {})
+                            _dbg_p = _pay_done_map.get(_dbg_id, {})
+                            st.write(f"  `{_dbg_id}`: dep_ok={_dbg_s.get('deposit_ok')}, "
+                                     f"progress={_dbg_s.get('progress')!r}, "
+                                     f"pay={_dbg_p.get('done')}/{_dbg_p.get('total')}")
+                        st.write(f"**_ready_inq_ids**: {_ready_inq_ids}")
+                    # ────────────────────
                     if _ready_inq_ids:
                         _bulk_col, _ = st.columns([2, 3])
                         with _bulk_col:
