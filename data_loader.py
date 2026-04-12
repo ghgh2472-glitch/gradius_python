@@ -1142,7 +1142,8 @@ def batch_finalize_settlements(inq_ids):
             s = settle_map.get(iid)
             p = pay_map.get(iid, {'done': 0, 'total': 0})
             dep_ok = s['deposit_ok'] if s else False
-            pay_ok = p['total'] > 0 and p['done'] == p['total']
+            # total=0: 지급내역 없음 = 본사인력만 → 지급완료로 간주 (done==total when both 0)
+            pay_ok = p['done'] == p['total']
             already = s['progress'] == '정산완료' if s else False
             if dep_ok and pay_ok and s and not already:
                 confirmed.append(iid)

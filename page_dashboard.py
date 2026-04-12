@@ -538,8 +538,9 @@ def show(data):
                         if _sid in _pipe_ids
                         and _si.get('progress', '') != '정산완료'  # 이미 정산완료된 항목 제외
                         and _si['deposit_ok']
-                        and _pay_done_map.get(_sid, {}).get('total', 0) > 0
-                        and _pay_done_map[_sid]['done'] == _pay_done_map[_sid]['total']
+                        # total=0(지급내역 없음=본사인력)도 허용: done==total (0==0)
+                        and (_pay_done_map.get(_sid, {'done': 0, 'total': 0})['done']
+                             == _pay_done_map.get(_sid, {'done': 0, 'total': 0})['total'])
                     ]
                     # ── 디버그 expander ──
                     with st.expander("🔍 전체정산 버튼 디버그", expanded=False):
@@ -649,7 +650,8 @@ def show(data):
                             _pd = _pinfo.get('done', 0)
                             _pt = _pinfo.get('total', 0)
                             _dep_ok = _sinfo.get('deposit_ok', False)
-                            _pay_ok = _pt > 0 and _pd == _pt
+                            # total=0: 지급내역 없음 = 본사인력만 진행 → 지급완료로 간주
+                            _pay_ok = _pd == _pt
                             _fs1, _fs2, _fs3 = st.columns([2, 2, 1.3])
                             with _fs1:
                                 if _dep_ok:
