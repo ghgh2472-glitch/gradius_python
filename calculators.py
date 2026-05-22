@@ -265,3 +265,24 @@ class ValidationEngine:
             errors.append("단가는 0 이상이어야 함")
         
         return len(errors) == 0, errors
+
+    @staticmethod
+    def validate_settlement(data: Dict) -> Tuple[bool, List[str]]:
+        """정산 데이터 검증"""
+        errors = []
+
+        if not data.get('문의ID', '').strip():
+            errors.append("문의ID 필수")
+
+        charge = safe_int(data.get('청구금액', 0))
+        if charge < 0:
+            errors.append("청구금액은 0 이상이어야 함")
+
+        paid = safe_int(data.get('지급금액', 0))
+        if paid < 0:
+            errors.append("지급금액은 0 이상이어야 함")
+
+        if charge > 0 and paid > charge:
+            errors.append("지급금액이 청구금액을 초과할 수 없음")
+
+        return len(errors) == 0, errors
